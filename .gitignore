@@ -1,9 +1,16 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.groupedtimelineinclude
+
+# Node
 node_modules/
 *.map
 
-# Local reference checkouts, not part of the library
+# Local reference checkout and scratch space — not part of the library
 silverbullet/
 tmp/
-
-# Editor-local
-.groupedtimelineinclude
