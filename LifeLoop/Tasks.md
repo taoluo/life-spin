@@ -1,15 +1,15 @@
 ---
-description: LifeOS task semantics — the operational task universe, date buckets and project attribution.
+description: LifeLoop task semantics — the operational task universe, date buckets and project attribution.
 tags: meta
 ---
 
-A LifeOS task is an ordinary SilverBullet checkbox. Nothing else is required:
+A LifeLoop task is an ordinary SilverBullet checkbox. Nothing else is required:
 
 ```markdown
 * [ ] Benchmark survivor recovery
 ```
 
-Two optional attributes carry the only scheduling semantics LifeOS knows about, both spelled the
+Two optional attributes carry the only scheduling semantics LifeLoop knows about, both spelled the
 way SilverBullet's own task guide spells them:
 
 ```markdown
@@ -21,16 +21,16 @@ way SilverBullet's own task guide spells them:
 neither is perfectly valid — it simply never shows up in Today on its own.
 
 # The operational task universe
-Every LifeOS view — Today, Projects, Weekly Review, and later Upcoming, Signals and Audit —
+Every LifeLoop view — Today, Projects, Weekly Review, and later Upcoming, Signals and Audit —
 derives from one collection:
 
 ```lua
-lifeos.tasks.universe()   -- index.tasks() minus everything inside a comment
+lifeloop.tasks.universe()   -- index.tasks() minus everything inside a comment
 ```
 
 SilverBullet does not skip indexing HTML comments; it indexes them and marks them
 `inComment = true` ([[Library/Std/Docs/SLIQ Reference]], `docs/Markdown/Comment.md`). A commented-out
-task is still a task object, so LifeOS has to exclude it deliberately — and it does so in exactly
+task is still a task object, so LifeLoop has to exclude it deliberately — and it does so in exactly
 one place, rather than in each view.
 
 # Waiting and someday
@@ -56,7 +56,7 @@ Today shows them in their own section at the bottom, because you do need to know
 waiting on.
 
 # Which project a task belongs to
-Attribution and association are two different things, so LifeOS answers them with two functions.
+Attribution and association are two different things, so LifeLoop answers them with two functions.
 
 ```
 contextProject(task)          -- ownership, at most one
@@ -80,7 +80,7 @@ Both of these are native writing styles and neither asks for extra metadata:
 ```
 
 The last line is why "first link wins" is not a rule: link order is just writing order. When a
-task names two projects, LifeOS says it has no single owner rather than guessing one. The project
+task names two projects, LifeLoop says it has no single owner rather than guessing one. The project
 page still surfaces it through SilverBullet's built-in Linked Tasks widget.
 
 # Implementation
@@ -88,21 +88,21 @@ page still surfaces it through SilverBullet's built-in Linked Tasks widget.
 ## The universe and its derivations
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
--- The one filtered collection every LifeOS view derives from. Callers that want a subset narrow
+-- The one filtered collection every LifeLoop view derives from. Callers that want a subset narrow
 -- through here rather than reaching for index.tasks() and repeating the rule.
-function lifeos.tasks.universe(pageName)
+function lifeloop.tasks.universe(pageName)
   if pageName then
     return query[[from t = index.tasks() where not t.inComment and t.page == pageName]]
   end
   return query[[from t = index.tasks() where not t.inComment]]
 end
 
-function lifeos.tasks.open(tasks)
+function lifeloop.tasks.open(tasks)
   local out = {}
-  for _, t in ipairs(tasks or lifeos.tasks.universe()) do
+  for _, t in ipairs(tasks or lifeloop.tasks.universe()) do
     if not t.done then
       table.insert(out, t)
     end
@@ -112,57 +112,57 @@ end
 
 -- Not right now: waiting on someone, or filed under maybe-later. Read from inherited tags, so a
 -- parent item marked #waiting covers the tasks nested under it.
-function lifeos.tasks.parked(t)
+function lifeloop.tasks.parked(t)
   local tags = t.itags or t.tags or {}
   return table.includes(tags, "waiting") or table.includes(tags, "someday")
 end
 
 -- What is open and not parked: the tasks you could actually pick up.
-function lifeos.tasks.actionable(tasks)
+function lifeloop.tasks.actionable(tasks)
   local out = {}
-  for _, t in ipairs(lifeos.tasks.open(tasks)) do
-    if not lifeos.tasks.parked(t) then
+  for _, t in ipairs(lifeloop.tasks.open(tasks)) do
+    if not lifeloop.tasks.parked(t) then
       table.insert(out, t)
     end
   end
   return out
 end
 
-function lifeos.tasks.waiting(tasks)
+function lifeloop.tasks.waiting(tasks)
   local out = {}
-  for _, t in ipairs(lifeos.tasks.open(tasks)) do
+  for _, t in ipairs(lifeloop.tasks.open(tasks)) do
     if table.includes(t.itags or t.tags or {}, "waiting") then
       table.insert(out, t)
     end
   end
-  return lifeos.tasks.sort(out)
+  return lifeloop.tasks.sort(out)
 end
 
-function lifeos.tasks.deadline(t)
-  return lifeos.date.day(t.deadline)
+function lifeloop.tasks.deadline(t)
+  return lifeloop.date.day(t.deadline)
 end
 
-function lifeos.tasks.scheduled(t)
-  return lifeos.date.day(t.scheduled)
+function lifeloop.tasks.scheduled(t)
+  return lifeloop.date.day(t.scheduled)
 end
 
-function lifeos.tasks.completed(t)
-  return lifeos.date.day(t.completed)
+function lifeloop.tasks.completed(t)
+  return lifeloop.date.day(t.completed)
 end
 ```
 
 ## Ordering
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
 -- Deadline first (undated last), then the page it lives on, then its text. Stable enough that
 -- Today does not reshuffle itself between refreshes.
-function lifeos.tasks.sort(tasks)
+function lifeloop.tasks.sort(tasks)
   table.sort(tasks, function(a, b)
-    local da = lifeos.tasks.deadline(a) or "9999-12-31"
-    local db = lifeos.tasks.deadline(b) or "9999-12-31"
+    local da = lifeloop.tasks.deadline(a) or "9999-12-31"
+    local db = lifeloop.tasks.deadline(b) or "9999-12-31"
     if da != db then
       return da < db
     end
@@ -178,17 +178,17 @@ end
 ## Today's buckets
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
 -- Three disjoint buckets: a task appears at most once. Anything with a future deadline that is
 -- scheduled for today lands in `scheduled` -- it is on today's plate, but it is not due.
-function lifeos.tasks.buckets(today, tasks)
-  today = today or lifeos.date.today()
+function lifeloop.tasks.buckets(today, tasks)
+  today = today or lifeloop.date.today()
   local overdue, dueToday, scheduled = {}, {}, {}
-  for _, t in ipairs(lifeos.tasks.actionable(tasks)) do
-    local deadline = lifeos.tasks.deadline(t)
-    local plan = lifeos.tasks.scheduled(t)
+  for _, t in ipairs(lifeloop.tasks.actionable(tasks)) do
+    local deadline = lifeloop.tasks.deadline(t)
+    local plan = lifeloop.tasks.scheduled(t)
     if deadline and deadline < today then
       table.insert(overdue, t)
     elseif deadline == today then
@@ -198,23 +198,23 @@ function lifeos.tasks.buckets(today, tasks)
     end
   end
   return {
-    overdue = lifeos.tasks.sort(overdue),
-    dueToday = lifeos.tasks.sort(dueToday),
-    scheduled = lifeos.tasks.sort(scheduled),
+    overdue = lifeloop.tasks.sort(overdue),
+    dueToday = lifeloop.tasks.sort(dueToday),
+    scheduled = lifeloop.tasks.sort(scheduled),
   }
 end
 
 -- The next `days` days, grouped by the day the task belongs to. A task carrying both dates appears
 -- exactly once: under `scheduled`, the day you meant to work on it, with the deadline alongside;
 -- a task with no scheduled date in range falls back to its deadline.
-function lifeos.tasks.upcoming(days, today, tasks)
-  today = today or lifeos.date.today()
-  local horizon = lifeos.date.shift(today, days or 14)
+function lifeloop.tasks.upcoming(days, today, tasks)
+  today = today or lifeloop.date.today()
+  local horizon = lifeloop.date.shift(today, days or 14)
   local byDay = {}
   local order = {}
-  for _, t in ipairs(lifeos.tasks.actionable(tasks)) do
-    local deadline = lifeos.tasks.deadline(t)
-    local plan = lifeos.tasks.scheduled(t)
+  for _, t in ipairs(lifeloop.tasks.actionable(tasks)) do
+    local deadline = lifeloop.tasks.deadline(t)
+    local plan = lifeloop.tasks.scheduled(t)
     local day
     if plan and plan > today and plan <= horizon then
       day = plan
@@ -232,17 +232,17 @@ function lifeos.tasks.upcoming(days, today, tasks)
   table.sort(order)
   local groups = {}
   for _, day in ipairs(order) do
-    table.insert(groups, { day = day, tasks = lifeos.tasks.sort(byDay[day]) })
+    table.insert(groups, { day = day, tasks = lifeloop.tasks.sort(byDay[day]) })
   end
   return groups
 end
 
--- Tasks that recorded a completion date inside [from, to]. Tasks completed before LifeOS was
+-- Tasks that recorded a completion date inside [from, to]. Tasks completed before LifeLoop was
 -- installed, or ticked from a query view, have no date and are invisible here by design.
-function lifeos.tasks.completedBetween(from, to, tasks)
+function lifeloop.tasks.completedBetween(from, to, tasks)
   local out = {}
-  for _, t in ipairs(tasks or lifeos.tasks.universe()) do
-    local completed = lifeos.tasks.completed(t)
+  for _, t in ipairs(tasks or lifeloop.tasks.universe()) do
+    local completed = lifeloop.tasks.completed(t)
     if t.done and completed and completed >= from and completed <= to then
       table.insert(out, t)
     end
@@ -254,11 +254,11 @@ end
 ## Project attribution
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
-function lifeos.tasks.relatedProjects(t, projectSet)
-  projectSet = projectSet or lifeos.projectSet()
+function lifeloop.tasks.relatedProjects(t, projectSet)
+  projectSet = projectSet or lifeloop.projectSet()
   local seen, out = {}, {}
   for _, link in ipairs(t.ilinks or {}) do
     if projectSet[link] and not seen[link] then
@@ -269,12 +269,12 @@ function lifeos.tasks.relatedProjects(t, projectSet)
   return out
 end
 
-function lifeos.tasks.contextProject(t, projectSet)
-  projectSet = projectSet or lifeos.projectSet()
+function lifeloop.tasks.contextProject(t, projectSet)
+  projectSet = projectSet or lifeloop.projectSet()
   if projectSet[t.page] then
     return t.page
   end
-  local related = lifeos.tasks.relatedProjects(t, projectSet)
+  local related = lifeloop.tasks.relatedProjects(t, projectSet)
   if #related == 1 then
     return related[1]
   end
@@ -283,11 +283,11 @@ end
 
 -- Open tasks owned by a project: the ones written on its page plus the ones elsewhere that
 -- name it and name nothing else.
-function lifeos.tasks.forProject(projectName, projectSet, tasks)
-  projectSet = projectSet or lifeos.projectSet()
+function lifeloop.tasks.forProject(projectName, projectSet, tasks)
+  projectSet = projectSet or lifeloop.projectSet()
   local out = {}
-  for _, t in ipairs(lifeos.tasks.open(tasks)) do
-    if lifeos.tasks.contextProject(t, projectSet) == projectName then
+  for _, t in ipairs(lifeloop.tasks.open(tasks)) do
+    if lifeloop.tasks.contextProject(t, projectSet) == projectName then
       table.insert(out, t)
     end
   end
@@ -296,21 +296,21 @@ end
 ```
 
 ## Rendering
-`templates.taskItem` renders a task as a checkbox that writes back to its source page. LifeOS
+`templates.taskItem` renders a task as a checkbox that writes back to its source page. LifeLoop
 keeps that behaviour (including its anchor-ref handling) and only appends the owning project.
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
-lifeos.templates = lifeos.templates or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
+lifeloop.templates = lifeloop.templates or {}
 
-lifeos.templates.task = template.new [==[
+lifeloop.templates.task = template.new [==[
 * [${state}] [[${ref}]] ${name}${context}
 ]==]
 
 -- Anchor refs are bare names; a "$" prefix makes them resolve as links. Position and header
 -- refs already carry "@" or "#" and pass through untouched.
-function lifeos.tasks.linkRef(t)
+function lifeloop.tasks.linkRef(t)
   if string.find(t.ref, "[@#]") then
     return t.ref
   end
@@ -319,25 +319,25 @@ end
 
 -- The indexer strips attributes out of `name`, so a rendered task would silently lose the date
 -- that put it on the list. Deadline if it has one, otherwise the day it was planned for.
-function lifeos.tasks.suffix(t, projectSet)
-  local date = lifeos.tasks.deadline(t) or lifeos.tasks.scheduled(t)
-  local project = lifeos.tasks.contextProject(t, projectSet)
+function lifeloop.tasks.suffix(t, projectSet)
+  local date = lifeloop.tasks.deadline(t) or lifeloop.tasks.scheduled(t)
+  local project = lifeloop.tasks.contextProject(t, projectSet)
   return (date and (" — " .. date) or "")
     .. (project and ("  ↳ [[" .. project .. "]]") or "")
 end
 
-function lifeos.tasks.render(tasks, projectSet)
+function lifeloop.tasks.render(tasks, projectSet)
   if #tasks == 0 then
     return nil
   end
-  projectSet = projectSet or lifeos.projectSet()
+  projectSet = projectSet or lifeloop.projectSet()
   local out = {}
   for _, t in ipairs(tasks) do
-    table.insert(out, lifeos.templates.task {
+    table.insert(out, lifeloop.templates.task {
       state = t.state,
-      ref = lifeos.tasks.linkRef(t),
+      ref = lifeloop.tasks.linkRef(t),
       name = t.name,
-      context = lifeos.tasks.suffix(t, projectSet),
+      context = lifeloop.tasks.suffix(t, projectSet),
     })
   end
   return table.concat(out)
@@ -345,15 +345,15 @@ end
 
 -- Frozen review sections render tasks as plain text: a snapshot records what was true, it does
 -- not hand you a checkbox that still edits a task somewhere else.
-function lifeos.tasks.renderStatic(tasks, projectSet)
+function lifeloop.tasks.renderStatic(tasks, projectSet)
   if #tasks == 0 then
     return nil
   end
-  projectSet = projectSet or lifeos.projectSet()
+  projectSet = projectSet or lifeloop.projectSet()
   local out = {}
   for _, t in ipairs(tasks) do
     table.insert(out, "- " .. (t.done and "✓" or "○") .. " " .. t.name
-      .. lifeos.tasks.suffix(t, projectSet) .. "\n")
+      .. lifeloop.tasks.suffix(t, projectSet) .. "\n")
   end
   return table.concat(out)
 end
@@ -362,21 +362,21 @@ end
 ## Contract validation
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
-function lifeos.tasks.issues(t)
+function lifeloop.tasks.issues(t)
   local issues = {}
-  for _, attribute in ipairs(lifeos.contract.taskDates) do
+  for _, attribute in ipairs(lifeloop.contract.taskDates) do
     local value = t[attribute]
-    if value != nil and not lifeos.date.day(value) then
+    if value != nil and not lifeloop.date.day(value) then
       table.insert(issues, {
         level = "review",
         message = attribute .. " is not a YYYY-MM-DD date: " .. tostring(value),
       })
     end
   end
-  if t.priority != nil and not table.includes(lifeos.contract.taskPriority, t.priority) then
+  if t.priority != nil and not table.includes(lifeloop.contract.taskPriority, t.priority) then
     table.insert(issues, {
       level = "review",
       message = "unknown priority '" .. tostring(t.priority) .. "'",
@@ -392,14 +392,14 @@ reported rather than silently un-parked: removing a tag the line never had would
 editing the parent from here would move something the cursor is not on.
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.tasks = lifeos.tasks or {}
+lifeloop = lifeloop or {}
+lifeloop.tasks = lifeloop.tasks or {}
 
 -- The indexed task whose source range contains the cursor, or nil
 local function taskAtCursor()
   local page = editor.getCurrentPage()
   local pos = editor.getCursor()
-  for _, t in ipairs(lifeos.tasks.universe(page)) do
+  for _, t in ipairs(lifeloop.tasks.universe(page)) do
     if t.range and t.range[1] <= pos and pos <= t.range[2] then
       return t
     end
@@ -407,7 +407,7 @@ local function taskAtCursor()
   return nil
 end
 
-function lifeos.tasks.toggleTag(tag)
+function lifeloop.tasks.toggleTag(tag)
   local line = editor.getCurrentLine()
   if not line or not string.find(line.text, "^%s*[-*+]%s+%[") then
     editor.flashNotification("Put the cursor on a task first", "error")
@@ -440,25 +440,25 @@ function lifeos.tasks.toggleTag(tag)
 end
 
 command.define {
-  name = "LifeOS: Toggle Waiting",
-  run = function() lifeos.tasks.toggleTag("waiting") end
+  name = "LifeLoop: Toggle Waiting",
+  run = function() lifeloop.tasks.toggleTag("waiting") end
 }
 
 command.define {
-  name = "LifeOS: Toggle Someday",
-  run = function() lifeos.tasks.toggleTag("someday") end
+  name = "LifeLoop: Toggle Someday",
+  run = function() lifeloop.tasks.toggleTag("someday") end
 }
 ```
 
 ## Slash commands
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
+lifeloop = lifeloop or {}
 slashCommand.define {
   name = "deadline",
   description = "Add a deadline attribute to this task",
   run = function()
-    editor.insertAtCursor('[deadline: "' .. lifeos.date.today() .. '"]')
+    editor.insertAtCursor('[deadline: "' .. lifeloop.date.today() .. '"]')
   end
 }
 
@@ -466,7 +466,7 @@ slashCommand.define {
   name = "scheduled",
   description = "Add a scheduled attribute to this task",
   run = function()
-    editor.insertAtCursor('[scheduled: "' .. lifeos.date.today() .. '"]')
+    editor.insertAtCursor('[scheduled: "' .. lifeloop.date.today() .. '"]')
   end
 }
 ```

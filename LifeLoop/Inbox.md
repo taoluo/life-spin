@@ -3,7 +3,7 @@ description: Working through the inbox — one entry at a time, with nothing hal
 tags: meta
 ---
 
-`LifeOS: Process Inbox` walks what is still pending and asks what to do with each entry. Every
+`LifeLoop: Process Inbox` walks what is still pending and asks what to do with each entry. Every
 action either completes and takes the entry out of pending, or changes nothing at all.
 
 # Items and pages are not the same thing
@@ -34,13 +34,13 @@ destination is written first, and only then is the source removed.
 ## Choosing a project
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.inbox = lifeos.inbox or {}
+lifeloop = lifeloop or {}
+lifeloop.inbox = lifeloop.inbox or {}
 
 -- Returns a project page name, or nil when the user backs out
-function lifeos.inbox.pickProject()
+function lifeloop.inbox.pickProject()
   local options = {}
-  for _, p in ipairs(lifeos.projects("active")) do
+  for _, p in ipairs(lifeloop.projects("active")) do
     table.insert(options, { name = p.name })
   end
   if #options == 0 then
@@ -56,7 +56,7 @@ end
 
 -- The first ATX heading in a page, falling back to its last path segment. Used as the suggested
 -- name when promoting a quick note -- a suggestion, never an inferred destination.
-function lifeos.inbox.suggestedName(pageName)
+function lifeloop.inbox.suggestedName(pageName)
   local text = space.readPage(pageName)
   local heading = string.match(text, "\n#+%s+([^\n]+)") or string.match(text, "^#+%s+([^\n]+)")
   if heading then
@@ -71,11 +71,11 @@ end
 Each one is a named function so it can be driven without the picker.
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.inbox = lifeos.inbox or {}
+lifeloop = lifeloop or {}
+lifeloop.inbox = lifeloop.inbox or {}
 
-function lifeos.inbox.makeTask(entry)
-  return lifeos.inbox.applyToItem(entry, {
+function lifeloop.inbox.makeTask(entry)
+  return lifeloop.inbox.applyToItem(entry, {
     transform = function(chunk)
       -- Only the first line becomes a checkbox; nested children stay as they are
       return (string.gsub(chunk, "^(%s*[-*+])%s+", "%1 [ ] ", 1))
@@ -83,12 +83,12 @@ function lifeos.inbox.makeTask(entry)
   })
 end
 
-function lifeos.inbox.linkProject(entry, projectName)
+function lifeloop.inbox.linkProject(entry, projectName)
   if not projectName then
     return false, "no project chosen"
   end
   local link = "[[" .. projectName .. "]]"
-  return lifeos.inbox.applyToItem(entry, {
+  return lifeloop.inbox.applyToItem(entry, {
     transform = function(chunk)
       if string.find(chunk, link, 1, true) then
         return chunk
@@ -104,37 +104,37 @@ end
 
 -- Two pages, so two writes. Everything is validated first, and the destination is written before
 -- the source is cleared: a failure in between leaves a duplicate, never a hole.
-function lifeos.inbox.moveToProject(entry, projectName)
+function lifeloop.inbox.moveToProject(entry, projectName)
   if not projectName then
     return false, "no project chosen"
   end
   if not space.pageExists(projectName) then
     return false, "no such page: " .. projectName
   end
-  local content = lifeos.readPageText(entry.page)
+  local content = lifeloop.readPageText(entry.page)
   if content:sub(entry.range[1] + 1, entry.range[2]) != entry.raw then
     return false, "this item changed since it was listed -- reopen the inbox and retry"
   end
-  lifeos.appendToPage(projectName, string.trim(entry.raw))
-  return lifeos.inbox.applyToItem(entry, { destination = "remove" })
+  lifeloop.appendToPage(projectName, string.trim(entry.raw))
+  return lifeloop.inbox.applyToItem(entry, { destination = "remove" })
 end
 
-function lifeos.inbox.archiveItem(entry)
-  local content = lifeos.readPageText(entry.page)
+function lifeloop.inbox.archiveItem(entry)
+  local content = lifeloop.readPageText(entry.page)
   if content:sub(entry.range[1] + 1, entry.range[2]) != entry.raw then
     return false, "this item changed since it was listed -- reopen the inbox and retry"
   end
-  lifeos.appendToPage("Archive/Inbox", string.trim(entry.raw))
-  return lifeos.inbox.applyToItem(entry, { destination = "remove" })
+  lifeloop.appendToPage("Archive/Inbox", string.trim(entry.raw))
+  return lifeloop.inbox.applyToItem(entry, { destination = "remove" })
 end
 
-function lifeos.inbox.deleteItem(entry)
-  return lifeos.inbox.applyToItem(entry, { destination = "remove" })
+function lifeloop.inbox.deleteItem(entry)
+  return lifeloop.inbox.applyToItem(entry, { destination = "remove" })
 end
 
 -- Creates the entity page, then links the item to it. The page is checked for existence before
 -- anything is written, so a collision costs nothing.
-function lifeos.inbox.createEntity(entry, tag, pageName)
+function lifeloop.inbox.createEntity(entry, tag, pageName)
   pageName = string.trim(pageName or "")
   if pageName == "" then
     return false, "no name given"
@@ -149,7 +149,7 @@ function lifeos.inbox.createEntity(entry, tag, pageName)
   frontmatter = frontmatter .. "---\n"
   space.writePage(pageName, frontmatter)
   if entry.kind == "item" then
-    return lifeos.inbox.linkProject(entry, pageName)
+    return lifeloop.inbox.linkProject(entry, pageName)
   end
   return true, "created " .. pageName
 end
@@ -158,10 +158,10 @@ end
 ## Actions on a quick note
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.inbox = lifeos.inbox or {}
+lifeloop = lifeloop or {}
+lifeloop.inbox = lifeloop.inbox or {}
 
-function lifeos.inbox.linkAndPromote(entry, projectName, newName)
+function lifeloop.inbox.linkAndPromote(entry, projectName, newName)
   if not projectName or not newName or string.trim(newName) == "" then
     return false, "cancelled"
   end
@@ -170,7 +170,7 @@ function lifeos.inbox.linkAndPromote(entry, projectName, newName)
   end
   -- Promote first: a rename that fails must leave the note exactly as it was, and adding the
   -- link beforehand would leave an annotated note still sitting in the inbox.
-  local ok, message = lifeos.inbox.promotePage(entry, newName)
+  local ok, message = lifeloop.inbox.promotePage(entry, newName)
   if not ok then
     return false, message
   end
@@ -183,7 +183,7 @@ function lifeos.inbox.linkAndPromote(entry, projectName, newName)
 end
 
 -- Turns the note itself into an entity page: adds the tag, then moves it out of Inbox/.
-function lifeos.inbox.promoteToEntity(entry, tag, newName)
+function lifeloop.inbox.promoteToEntity(entry, tag, newName)
   newName = string.trim(newName or "")
   if newName == "" then
     return false, "no name given"
@@ -192,7 +192,7 @@ function lifeos.inbox.promoteToEntity(entry, tag, newName)
     return false, "a page called '" .. newName .. "' already exists"
   end
   -- Same ordering as above: rename first, tag the page afterwards.
-  local ok, message = lifeos.inbox.promotePage(entry, newName)
+  local ok, message = lifeloop.inbox.promotePage(entry, newName)
   if not ok then
     return false, message
   end
@@ -204,12 +204,12 @@ function lifeos.inbox.promoteToEntity(entry, tag, newName)
   return true, "promoted to " .. tag
 end
 
-function lifeos.inbox.archivePage(entry)
+function lifeloop.inbox.archivePage(entry)
   local parts = string.split(entry.page, "/")
-  return lifeos.inbox.promotePage(entry, "Archive/Inbox/" .. parts[#parts])
+  return lifeloop.inbox.promotePage(entry, "Archive/Inbox/" .. parts[#parts])
 end
 
-function lifeos.inbox.deletePage(entry)
+function lifeloop.inbox.deletePage(entry)
   space.deletePage(entry.page)
   return true, "deleted"
 end
@@ -218,51 +218,51 @@ end
 ## The menus
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.inbox = lifeos.inbox or {}
+lifeloop = lifeloop or {}
+lifeloop.inbox = lifeloop.inbox or {}
 
-function lifeos.inbox.actionsFor(entry)
+function lifeloop.inbox.actionsFor(entry)
   if entry.kind == "page" then
     return {
       { name = "Keep", keep = true },
       { name = "Promote", run = function(e)
-        return lifeos.inbox.promotePage(e, some(editor.prompt("Promote page as", lifeos.inbox.suggestedName(e.page))))
+        return lifeloop.inbox.promotePage(e, some(editor.prompt("Promote page as", lifeloop.inbox.suggestedName(e.page))))
       end },
       { name = "Link project and promote", run = function(e)
-        local project = lifeos.inbox.pickProject()
+        local project = lifeloop.inbox.pickProject()
         if not project then return false, "cancelled" end
-        return lifeos.inbox.linkAndPromote(e, project,
-          some(editor.prompt("Promote page as", lifeos.inbox.suggestedName(e.page))))
+        return lifeloop.inbox.linkAndPromote(e, project,
+          some(editor.prompt("Promote page as", lifeloop.inbox.suggestedName(e.page))))
       end },
       { name = "Make it a project", run = function(e)
-        return lifeos.inbox.promoteToEntity(e, "project",
-          some(editor.prompt("Project page name", "Projects/" .. lifeos.inbox.suggestedName(e.page))))
+        return lifeloop.inbox.promoteToEntity(e, "project",
+          some(editor.prompt("Project page name", "Projects/" .. lifeloop.inbox.suggestedName(e.page))))
       end },
       { name = "Make it a person", run = function(e)
-        return lifeos.inbox.promoteToEntity(e, "person",
-          some(editor.prompt("Person page name", "People/" .. lifeos.inbox.suggestedName(e.page))))
+        return lifeloop.inbox.promoteToEntity(e, "person",
+          some(editor.prompt("Person page name", "People/" .. lifeloop.inbox.suggestedName(e.page))))
       end },
-      { name = "Archive", run = lifeos.inbox.archivePage },
-      { name = "Delete", run = lifeos.inbox.deletePage },
+      { name = "Archive", run = lifeloop.inbox.archivePage },
+      { name = "Delete", run = lifeloop.inbox.deletePage },
     }
   end
   return {
     { name = "Keep", keep = true },
     { name = "Link project", run = function(e)
-      return lifeos.inbox.linkProject(e, lifeos.inbox.pickProject())
+      return lifeloop.inbox.linkProject(e, lifeloop.inbox.pickProject())
     end },
-    { name = "Make task", run = lifeos.inbox.makeTask },
+    { name = "Make task", run = lifeloop.inbox.makeTask },
     { name = "Move to project", run = function(e)
-      return lifeos.inbox.moveToProject(e, lifeos.inbox.pickProject())
+      return lifeloop.inbox.moveToProject(e, lifeloop.inbox.pickProject())
     end },
     { name = "Create project", run = function(e)
-      return lifeos.inbox.createEntity(e, "project", some(editor.prompt("Project page name", "Projects/")))
+      return lifeloop.inbox.createEntity(e, "project", some(editor.prompt("Project page name", "Projects/")))
     end },
     { name = "Create person", run = function(e)
-      return lifeos.inbox.createEntity(e, "person", some(editor.prompt("Person page name", "People/")))
+      return lifeloop.inbox.createEntity(e, "person", some(editor.prompt("Person page name", "People/")))
     end },
-    { name = "Archive", run = lifeos.inbox.archiveItem },
-    { name = "Delete", run = lifeos.inbox.deleteItem },
+    { name = "Archive", run = lifeloop.inbox.archiveItem },
+    { name = "Delete", run = lifeloop.inbox.deleteItem },
   }
 end
 ```
@@ -272,15 +272,15 @@ Ranges shift as soon as an item moves, so the loop re-reads what is pending afte
 rather than working from a list captured at the start.
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
+lifeloop = lifeloop or {}
 command.define {
-  name = "LifeOS: Process Inbox",
+  name = "LifeLoop: Process Inbox",
   run = function()
     local kept = {}
     while true do
       mq.awaitEmptyQueue("indexQueue")
       local entry
-      for _, candidate in ipairs(lifeos.inbox.pending()) do
+      for _, candidate in ipairs(lifeloop.inbox.pending()) do
         local id = candidate.kind == "page" and candidate.page or (candidate.page .. "\0" .. candidate.raw)
         if not kept[id] then
           entry = candidate
@@ -294,7 +294,7 @@ command.define {
       end
 
       local label = entry.kind == "page" and ("note: " .. entry.page) or (entry.name or "(empty)")
-      local choice = editor.filterBox("Action", lifeos.inbox.actionsFor(entry), label)
+      local choice = editor.filterBox("Action", lifeloop.inbox.actionsFor(entry), label)
       if not choice then
         return
       end

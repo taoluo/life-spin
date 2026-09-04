@@ -1,13 +1,13 @@
 ---
-description: Deterministic checks on the contract LifeOS itself promised.
+description: Deterministic checks on the contract LifeLoop itself promised.
 tags: meta
 ---
 
-Audit answers one question: **is anything violating a rule LifeOS actually made?** Not whether
-you are using SilverBullet the LifeOS way.
+Audit answers one question: **is anything violating a rule LifeLoop actually made?** Not whether
+you are using SilverBullet the LifeLoop way.
 
 So it checks unknown project statuses, area links that point at a missing page or one that is not
-an area, and malformed LifeOS dates and priorities. It deliberately does not check:
+an area, and malformed LifeLoop dates and priorities. It deliberately does not check:
 
 * **arbitrary task attributes** — `[cost: 3]` on a task is exactly the extensibility that makes
   SilverBullet worth using, and the built-in task schema is `additionalProperties: true`
@@ -16,7 +16,7 @@ an area, and malformed LifeOS dates and priorities. It deliberately does not che
   [[Library/Std/Pages/Maintenance]]
 * **folder conventions** — a project under `Notes/` is not a mistake; path is not identity
 * **signals** — `No actionable task` is an observation about a project, not a broken contract.
-  Those live on [[Library/LifeOS/Pages/Projects]], and mixing them in here would turn a list of
+  Those live on [[Library/LifeLoop/Pages/Projects]], and mixing them in here would turn a list of
   things that are *wrong* into a list of things that are merely *true*
 
 It reports and never fixes. An automatic repair needs a rule confident enough to run unattended,
@@ -25,13 +25,13 @@ and none of these are.
 # Implementation
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.audit = lifeos.audit or {}
+lifeloop = lifeloop or {}
+lifeloop.audit = lifeloop.audit or {}
 
 -- Every violation, grouped by how much judgement the fix needs.
 -- Returns { safe = {...}, review = {...} }, each entry { page, message }.
-function lifeos.audit.run()
-  local ctx = lifeos.auditContext()
+function lifeloop.audit.run()
+  local ctx = lifeloop.auditContext()
   local safe, review = {}, {}
 
   local function collect(ref, label, issues)
@@ -45,26 +45,26 @@ function lifeos.audit.run()
     end
   end
 
-  for _, p in ipairs(lifeos.projects()) do
-    collect(p.name, p.name, lifeos.projectIssues(p, ctx))
+  for _, p in ipairs(lifeloop.projects()) do
+    collect(p.name, p.name, lifeloop.projectIssues(p, ctx))
   end
-  for _, a in ipairs(lifeos.areas()) do
-    collect(a.name, a.name, lifeos.areaIssues(a, ctx))
+  for _, a in ipairs(lifeloop.areas()) do
+    collect(a.name, a.name, lifeloop.areaIssues(a, ctx))
   end
-  for _, t in ipairs(lifeos.tasks.universe()) do
+  for _, t in ipairs(lifeloop.tasks.universe()) do
     -- A task's ref is "page@offset": the link has to be the ref to land on the right line, but
     -- what you read should be the task itself.
-    collect(lifeos.tasks.linkRef(t), t.name, lifeos.tasks.issues(t))
+    collect(lifeloop.tasks.linkRef(t), t.name, lifeloop.tasks.issues(t))
   end
 
   return { safe = safe, review = review }
 end
 
-function lifeos.audit.render()
-  local result = lifeos.audit.run()
+function lifeloop.audit.render()
+  local result = lifeloop.audit.run()
   local total = #result.safe + #result.review
   if total == 0 then
-    return "_Nothing violates the LifeOS contract._\n"
+    return "_Nothing violates the LifeLoop contract._\n"
   end
   local out = {
     "**" .. total .. " issue" .. (total == 1 and "" or "s") .. "** — "
@@ -82,9 +82,9 @@ function lifeos.audit.render()
 end
 
 command.define {
-  name = "LifeOS: Audit",
+  name = "LifeLoop: Audit",
   run = function()
-    editor.navigate("Library/LifeOS/Pages/Audit")
+    editor.navigate("Library/LifeLoop/Pages/Audit")
   end
 }
 ```

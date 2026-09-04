@@ -1,5 +1,5 @@
 ---
-command: "LifeOS: New Project"
+command: "LifeLoop: New Project"
 description: A project — something with an outcome and an end
 suggestedName: "Projects/"
 confirmName: true

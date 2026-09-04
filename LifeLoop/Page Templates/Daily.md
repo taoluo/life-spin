@@ -1,5 +1,5 @@
 ---
-description: The LifeOS daily note — a log and somewhere to think, nothing else
+description: The LifeLoop daily note — a log and somewhere to think, nothing else
 tags: meta/template
 frontmatter: |
   tags: ${config.get("journal.tag")}

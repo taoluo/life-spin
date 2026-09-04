@@ -31,52 +31,52 @@ something you set — it is never synthesised from the earliest task deadline.
 # Implementation
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.signals = lifeos.signals or {}
+lifeloop = lifeloop or {}
+lifeloop.signals = lifeloop.signals or {}
 
-config.define("lifeos.signals", {
-  description = "Thresholds for LifeOS project signals",
+config.define("lifeloop.signals", {
+  description = "Thresholds for LifeLoop project signals",
   type = "object",
   properties = {
     staleDays = {
       type = "number",
       default = 21,
       description = "Days without an edit to the project page before it is flagged.",
-      ui = { category = "LifeOS", label = "Stale after (days)", priority = 1 },
+      ui = { category = "LifeLoop", label = "Stale after (days)", priority = 1 },
     },
     deadlineSoonDays = {
       type = "number",
       default = 7,
       description = "How close a project deadline has to be before it is flagged.",
-      ui = { category = "LifeOS", label = "Deadline soon (days)", priority = 1 },
+      ui = { category = "LifeLoop", label = "Deadline soon (days)", priority = 1 },
     },
   },
   additionalProperties = false,
 })
 
 -- Returns a list of { level, message }. Empty for anything that is not an active project.
-function lifeos.signals.forProject(p, ctx)
-  if lifeos.projectStatus(p) != "active" then
+function lifeloop.signals.forProject(p, ctx)
+  if lifeloop.projectStatus(p) != "active" then
     return {}
   end
   ctx = ctx or {}
-  local projectSet = ctx.projectSet or lifeos.projectSet()
-  local universe = ctx.universe or lifeos.tasks.universe()
-  local today = ctx.today or lifeos.date.today()
-  local thresholds = config.get("lifeos.signals", {})
+  local projectSet = ctx.projectSet or lifeloop.projectSet()
+  local universe = ctx.universe or lifeloop.tasks.universe()
+  local today = ctx.today or lifeloop.date.today()
+  local thresholds = config.get("lifeloop.signals", {})
   local staleDays = thresholds.staleDays or 21
   local deadlineSoonDays = thresholds.deadlineSoonDays or 7
 
-  local open = lifeos.tasks.forProject(p.name, projectSet, universe)
+  local open = lifeloop.tasks.forProject(p.name, projectSet, universe)
   local actionable, waiting, overdue = 0, 0, 0
   for _, t in ipairs(open) do
-    if not lifeos.tasks.parked(t) then
+    if not lifeloop.tasks.parked(t) then
       actionable = actionable + 1
     end
     if table.includes(t.itags or {}, "waiting") then
       waiting = waiting + 1
     end
-    local deadline = lifeos.tasks.deadline(t)
+    local deadline = lifeloop.tasks.deadline(t)
     if deadline and deadline < today then
       overdue = overdue + 1
     end
@@ -93,8 +93,8 @@ function lifeos.signals.forProject(p, ctx)
     end
   end
 
-  local touched = lifeos.date.day(p.lastModified)
-  local staleBefore = lifeos.date.shift(today, -staleDays)
+  local touched = lifeloop.date.day(p.lastModified)
+  local staleBefore = lifeloop.date.shift(today, -staleDays)
   if touched and staleBefore and touched < staleBefore then
     table.insert(signals, {
       level = "info",
@@ -103,8 +103,8 @@ function lifeos.signals.forProject(p, ctx)
   end
 
   -- The project's own deadline. A task's deadline is a fact about that task.
-  local deadline = lifeos.date.day(p.deadline)
-  if deadline and deadline >= today and deadline <= lifeos.date.shift(today, deadlineSoonDays) then
+  local deadline = lifeloop.date.day(p.deadline)
+  if deadline and deadline >= today and deadline <= lifeloop.date.shift(today, deadlineSoonDays) then
     table.insert(signals, { level = "review", message = "Deadline " .. deadline })
   end
 
@@ -118,8 +118,8 @@ function lifeos.signals.forProject(p, ctx)
   return signals
 end
 
-function lifeos.signals.render(p, ctx)
-  local signals = lifeos.signals.forProject(p, ctx)
+function lifeloop.signals.render(p, ctx)
+  local signals = lifeloop.signals.forProject(p, ctx)
   if #signals == 0 then
     return ""
   end

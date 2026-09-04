@@ -1,4 +1,4 @@
-# LifeOS roadmap
+# LifeLoop roadmap
 
 Scope, in the order it gets built. `DESIGN.md` holds the rules that outlive this file; this one is
 expected to change as phases land.
@@ -13,7 +13,7 @@ matters — daily use. Until that produces counterexamples, nothing here should 
 
 > think of something → capture → find the context → do it → get the overview back weekly
 
-* **Capture** — `LifeOS: Capture` writes one line to the Inbox without navigating away, or hands
+* **Capture** — `LifeLoop: Capture` writes one line to the Inbox without navigating away, or hands
   over to SilverBullet's own Quick Note. Capture must cost less than filing does.
 * **Project / Area / Person** — identified by a `tags:` entry in frontmatter, never by folder.
   `Work/Q3 Launch` and `Projects/Q3 Launch` are equally valid projects.
@@ -22,7 +22,7 @@ matters — daily use. Until that produces counterexamples, nothing here should 
 * **Today** — overdue / due today / scheduled, disjoint, a projection that stores nothing.
 * **Daily note** — a log and somewhere to think. No habits, goals, metrics or dashboards.
 * **Weekly Review** — live sections for what you completed, what is still open, active projects,
-  what you are waiting on and the inbox, plus the reflection you write; `LifeOS: Freeze Review`
+  what you are waiting on and the inbox, plus the reflection you write; `LifeLoop: Freeze Review`
   turns a finished review into a snapshot that stays true.
 * **Completion dates** — recorded when you tick a task in the page. Best-effort by design; see
   `DESIGN.md`.
@@ -38,7 +38,7 @@ and never reach done; tags are what SilverBullet's own task guide uses, `index.t
 queries them natively, and the task stays an ordinary checkbox.
 
 Classification reads inherited tags, so a parent item marked `#waiting` covers the tasks nested
-under it. Toggling is the other way round: `LifeOS: Toggle Waiting` / `Toggle Someday` add or
+under it. Toggling is the other way round: `LifeLoop: Toggle Waiting` / `Toggle Someday` add or
 remove the tag **on the task's own line**, and when the state is inherited from a parent they say
 so rather than pretending to remove something the line never had.
 
@@ -54,7 +54,7 @@ universe()      not inComment
   → actionable()  and not #waiting/#someday    ← nothing to filter on until now
 ```
 
-**Upcoming.** `LifeOS/Pages/Upcoming.md`, the next `upcomingDays` (14) grouped by day. A task with
+**Upcoming.** `LifeLoop/Pages/Upcoming.md`, the next `upcomingDays` (14) grouped by day. A task with
 both dates appears **once**: grouped by `scheduled` — the day you meant to work on it — with the
 deadline shown alongside, falling back to the deadline when there is no scheduled date in range. A
 projection like Today.
@@ -78,7 +78,7 @@ Build in this order: **Process Inbox → project lifecycle → derived signals �
 last on purpose — it should validate contracts that have settled, not freeze whatever conventions
 the implementation happened to adopt along the way.
 
-**Process Inbox.** `LifeOS: Process Inbox` walks the pending entries. Items and pages get
+**Process Inbox.** `LifeLoop: Process Inbox` walks the pending entries. Items and pages get
 **different action menus** — "turn this quick note into a task" has no natural answer (create a
 task pointing at it? convert its first line? move the whole note into a project?), and forcing one
 generic mutation model would invent the wrong abstraction.
@@ -105,7 +105,7 @@ The three primitives underneath are already built and tested (whole-subtree move
 means zero writes, cancelled or colliding promotion is a no-op). What this phase adds is the flow
 on top.
 
-**Project lifecycle.** `LifeOS: Complete / Archive / Pause / Reactivate Project`, patching
+**Project lifecycle.** `LifeLoop: Complete / Archive / Pause / Reactivate Project`, patching
 `status:` through the native `index.patchFrontmatter`. Four states only: `active | paused |
 completed | archived`. No at-risk / stale / healthy / blocked — those are signals, not states.
 
@@ -132,8 +132,8 @@ may be happening in meeting notes or the journal.
 
 All of them are computed at query time and never written back.
 
-**Audit.** `LifeOS/Pages/Audit.md`, a live report that reports and never fixes. The rule: check
-what LifeOS itself promised, not whether the user is using SilverBullet the LifeOS way.
+**Audit.** `LifeLoop/Pages/Audit.md`, a live report that reports and never fixes. The rule: check
+what LifeLoop itself promised, not whether the user is using SilverBullet the LifeLoop way.
 
 Checks unknown project status, broken area links (missing page, or a page without an `area` tag),
 and malformed `deadline` / `scheduled` / `completed` / `priority`. Deliberately does **not** check:
@@ -145,7 +145,7 @@ and malformed `deadline` / `scheduled` / `completed` / `priority`. Deliberately 
 * pages under `Projects/` without a `#project` tag — demoted to an off-by-default convention hint,
   since it contradicts "path is not identity"
 
-Validation lives in `lifeos.*.issues()` (already implemented); the page only renders it.
+Validation lives in `lifeloop.*.issues()` (already implemented); the page only renders it.
 
 ## Phase 4 — AI assistance
 
@@ -172,8 +172,8 @@ effort.
 **Level 2 — suggestions.** Given an inbox line, propose an attachment and a conversion, and show
 them as a proposal with an Apply button. It still cannot act.
 
-**Level 3 — constrained mutation.** A named semantic API — `lifeos.capture`, `lifeos.createTask`,
-`lifeos.setTaskDue`, `lifeos.createProject`, `lifeos.completeProject`, `lifeos.processInbox` — and
+**Level 3 — constrained mutation.** A named semantic API — `lifeloop.capture`, `lifeloop.createTask`,
+`lifeloop.setTaskDue`, `lifeloop.createProject`, `lifeloop.completeProject`, `lifeloop.processInbox` — and
 the assistant may call *only* those. Never `write_file`, `eval_lua` or `replace_any_text`. This is
 what `DESIGN.md`'s "AI owns no canonical fact" cashes out to. SilverBullet's AI plug already lets
 a tool declare `readOnly` and `requiresApproval`, so the enforcement point exists.

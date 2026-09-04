@@ -1,5 +1,5 @@
 #!/bin/bash
-# LifeOS acceptance suite, run against a live SilverBullet client.
+# LifeLoop acceptance suite, run against a live SilverBullet client.
 #
 # The object index, Space Lua and queries all live in the client, so the only honest way to
 # exercise this code is inside one. `sb` is the desktop app's CLI for the Runtime API.
@@ -21,7 +21,7 @@ echo "waiting for the client to come back"
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
   ready=$("$SB_BIN" script -s "$SPACE" -t 60 --json '
     mq.awaitEmptyQueue("indexQueue")
-    return { ready = type(lifeos.audit) == "table" and type(lifeos.tasks.toggleTag) == "function" }' 2>/dev/null)
+    return { ready = type(lifeloop.audit) == "table" and type(lifeloop.tasks.toggleTag) == "function" }' 2>/dev/null)
   case "$ready" in *'"ready":true'*) break ;; esac
   sleep 2
 done
@@ -29,7 +29,7 @@ done
 echo "resetting fixtures"
 "$SB_BIN" script -s "$SPACE" -t 120 '
 space.writePage("Inbox", "Captured items land here.\n\n* investigate SilverBullet task recurrence\n* ask Jiulong about the decoder\n  * specifically the survivor case\n")
-for _, name in ipairs({ lifeos.review.pageName(), "Scratch/Half Review", "Scratch/Bad",
+for _, name in ipairs({ lifeloop.review.pageName(), "Scratch/Half Review", "Scratch/Bad",
      "Scratch/Ticking", "Scratch/Ticking Remote", "Scratch/Reopening",
      "Inbox/2020-01-01/09-00-00", "Notes/Taken", "Notes/Promoted",
      "Scratch/Destination", "Scratch/Occupied", "Scratch/Lifecycle", "Scratch/Plain",

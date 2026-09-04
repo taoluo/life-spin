@@ -1,5 +1,5 @@
 ---
-command: "LifeOS: New Area"
+command: "LifeLoop: New Area"
 description: An area — an ongoing responsibility with no finish line
 suggestedName: "Areas/"
 confirmName: true

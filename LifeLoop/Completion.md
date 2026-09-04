@@ -4,7 +4,7 @@ tags: meta
 ---
 
 Weekly Review wants to answer "what did I finish this week?", and a task object records only
-whether it is done, never when. LifeOS fills that in by listening to SilverBullet's
+whether it is done, never when. LifeLoop fills that in by listening to SilverBullet's
 `task:stateChange` event and writing the one fact that cannot be recomputed later:
 
 ```markdown
@@ -17,16 +17,16 @@ position. Ticking one **in a query result** — Today, a dashboard, the Linked T
 through `index.cycleTaskStateByRef`, and that path dispatches only the new state: there is no way
 to tell which of your tasks it was.
 
-So LifeOS stamps the first case and stays out of the second. It does **not** scan pages for
+So LifeLoop stamps the first case and stays out of the second. It does **not** scan pages for
 "done but unstamped" tasks to fill the gap: a completion date is a historical fact, and every
-task you finished before installing LifeOS is done-but-unstamped. Reconstructing it from current
+task you finished before installing LifeLoop is done-but-unstamped. Reconstructing it from current
 state would mean inventing history and writing it into your notes.
 
 The consequence is stated plainly wherever it shows: **Completed means "tasks with a recorded
 completion date"**, not "everything you finished".
 
 > **note** The known gap
-> Covering query-view ticks would mean LifeOS rendering Today's checkboxes itself and, on click,
+> Covering query-view ticks would mean LifeLoop rendering Today's checkboxes itself and, on click,
 > resolving `task.ref` to a live position, verifying the state text still matches, and writing the
 > new state and the timestamp in one go — never parsing `ref` as a location, since a page with an
 > anchor replaces `page@pos` with the anchor name. That is recorded in the project's `DESIGN.md`
@@ -35,12 +35,12 @@ completion date"**, not "everything you finished".
 # Implementation
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.completion = lifeos.completion or {}
+lifeloop = lifeloop or {}
+lifeloop.completion = lifeloop.completion or {}
 
 local COMPLETED_PATTERN = "%s*%[completed:[^%]]*%]"
 
-function lifeos.completion.isDone(state)
+function lifeloop.completion.isDone(state)
   if state == "x" or state == "X" then
     return true
   end
@@ -51,7 +51,7 @@ end
 event.listen {
   name = "task:stateChange",
   run = function(e)
-    if not config.get("lifeos.stampCompletion", true) then
+    if not config.get("lifeloop.stampCompletion", true) then
       return
     end
     local change = e.data
@@ -69,7 +69,7 @@ event.listen {
 
     local stampStart, stampEnd = string.find(change.text, COMPLETED_PATTERN)
 
-    if lifeos.completion.isDone(change.newState) then
+    if lifeloop.completion.isDone(change.newState) then
       if stampStart then
         return
       end
@@ -77,7 +77,7 @@ event.listen {
         changes = {
           from = change.to,
           to = change.to,
-          insert = ' [completed: "' .. lifeos.date.today() .. '"]',
+          insert = ' [completed: "' .. lifeloop.date.today() .. '"]',
         }
       }
     elseif stampStart then

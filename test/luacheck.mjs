@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 // parse-lua.js imports "@lezer/lr" by bare specifier, so stage a copy whose import resolves.
 const require = createRequire(import.meta.url);
 const SB_SRC = process.env.SB_SRC || "silverbullet";
-const STAGE = join(process.env.TMPDIR || "/tmp", "lifeos-luacheck");
+const STAGE = join(process.env.TMPDIR || "/tmp", "lifeloop-luacheck");
 let parser;
 try {
   const lezer = require.resolve("@lezer/lr", { paths: [join(process.cwd(), "test"), process.cwd()] });
@@ -42,7 +42,7 @@ function check(label, code, lineOffset) {
 }
 
 let problems = 0;
-for (const file of ["LifeOS.md", ...walk("LifeOS")]) {
+for (const file of ["LifeLoop.md", ...walk("LifeLoop")]) {
   const text = readFileSync(file, "utf8");
   for (const m of text.matchAll(/```space-lua\n([\s\S]*?)```/g)) {
     problems += check(file, m[1], text.slice(0, m.index).split("\n").length);

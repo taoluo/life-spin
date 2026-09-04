@@ -1,4 +1,4 @@
-# LifeOS design contract
+# LifeLoop design contract
 
 What this file is for: the questions that would otherwise get re-argued every time someone
 proposes a feature. Scope moves; this should still be true when it has.
@@ -12,7 +12,7 @@ and what has to be true before anything new enters the core.
   templates already answer most of this. Space Lua *enhances* SilverBullet; it does not take it
   over — no global tag hooks, no key bindings claimed, no configuration changed on load.
 * **Markdown is the canonical state.** Everything else is a view of it.
-* **Context is metadata.** LifeOS must not ask for explicit metadata when the surrounding
+* **Context is metadata.** LifeLoop must not ask for explicit metadata when the surrounding
   structure already gives an unambiguous answer. A task on a project page belongs to that
   project; writing `[[This Project]]` on it again is a tax, not information.
 * **Historical facts are recorded, never reconstructed.** They may come only from an authoritative
@@ -62,14 +62,14 @@ opinion, and writing it down means maintaining it forever.
 ## The operational task universe
 
 SilverBullet does not skip indexing HTML comments — it indexes them and marks them
-`inComment`. A commented-out task is still a task object, so LifeOS has to exclude it
+`inComment`. A commented-out task is still a task object, so LifeLoop has to exclude it
 deliberately. That is source semantics, not a query optimisation, and it happens in exactly one
 place rather than in each view:
 
 ```
 all indexed tasks
-    ↓ not inComment          lifeos.tasks.universe()   -- what LifeOS can see
-    ↓ not done               lifeos.tasks.open()       -- what is outstanding
+    ↓ not inComment          lifeloop.tasks.universe()   -- what LifeLoop can see
+    ↓ not done               lifeloop.tasks.open()       -- what is outstanding
     ↓ not #waiting/#someday  (P2)                      -- what you could act on now
 ```
 
@@ -78,9 +78,9 @@ audit must do the same when they arrive. No view invents its own filter.
 
 ## Mutation contracts
 
-Five things in LifeOS write to your notes. Each has a rule, and each rule has a test asserting
-that the failure case does nothing at all. (A sixth is trivial: `LifeOS: Setup` and
-`LifeOS: Open Inbox` create the Inbox page when it does not exist, and never touch it when it
+Five things in LifeLoop write to your notes. Each has a rule, and each rule has a test asserting
+that the failure case does nothing at all. (A sixth is trivial: `LifeLoop: Setup` and
+`LifeLoop: Open Inbox` create the Inbox page when it does not exist, and never touch it when it
 does.)
 
 **Capturing.** A captured line is inserted above the `## Processed` heading, or appended when
@@ -106,7 +106,7 @@ and that at least one live section exists; render every section found, build the
 write once. Any failure leaves the page untouched rather than half-frozen. It freezes what the
 page has rather than a fixed list — the template's sections grow over time, and requiring today's
 exact set would strand every review written against an older one. The markers are the live
-`${lifeos.review.*()}` expressions themselves — self-erasing, so a second freeze is byte-for-byte
+`${lifeloop.review.*()}` expressions themselves — self-erasing, so a second freeze is byte-for-byte
 identical. (HTML comments would not work as markers: SilverBullet renders them as visible
 content.)
 
@@ -121,8 +121,8 @@ Space Lua sorts same-priority blocks by their `page@offset` **string**, so `@111
 `@2398`. A block that assumes an earlier block on the same page already ran works fine until that
 page grows past ten thousand bytes, and then stops loading with no error anyone will see.
 
-So **every block declares the namespaces it writes to** — `lifeos = lifeos or {}` and
-`lifeos.tasks = lifeos.tasks or {}` at the top, in each block, not once per file. The suite
+So **every block declares the namespaces it writes to** — `lifeloop = lifeloop or {}` and
+`lifeloop.tasks = lifeloop.tasks or {}` at the top, in each block, not once per file. The suite
 asserts the whole public surface exists, because a block that quietly failed to load looks
 exactly like a feature nobody wrote.
 
@@ -156,7 +156,7 @@ These constraints cost nothing today and are expensive to retrofit. They exist s
 below can be answered later without unpicking the core.
 
 **Projection independence.** Physical library pages are the current host for Today and Projects,
-not part of what those views mean. Projection logic lives in `lifeos.views.*`, returns Markdown,
+not part of what those views mean. Projection logic lives in `lifeloop.views.*`, returns Markdown,
 and knows nothing about where it is displayed. The one thing a host must provide is Markdown
 rendering, since that is what keeps a projected checkbox writing back to its source.
 
@@ -165,7 +165,7 @@ one day for work that accumulates durable state — notes, artifacts, dependenci
 execution history, results. Ordinary tasks must pay nothing for that possibility: no ids, no
 parent pointers, no status fields added in advance.
 
-**Execution ownership.** LifeOS owns what an action means and when it matters. It does not
+**Execution ownership.** LifeLoop owns what an action means and when it matters. It does not
 automatically own exact-time alarms, push notifications, recurrence scheduling, calendar blocking
 or location reminders.
 
@@ -187,14 +187,14 @@ completion is best-effort and says so.
 **Recent journal mentions on a project page.** The chronological bridge from the Journal's events
 to a project's current state. Note first that SilverBullet's built-in Linked Mentions view
 already shows every page linking here, with snippets, docked and on by default — the
-LifeOS-specific delta is only filtering to journal pages and ordering by date. Name it for what
+LifeLoop-specific delta is only filtering to journal pages and ordering by date. Name it for what
 the evidence supports: a journal page mentioned this project, not "project activity".
 
-**A virtual-page backend for the projections.** The `lifeos.views.*` split already makes this a
+**A virtual-page backend for the projections.** The `lifeloop.views.*` split already makes this a
 swap rather than a rewrite. Worth doing only if the interaction turns out at least as good as a
 physical page.
 
 **Task-to-entity promotion.** Wait for real cases to say what an entity would need.
 
-**An adapter into whatever owns reminders.** Project LifeOS dates outward rather than growing a
+**An adapter into whatever owns reminders.** Project LifeLoop dates outward rather than growing a
 scheduler here.

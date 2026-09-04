@@ -1,5 +1,5 @@
 ---
-command: "LifeOS: New Person"
+command: "LifeLoop: New Person"
 description: A person
 suggestedName: "People/"
 confirmName: true

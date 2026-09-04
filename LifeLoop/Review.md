@@ -3,7 +3,7 @@ description: Weekly review — ISO weeks, the four live sections, and freezing t
 tags: meta
 ---
 
-`LifeOS: Weekly Review` creates one page per ISO week (`Reviews/2026-W36`) with four sections
+`LifeLoop: Weekly Review` creates one page per ISO week (`Reviews/2026-W36`) with four sections
 queried live and the reflection written by you. Query the facts, write the judgement.
 
 # Live now, snapshot later
@@ -12,7 +12,7 @@ not what you want six months later: "Still Open" would show what is open today, 
 would have quietly dropped everything since archived. Even "Completed" only holds while the
 source tasks survive — `Task: Remove Completed` erases that history.
 
-So when the review is done, run `LifeOS: Freeze Review`. It replaces all four sections with what
+So when the review is done, run `LifeLoop: Freeze Review`. It replaces all four sections with what
 they say at that moment and stamps `frozen:` in the frontmatter.
 
 Frozen sections are rendered as plain text, `- ✓` and `- ○`, never as checkboxes. A snapshot
@@ -35,15 +35,15 @@ frontmatter.
 ## ISO weeks
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.review = lifeos.review or {}
+lifeloop = lifeloop or {}
+lifeloop.review = lifeloop.review or {}
 
 local DAY_SECONDS = 60 * 60 * 24
 
 -- { key = "2026-W36", start = "2026-08-31", finish = "2026-09-06" } for the ISO week
 -- containing the given day (default today). Weeks start on Monday.
-function lifeos.week(dayStr)
-  dayStr = lifeos.date.day(dayStr or lifeos.date.today())
+function lifeloop.week(dayStr)
+  dayStr = lifeloop.date.day(dayStr or lifeloop.date.today())
   if not dayStr then
     return nil
   end
@@ -60,23 +60,23 @@ function lifeos.week(dayStr)
   }
 end
 
-function lifeos.review.pageName(dayStr)
-  return config.get("lifeos.reviewPrefix", "Reviews/") .. lifeos.week(dayStr).key
+function lifeloop.review.pageName(dayStr)
+  return config.get("lifeloop.reviewPrefix", "Reviews/") .. lifeloop.week(dayStr).key
 end
 
 -- The week a section should report on: the current page's frontmatter when it has any,
 -- otherwise this week. Passing explicit dates (as freezing does) short-circuits both.
-function lifeos.review.range(from, to)
+function lifeloop.review.range(from, to)
   if from and to then
     return from, to
   end
   local page = _CTX.currentPage
-  local start = page and lifeos.date.day(page.weekStart)
-  local finish = page and lifeos.date.day(page.weekEnd)
+  local start = page and lifeloop.date.day(page.weekStart)
+  local finish = page and lifeloop.date.day(page.weekEnd)
   if start and finish then
     return start, finish
   end
-  local week = lifeos.week()
+  local week = lifeloop.week()
   return week.start, week.finish
 end
 ```
@@ -84,39 +84,39 @@ end
 ## The four sections
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.review = lifeos.review or {}
+lifeloop = lifeloop or {}
+lifeloop.review = lifeloop.review or {}
 
-function lifeos.review.completed(from, to)
-  from, to = lifeos.review.range(from, to)
-  local tasks = lifeos.tasks.completedBetween(from, to)
-  return lifeos.tasks.render(lifeos.tasks.sort(tasks))
+function lifeloop.review.completed(from, to)
+  from, to = lifeloop.review.range(from, to)
+  local tasks = lifeloop.tasks.completedBetween(from, to)
+  return lifeloop.tasks.render(lifeloop.tasks.sort(tasks))
     or "_No tasks with a recorded completion date in this week._\n"
 end
 
-function lifeos.review.stillOpen(from, to)
-  from, to = lifeos.review.range(from, to)
-  local universe = lifeos.tasks.universe()
+function lifeloop.review.stillOpen(from, to)
+  from, to = lifeloop.review.range(from, to)
+  local universe = lifeloop.tasks.universe()
   local out = {}
-  for _, t in ipairs(lifeos.tasks.open(universe)) do
-    local deadline = lifeos.tasks.deadline(t)
-    local plan = lifeos.tasks.scheduled(t)
+  for _, t in ipairs(lifeloop.tasks.open(universe)) do
+    local deadline = lifeloop.tasks.deadline(t)
+    local plan = lifeloop.tasks.scheduled(t)
     if (deadline and deadline <= to) or (plan and plan <= to) then
       table.insert(out, t)
     end
   end
-  return lifeos.tasks.render(lifeos.tasks.sort(out))
+  return lifeloop.tasks.render(lifeloop.tasks.sort(out))
     or "_Nothing open that was due or planned by " .. to .. "._\n"
 end
 
-function lifeos.review.activeProjects()
-  local projectSet = lifeos.projectSet()
-  local universe = lifeos.tasks.universe()
+function lifeloop.review.activeProjects()
+  local projectSet = lifeloop.projectSet()
+  local universe = lifeloop.tasks.universe()
   local context = { projectSet = projectSet, universe = universe }
   local out = {}
-  for _, p in ipairs(lifeos.projects("active")) do
-    local open = #lifeos.tasks.forProject(p.name, projectSet, universe)
-    local signals = lifeos.signals.render(p, context)
+  for _, p in ipairs(lifeloop.projects("active")) do
+    local open = #lifeloop.tasks.forProject(p.name, projectSet, universe)
+    local signals = lifeloop.signals.render(p, context)
     table.insert(out, "* [[" .. p.name .. "]] — " .. open .. " open"
       .. (signals != "" and (" · " .. signals) or "") .. "\n")
   end
@@ -127,18 +127,18 @@ function lifeos.review.activeProjects()
 end
 
 -- The banner is a section too, so that a frozen review does not keep telling you to freeze it.
-function lifeos.review.status()
+function lifeloop.review.status()
   return "> **note** These four sections read the space as it is *right now*.\n"
-    .. "> When you have finished the review, run `LifeOS: Freeze Review` to snapshot them.\n"
+    .. "> When you have finished the review, run `LifeLoop: Freeze Review` to snapshot them.\n"
 end
 
-function lifeos.review.waiting()
-  local waiting = lifeos.tasks.waiting()
-  return lifeos.tasks.render(waiting) or "_Not waiting on anyone._\n"
+function lifeloop.review.waiting()
+  local waiting = lifeloop.tasks.waiting()
+  return lifeloop.tasks.render(waiting) or "_Not waiting on anyone._\n"
 end
 
-function lifeos.review.inbox()
-  local entries = lifeos.inbox.pending()
+function lifeloop.review.inbox()
+  local entries = lifeloop.inbox.pending()
   if #entries == 0 then
     return "_Inbox is empty._\n"
   end
@@ -157,53 +157,53 @@ end
 ## Freezing
 ```space-lua
 -- priority: 10
-lifeos = lifeos or {}
-lifeos.review = lifeos.review or {}
+lifeloop = lifeloop or {}
+lifeloop.review = lifeloop.review or {}
 
 -- Each section is found by the exact live expression the template wrote into the page.
-lifeos.review.sections = {
+lifeloop.review.sections = {
   {
-    expression = "${lifeos.review.completed()}",
+    expression = "${lifeloop.review.completed()}",
     freeze = function(from, to)
-      local tasks = lifeos.tasks.completedBetween(from, to)
-      return lifeos.tasks.renderStatic(lifeos.tasks.sort(tasks))
+      local tasks = lifeloop.tasks.completedBetween(from, to)
+      return lifeloop.tasks.renderStatic(lifeloop.tasks.sort(tasks))
         or "_No tasks with a recorded completion date in this week._\n"
     end,
   },
   {
-    expression = "${lifeos.review.stillOpen()}",
+    expression = "${lifeloop.review.stillOpen()}",
     freeze = function(from, to)
-      local universe = lifeos.tasks.universe()
+      local universe = lifeloop.tasks.universe()
       local out = {}
-      for _, t in ipairs(lifeos.tasks.open(universe)) do
-        local deadline = lifeos.tasks.deadline(t)
-        local plan = lifeos.tasks.scheduled(t)
+      for _, t in ipairs(lifeloop.tasks.open(universe)) do
+        local deadline = lifeloop.tasks.deadline(t)
+        local plan = lifeloop.tasks.scheduled(t)
         if (deadline and deadline <= to) or (plan and plan <= to) then
           table.insert(out, t)
         end
       end
-      return lifeos.tasks.renderStatic(lifeos.tasks.sort(out))
+      return lifeloop.tasks.renderStatic(lifeloop.tasks.sort(out))
         or "_Nothing open that was due or planned by " .. to .. "._\n"
     end,
   },
   {
-    expression = "${lifeos.review.activeProjects()}",
-    freeze = function() return lifeos.review.activeProjects() end,
+    expression = "${lifeloop.review.activeProjects()}",
+    freeze = function() return lifeloop.review.activeProjects() end,
   },
   {
-    expression = "${lifeos.review.waiting()}",
+    expression = "${lifeloop.review.waiting()}",
     freeze = function()
-      return lifeos.tasks.renderStatic(lifeos.tasks.waiting()) or "_Not waiting on anyone._\n"
+      return lifeloop.tasks.renderStatic(lifeloop.tasks.waiting()) or "_Not waiting on anyone._\n"
     end,
   },
   {
-    expression = "${lifeos.review.inbox()}",
-    freeze = function() return lifeos.review.inbox() end,
+    expression = "${lifeloop.review.inbox()}",
+    freeze = function() return lifeloop.review.inbox() end,
   },
   {
-    expression = "${lifeos.review.status()}",
+    expression = "${lifeloop.review.status()}",
     freeze = function()
-      return "> **note** Snapshot taken on " .. lifeos.date.today() .. ".\n"
+      return "> **note** Snapshot taken on " .. lifeloop.date.today() .. ".\n"
     end,
   },
 }
@@ -220,8 +220,8 @@ end
 -- Replaces every live section with what it says right now, in one write, or changes nothing at
 -- all. Returns ok, message. Takes the page explicitly so that it never depends on what the editor
 -- happens to be showing.
-function lifeos.review.freeze(pageName)
-  local text = lifeos.readPageText(pageName)
+function lifeloop.review.freeze(pageName)
+  local text = lifeloop.readPageText(pageName)
   local frontmatter = index.extractFrontmatter(text).frontmatter or {}
 
   if frontmatter.frozen then
@@ -230,13 +230,13 @@ function lifeos.review.freeze(pageName)
   -- The week frontmatter is what makes this a review page; the set of sections is a template
   -- detail that grows over time, so demanding today's exact list would make every review written
   -- against an older template permanently unfreezable.
-  local from = lifeos.date.day(frontmatter.weekStart)
-  local to = lifeos.date.day(frontmatter.weekEnd)
+  local from = lifeloop.date.day(frontmatter.weekStart)
+  local to = lifeloop.date.day(frontmatter.weekEnd)
   if not from or not to then
     return false, "weekStart/weekEnd are missing or malformed"
   end
   local present = {}
-  for _, section in ipairs(lifeos.review.sections) do
+  for _, section in ipairs(lifeloop.review.sections) do
     if string.find(text, section.expression, 1, true) then
       table.insert(present, section)
     end
@@ -256,17 +256,17 @@ function lifeos.review.freeze(pageName)
     newText = replacePlain(newText, section.expression, rendered[i])
   end
   newText = index.patchFrontmatter(newText, {
-    { op = "set-key", path = "frozen", value = lifeos.date.today() },
+    { op = "set-key", path = "frozen", value = lifeloop.date.today() },
   })
 
-  lifeos.writePageText(pageName, newText)
+  lifeloop.writePageText(pageName, newText)
   return true, "review frozen"
 end
 
 command.define {
-  name = "LifeOS: Freeze Review",
+  name = "LifeLoop: Freeze Review",
   run = function()
-    local ok, message = lifeos.review.freeze(editor.getCurrentPage())
+    local ok, message = lifeloop.review.freeze(editor.getCurrentPage())
     editor.flashNotification(
       ok and "Review frozen" or ("Not freezing: " .. message),
       ok and "info" or "error"

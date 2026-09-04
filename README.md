@@ -1,22 +1,18 @@
-# LifeOS for SilverBullet
+# LifeLoop for SilverBullet
 
-A Markdown-first life OS, built as a [SilverBullet](https://silverbullet.md) library — no plug,
-no database, no format of its own. Your notes stay ordinary Markdown, tasks stay ordinary
-checkboxes, and every view is a query.
+**Capture without stopping what you are doing. Keep every task with the work it belongs to. See
+what actually matters today. Get the whole picture back every week.**
 
-    capture → context → task → today → done → weekly review
+Closing that loop is the whole point:
 
-See [LifeOS.md](LifeOS.md) for what it does and how to use it, [DESIGN.md](DESIGN.md) for the
-contract that outlives any particular scope, and [ROADMAP.md](ROADMAP.md) for what is built and
-what is not.
+    capture → context → act → today → done → review ↺
 
-A Markdown-first life OS, built as a [SilverBullet](https://silverbullet.md) library — no plug,
-no database, no format of its own. Your notes stay ordinary Markdown, tasks stay ordinary
-checkboxes, and every view is a query.
+LifeLoop is a small [SilverBullet](https://silverbullet.md) library that does this with no plug,
+no database and no page format of its own. Your notes stay ordinary Markdown, tasks stay ordinary
+checkboxes, and every view is a query you could have written yourself.
 
-    capture → context → task → today → done → weekly review
-
-See [LifeOS.md](LifeOS.md) for what it does and how to use it.
+See [LifeLoop.md](LifeLoop.md) for how to use it, [DESIGN.md](DESIGN.md) for the contract that
+outlives any particular scope, and [ROADMAP.md](ROADMAP.md) for what is built and what is not.
 
 ## Layout
 
@@ -24,8 +20,8 @@ The repository mirrors the paths the library takes in a space, so the manifest p
 files line up with what `Library: Install` writes:
 
 ```
-LifeOS.md              → Library/LifeOS      (the manifest: name, files, docs)
-LifeOS/                → Library/LifeOS/     (everything the manifest lists)
+LifeLoop.md              → Library/LifeLoop      (the manifest: name, files, docs)
+LifeLoop/                → Library/LifeLoop/     (everything the manifest lists)
 ```
 
 ## Development
@@ -33,8 +29,8 @@ LifeOS/                → Library/LifeOS/     (everything the manifest lists)
 Symlink both into a space instead of copying, so edits are live:
 
 ```bash
-ln -s "$PWD/LifeOS.md"  ~/myspace/Library/LifeOS.md
-ln -s "$PWD/LifeOS"     ~/myspace/Library/LifeOS
+ln -s "$PWD/LifeLoop.md"  ~/myspace/Library/LifeLoop.md
+ln -s "$PWD/LifeLoop"     ~/myspace/Library/LifeLoop
 ```
 
 Space Lua reloads on save; run `System: Reload` if a definition seems stale.
@@ -50,8 +46,8 @@ ships with the desktop app is its front end.
 sb space add "$PWD/tmp/test_space"   # once
 sb open tmp/test_space               # assigns the space a port
 
-ln -s "$PWD/LifeOS.md" tmp/test_space/Library/LifeOS.md
-ln -s "$PWD/LifeOS"    tmp/test_space/Library/LifeOS
+ln -s "$PWD/LifeLoop.md" tmp/test_space/Library/LifeLoop.md
+ln -s "$PWD/LifeLoop"    tmp/test_space/Library/LifeLoop
 
 bash test/verify.sh                  # 57 assertions, about 20 seconds
 node test/luacheck.mjs               # parse every Lua block without a client
@@ -68,7 +64,7 @@ to re-run. Do not edit it while it is running — bash reads scripts lazily by b
 The suite spends as much effort on what must *not* happen as on what must:
 
 * a stale inbox item is left completely alone
-* a task completed before LifeOS existed is never stamped with today's date
+* a task completed before LifeLoop existed is never stamped with today's date
 * a tick from a query view records nothing, because that event cannot say which task it was
 * freezing a review twice is byte-for-byte identical, and a missing section aborts the whole thing
 * a nested inbox item moves as an entire subtree or not at all
@@ -78,7 +74,7 @@ Without the desktop app, the same API is available from the Docker image, which 
 ```bash
 docker run --rm -p 3000:3000 -v "$PWD/tmp/test_space:/space" \
   ghcr.io/silverbulletmd/silverbullet:2.10.0-runtime-api
-curl -s -d 'return lifeos.week("2026-09-03")' localhost:3000/.runtime/lua_script
+curl -s -d 'return lifeloop.week("2026-09-03")' localhost:3000/.runtime/lua_script
 ```
 
 Before a release, install the library for real — a fresh space, `Library: Install` pointed at the

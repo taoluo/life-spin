@@ -3,7 +3,7 @@ description: What is actually on your plate today.
 tags: meta
 ---
 
-${lifeos.views.today()}
+${lifeloop.views.today()}
 
 # About this page
 Today is a projection. Nothing lives here: every line above is a task on its own page, rendered
@@ -14,6 +14,6 @@ The three sections are disjoint — a task appears at most once, in the most urg
 applies. Overdue and due-today come from `deadline`; the last section is what you planned to look
 at today with `scheduled`.
 
-The page is a shell around `lifeos.views.today()`, which returns Markdown and knows nothing about
+The page is a shell around `lifeloop.views.today()`, which returns Markdown and knows nothing about
 where it is displayed. Copy this page and call the same function if you want a different framing,
 or call it from somewhere that is not a page at all.
