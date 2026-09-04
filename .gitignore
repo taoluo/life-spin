@@ -1,0 +1,9 @@
+node_modules/
+*.map
+
+# Local reference checkouts, not part of the library
+silverbullet/
+tmp/
+
+# Editor-local
+.groupedtimelineinclude

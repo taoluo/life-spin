@@ -1,0 +1,4 @@
+---
+tags: person
+company: Apple
+---
