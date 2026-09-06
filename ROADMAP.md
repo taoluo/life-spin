@@ -24,8 +24,8 @@ matters — daily use. Until that produces counterexamples, nothing here should 
 * **Weekly Review** — live sections for what you completed, what is still open, active projects,
   what you are waiting on and the inbox, plus the reflection you write; `LifeLoop: Freeze Review`
   turns a finished review into a snapshot that stays true.
-* **Completion dates** — recorded when you tick a task in the page. Best-effort by design; see
-  `DESIGN.md`.
+* **Completion dates** — recorded when you tick a task, wherever you tick it. See `DESIGN.md` for
+  what the ref-based route can and cannot verify.
 
 ## Phase 2 — progressive actions ✅ implemented
 
@@ -147,7 +147,92 @@ and malformed `deadline` / `scheduled` / `completed` / `priority`. Deliberately 
 
 Validation lives in `lifeloop.*.issues()` (already implemented); the page only renders it.
 
-## Phase 4 — AI assistance
+## Phase 4 — execution surfaces
+
+Answers to friction at the edges of the loop, where LifeLoop hands work to something else and gets
+nothing back. Each carries a graduation and an abandonment criterion written before its code.
+
+* **Action buttons** ✅ Capture and Today in the action bar, appended rather than substituted, one
+  key to switch off. On a phone a keyboard shortcut is no help and a menu costs more than the
+  thought was worth.
+* **Source-aware completion** ✅ in the page, ⏳ *integration verification pending* for the ref
+  route. Ticking in Today now stamps the source. The gap turned out to be
+  in the host rather than here: an ordinary checkbox in a query result calls `index.updateTaskState`
+  directly, and that function dispatched no event at all, so there was nothing for Space Lua to
+  hear. Fixed upstream by having it announce `{ ref, oldState, newState }`; LifeLoop's existing
+  listener grew a branch and no rendering changed, which is what the abandonment criterion —
+  *abandon if it reads or behaves worse than `templates.taskItem`* — was there to protect.
+  Driving the real path also turned up that the in-page route had never worked: the event describes
+  the task as it read *before* the edit, so an equality check against the buffer never matched and
+  the feature silently did nothing. Fixed, and covered now by a test that invokes SilverBullet's
+  own command instead of fabricating the event.
+
+  **The ref route was finally driven for real on 2026-09-06, and it does not work.** The host change
+  had shipped long ago — `plugs/index/task.ts` emits `task:stateChange` on both paths and both
+  commits are ancestors of 2.10.0 — so what this entry was waiting for had already arrived; nobody
+  had come back to run it. Running it says:
+
+  * Ticking through the real path leaves the task `[x]` but **unstamped**: the write lands, the
+    stamp does not.
+  * That path is not a simulation. `client/codemirror/widget_util.ts` handles a click on a task in a
+    query result by calling `system.invokeFunction("index.cycleTaskStateByRef", ref, oldState)`,
+    which is exactly what the check invokes.
+  * LifeLoop is not the broken half. `lifeloop.completion.stampByRef` called directly stamps the
+    source page correctly, and `lifeloop.tasks.locate` resolves the ref.
+  * The event arrives, but **stripped**. The host dispatches `{ ref, oldState, newState }`; a
+    listener in Space Lua receives a table whose only surviving field is `newState`. With no ref
+    there is nothing to stamp, so the ref branch is never entered and the tick falls through.
+
+  The gap is in the host again, one layer below last time: not a missing event, but an event that
+  loses its payload crossing from a plug into Space Lua. Nothing here can work around a ref it is
+  never told. **Still ⏳ — now for a reason that is written down and reproducible** rather than for
+  an unrun check. Note that the suite's ref tests, which fabricate the event, stay green throughout:
+  exactly the failure mode this entry existed to catch.
+* **External execution** ✅ `LifeLoop: Add Reminder`, `LifeLoop: Add to Calendar`, and
+  `LifeLoop: Add Reminder and Calendar` (`/project`), split by what you mean rather than by vendor:
+  reminding, repeating and location belong to Apple Reminders, an actual interval belongs to a
+  calendar, and the commitment stays here. The bridge is `osascript` with values passed as arguments
+  rather than interpolated into the script.
+  **Recurrence left the roadmap entirely** rather than being deferred: it has an owner now, and
+  `DESIGN.md` records what that costs — occurrences completed over there are not in the Weekly
+  Review. Still unanswered, and needing a phone rather than an argument: whether a `shortcuts://`
+  URL can carry the same payload from iOS, which is what would extend this past the desktop.
+
+  **This entry used to argue "it writes nothing, so there is no reconciliation to get wrong."** That
+  argument is gone, deliberately. Projecting the same task twice produced two reminders often enough
+  to meet the bar `DESIGN.md` set for spending an identifier, so a projection now leaves
+  `[reminder: …]` / `[event: …]` on the task line — rendered as 🔔 / 📅 — and there *is* a
+  reconciliation. It is kept narrow rather than pretended away:
+
+  * A mark is never trusted on sight. Every run asks the other application whether that id still
+    exists, and a reminder deleted over there has its mark erased instead of resurrected.
+  * Direction is decided by comparing timestamps, so **an edit made in Reminders is never
+    overwritten** — the note has to be the newer side for anything to be pushed.
+  * Calendar exposes no modification date, so that test is impossible there and the weaker rule
+    applies. Stated in `DESIGN.md` rather than smoothed over.
+  * `LifeLoop: Sync Projected` does this on demand; `lifeloop.autoSync` does it on a timer, pushing
+    only title, note and flags — **never the schedule**, which came from an answer you gave once and
+    which nothing in the note records.
+
+* **Structure that Reminders cannot represent** ✅ Its scripting interface has no subtask and no tag
+  — checked against the dictionary, not assumed. So a project or area names the **list** (created
+  the first time it is actually needed, never speculatively), tags map onto `flagged` and `priority`
+  which are the fields Reminders can really sort by, and subtasks go into the note as a checklist.
+  A snapshot, not a live mirror: re-run the command to bring it back in step.
+* **Journal mentions** ✅ Journal entries that mentioned a project, on the project page, newest
+  first. A projection over the native link index, shown as a bottom widget so it never becomes
+  structure in anyone's Markdown. Ordered by the entry's own date rather than the file's
+  `lastModified`, which is a fact about the file. The row claims a mention and nothing more.
+* **Task promotion** 🧪 *experiment, awaiting a verdict* — `LifeLoop: Promote Task` gives one task a
+  page. The task stays an ordinary checkbox and gains a link; ordinary tasks pay nothing.
+
+  **What to look at:** whether the pages it creates grow content, or stay one near-empty file per
+  ordinary task. That is the question, and it is answered by looking at your own space — not by a
+  date and not by this file. The 🧪 stays until someone says which it was; it is a flag asking for a
+  decision, not a countdown to removal. Nothing deletes a command you are using because an
+  experiment went unjudged.
+
+## Phase 5 — AI assistance
 
 Not scheduled, and deliberately last. The order matters more than the content:
 
@@ -183,21 +268,12 @@ tasks, possibly stale projects, inbox items that look like they belong to an exi
 unclear classifications. Its output must stay sorted into three piles that are never mixed — safe
 deterministic fixes, AI suggestions, and human decisions.
 
-## Phase 5 — optional power features
+## Phase 6 — optional power features
 
-None of these is core, and "phase 5" is not a queue we work through. Each one has to pass the
+None of these is core, and "phase 6" is not a queue we work through. Each one has to pass the
 admission rules in `DESIGN.md` on its own, and the escalation order applies first: a native
 SilverBullet primitive, then a small Space Lua extension, then projecting into a system that
 already owns the execution, and only then something custom here.
-
-**Recurrence.** `[repeat: monthly]` alongside a deadline. Doable — the community has several
-Space Lua implementations — but correctness gets hard fast (an event fast path plus idempotent
-reconciliation, hidden below the surface), and recurrence must never become a cost every ordinary
-task pays. Compare an external executor before building it.
-
-**Calendar.** Projecting scheduled tasks outward. The point is not to replace Google Calendar;
-plenty of long-term users deliberately keep strict scheduling in a dedicated tool and their notes
-as the context layer.
 
 **Dependencies.** "A blocks B". Only once a real project needs it — and specifically *not* by
 pre-emptively adding `[id]`, `[depends-on]`, `[parent]`, `[children]` to the task model.

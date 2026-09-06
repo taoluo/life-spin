@@ -10,7 +10,8 @@ and what has to be true before anything new enters the core.
 
 * **Compose a native primitive before writing one.** SilverBullet's index, links, tags and
   templates already answer most of this. Space Lua *enhances* SilverBullet; it does not take it
-  over — no global tag hooks, no key bindings claimed, no configuration changed on load.
+  over — no global tag hooks, no key bindings claimed, nothing of yours overwritten. What it does
+  add on load, the two action buttons, appends rather than replaces and switches off with one key.
 * **Markdown is the canonical state.** Everything else is a view of it.
 * **Context is metadata.** LifeLoop must not ask for explicit metadata when the surrounding
   structure already gives an unambiguous answer. A task on a project page belongs to that
@@ -31,7 +32,9 @@ One fact, one owner. When a fact could plausibly live in three places, this tabl
 | **Inbox** | pending captured input, and nothing else |
 | **Projection** | nothing. Today, Projects, Upcoming and signals derive; they never store |
 | **Review** | human judgement, plus — once frozen — a historical snapshot |
-| **External systems** | execution: alarms, notifications, recurrence scheduling, calendar events |
+| **Apple Reminders** | action execution: reminding, repeating, location, the notification itself |
+| **Calendar** | time execution: an actual interval, its length, who is in it |
+| **External systems** | execution generally: alarms, notifications, recurrence scheduling, calendar events |
 | **AI** | no canonical fact. It interprets and suggests; anything it writes goes through a constrained, named mutation |
 
 So "the recovery matrix assumption turned out to be wrong" is a journal entry; the project page's
@@ -40,6 +43,19 @@ is not copied into all three.
 
 Note that a task owns its own completion date. "What happened" belonging to the Journal does not
 make the Journal the place to record that a checkbox was ticked.
+
+Two lines in that table are easy to blur, and blurring them is how a notes app grows a scheduler.
+**A deadline is not a time allocation.** `[deadline: "2026-09-10"]` says when something matters; it
+says nothing about which hours are spent on it. LifeLoop owns the first and never infers the second,
+which is why projecting a task outward always asks for the time rather than assuming one.
+
+**And a LifeLoop task is a one-shot commitment.** A recurring commitment — pay the rent, file the
+return — is durable context belonging to a project or area page, and its occurrences belong to
+whatever is actually reminding you. One checkbox cannot be both: tick it and it claims a recurring
+obligation is finished, leave it open and every view carries a permanently inaccurate outstanding
+task. So there is no `[repeat:]`, nothing here generates a next occurrence, and the corollary is
+stated rather than left to be discovered — **occurrences completed in an external executor are not
+part of LifeLoop's completion history.** Completed means what LifeLoop recorded.
 
 Ownership is not the same as physical location. A processed item stays on the Inbox page under
 `## Processed`, but the Inbox no longer owns it — what is kept there is capture history, and the
@@ -54,6 +70,7 @@ still pending.
 | `deadline`, `scheduled` — stated intent | overdue, due-today, staleness |
 | `completed: 2026-09-03` — a historical event, and a frozen review's snapshot | project task counts |
 | `frozen: 2026-09-06` — a historical event | project health signals (P3) |
+| `reminder:`, `event:` — the identity of something projected outward | whether that thing still exists |
 | the text you wrote | every dashboard on every page |
 
 `stale: true`, `today: true` and `health: warning` are all category errors: each is a view's
@@ -76,9 +93,16 @@ all indexed tasks
 Today, project counts and the Weekly Review derive from these today; Upcoming, signals and the
 audit must do the same when they arrive. No view invents its own filter.
 
+**Links need the same exclusion, and cannot get it the same way.** A commented-out link is not a
+mention — parking a thought in `<!-- -->` has to mean the project stops hearing about it, or the
+comment is not a park. But an indexed *link* carries no `inComment` flag the way a task does, so
+`lifeloop.journal.mentions` finds the comment spans in the page text and tests each link's position
+against them. Same semantics, second implementation, because the index offers no first one. If a
+future SilverBullet marks links the way it marks tasks, that code collapses into a `where` clause.
+
 ## Mutation contracts
 
-Five things in LifeLoop write to your notes. Each has a rule, and each rule has a test asserting
+Six things in LifeLoop write to your notes. Each has a rule, and each rule has a test asserting
 that the failure case does nothing at all. (A sixth is trivial: `LifeLoop: Setup` and
 `LifeLoop: Open Inbox` create the Inbox page when it does not exist, and never touch it when it
 does.)
@@ -89,9 +113,17 @@ between pending and processed is a position in the file, so writing to the wrong
 silently mark something done.
 
 **Ticking a task.** `task.ref` is an identity, not a location — a page with an anchor replaces
-`page@pos` with the anchor name, so it must never be parsed as a position. Resolve to a live
-`page` + range, verify the state text is still what was expected, then write. A stale source
-fails and refreshes; it never fuzzy-matches its way to a guess.
+`page@pos` with the anchor name, so it must never be assumed to be a position. Tell the two forms
+apart, resolve to a live page and offset, verify the marker there holds the state the event
+announced, then write. A source that cannot be confirmed is left alone; it never fuzzy-matches its
+way to a guess.
+
+That verification has a stated ceiling. The event names a ref and two states and does not carry
+the task's text, so nothing can distinguish the task that was ticked from a different task now
+sitting at the same ref in the same state. The guarantee is exactly as strong as the write being
+reacted to — which the host made after checking the old state at that same position — and no
+stronger. Matching on text the index may already have replaced would only look like more
+certainty.
 
 **Processing an inbox item.** The unit is the whole top-level list item, nested children
 included. It moves entirely or not at all, and an item that no longer matches what was listed is
@@ -100,6 +132,14 @@ left alone.
 **Promoting a quick note.** The destination is the user's, never inferred from a folder
 convention. Cancel or collide and nothing is written — a failed processing step is a no-op, never
 a half-processed state.
+
+**Promoting a task.** The destination is the user's, never inferred from a folder. Every
+precondition — a task, a name, a name not taken, a source line that still matches — is checked
+before anything is written. Past that the destination is created first, since a failure then leaves
+a page to delete rather than a task to lose; and the compensating delete fires **only** if that page
+is still byte-identical to what was just written. A page something else has touched is left alone
+and named. The task itself stays an ordinary checkbox and gains a link — promotion adds a page, it
+does not convert a task into another kind of thing.
 
 **Freezing a review.** Validate that nothing is frozen yet, that the week frontmatter is intact,
 and that at least one live section exists; render every section found, build the whole new page,
@@ -171,30 +211,66 @@ or location reminders.
 
 ## Backlog — recorded, not scheduled
 
-None of these is being built. They are written down so the constraints above have something
-concrete to protect, and so that picking one up later starts from a hypothesis rather than an
-argument. Each needs a success criterion and an abandonment criterion before any code, and
-graduating means demonstrating clear user value at no more complexity than what it replaces. An
-experiment that neither graduates nor is abandoned gets deleted — a permanently half-supported
-feature is worse than the gap it was meant to close.
+These are written down so the constraints above have something concrete to protect, and so that
+picking one up later starts from a hypothesis rather than an argument. One has since graduated and
+says so in place, including which of its own constraints was overruled and why — an entry that
+quietly changed its mind would be worth less than no entry. Each needs a success criterion and an
+abandonment criterion before any code, and graduating means demonstrating clear user value at no
+more complexity than what it replaces.
 
-**Source-aware completion from Today.** Today is the primary execution surface, and ticking a
-task there records no date, which weakens the link to the review's Completed section. The idea:
-render the projection ourselves and, on click, resolve the source, verify, and write state and
-timestamp together. Abandon if it reads or behaves worse than `templates.taskItem`. Until then
-completion is best-effort and says so.
-
-**Recent journal mentions on a project page.** The chronological bridge from the Journal's events
-to a project's current state. Note first that SilverBullet's built-in Linked Mentions view
-already shows every page linking here, with snippets, docked and on by default — the
-LifeLoop-specific delta is only filtering to journal pages and ordering by date. Name it for what
-the evidence supports: a journal page mentioned this project, not "project activity".
+An experiment that has neither graduated nor been abandoned is **flagged, not deleted**. The
+standing state of every experiment is visible — in `ROADMAP.md` as 🧪, and where an experiment adds
+a command, in the command itself — and an aging one is raised for a decision rather than removed by
+one. A permanently half-supported feature is still worse than the gap it was meant to close, and
+that is exactly why the judgement belongs to a person: the criterion says what to look at, not what
+to do about it. Nothing here removes a feature you are using because a rule said its time was up.
 
 **A virtual-page backend for the projections.** The `lifeloop.views.*` split already makes this a
 swap rather than a rewrite. Worth doing only if the interaction turns out at least as good as a
 physical page.
 
-**Task-to-entity promotion.** Wait for real cases to say what an entity would need.
+**A stored reference to a projected reminder or event. — GRADUATED 2026-09-06, and it did land on
+the task line.** The trigger this entry asked for arrived as stated: real use produced "I projected
+this twice, now there are two of them." So `Add Reminder` and `Add to Calendar` now write
+`[reminder: "<id>"]` / `[event: "<uid>"]`, and the id comes out of what `make new …` already
+returned rather than from a second read, so the create is still the last fallible thing that
+happens.
 
-**An adapter into whatever owns reminders.** Project LifeLoop dates outward rather than growing a
-scheduler here.
+The constraint this entry set — *it must not land on the task line* — was **overruled, not
+forgotten**, and the reasoning is recorded here because the alternative was worse:
+
+* The objection it protects against is noise on the line you read every day. That is answered at the
+  rendering layer instead: a `space-style` block collapses the attribute to 🔔 / 📅, and the
+  decoration is skipped while the cursor is inside it, so the id is one keystroke from visible.
+  Quiet by default, never hidden — a mark you cannot inspect would be worse than no mark.
+* The only place it could otherwise live is a side table keyed by task, which is the database this
+  whole design exists to avoid: it would have to be kept in step with every rename, move and delete
+  of a task that Markdown gives us for free.
+* The shape was already precedented. `[completed:]` puts a fact about a task on the task's line, and
+  removes it when it stops being true. This is the same move.
+
+**What the mark costs, stated rather than discovered.** `[completed:]` can be kept true by
+construction, because the fact it records lives in the note. A reminder does not: the other
+application can delete it without telling anyone, so a stored id is a claim that can go stale. The
+answer is never to trust it on sight — every run asks the owner first, and a reminder that has been
+deleted over there has its mark erased rather than resurrected.
+
+Calendar exposes no modification date on an event at all, so that comparison is impossible there and
+the weaker rule applies: an event is pushed when the page is newer than this client's last
+successful push. An edit made in Calendar can be overwritten by a later edit here. That asymmetry is
+the price of an application that will not say when it was last touched.
+
+**Reading a completed reminder back into LifeLoop.** The one reverse direction worth having, since
+people tick things on a watch. Still not built — but two of its three prerequisites arrived with the
+entry above. The stored identity exists now, and so does a polling path: `lifeloop.external.syncAll`
+already runs on a timer and already reads the other side's state (a reminder's `modification date`)
+to decide direction. What is missing is only the third: a named mutation that verifies the LifeLoop
+source before writing, never a bulk reconcile.
+
+Note what that makes this: the cheapest remaining item here, not the largest. The reason it is still
+unbuilt is that nothing has yet produced the "I ticked it on my watch and LifeLoop never knew" that
+would justify it — the same standard the entry above had to meet.
+
+**Calendar state flowing back into task state is rejected, not deferred.** An elapsed event is not a
+completed task: a 9–11 block for "Deep Work: Paper" ending at 11 says nothing about the paper.
+Reminder completion is an action-lifecycle event; a calendar block elapsing is not.

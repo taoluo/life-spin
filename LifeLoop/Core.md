@@ -58,32 +58,96 @@ config.define("lifeloop", {
       type = "string",
       default = "Inbox",
       description = "Page captured items are appended to.",
-      ui = { category = "LifeLoop", label = "Inbox page", priority = 5 },
+      ui = { category = "LifeLoop", label = "Inbox page", priority = 10 },
     },
     captureMode = {
       type = "string",
       default = "inbox-page",
       enum = { "inbox-page", "quick-note" },
       description = "Where 'LifeLoop: Capture' puts things: a bullet on the Inbox page, or a native Quick Note under Inbox/.",
-      ui = { category = "LifeLoop", label = "Capture mode", priority = 4 },
+      ui = { category = "LifeLoop", label = "Capture mode", priority = 9 },
     },
     reviewPrefix = {
       type = "string",
       default = "Reviews/",
       description = "Page-name prefix for weekly review pages (e.g. 'Reviews/2026-W36').",
-      ui = { category = "LifeLoop", label = "Weekly review prefix", priority = 3 },
+      ui = { category = "LifeLoop", label = "Weekly review prefix", priority = 8 },
     },
     upcomingDays = {
       type = "number",
       default = 14,
       description = "How many days ahead the Upcoming page looks.",
-      ui = { category = "LifeLoop", label = "Upcoming horizon (days)", priority = 2 },
+      ui = { category = "LifeLoop", label = "Upcoming horizon (days)", priority = 7 },
     },
     stampCompletion = {
       type = "boolean",
       default = true,
       description = "Record a [completed: date] attribute when a task is ticked in the editor.",
-      ui = { category = "LifeLoop", label = "Record completion dates", priority = 2 },
+      ui = { category = "LifeLoop", label = "Record completion dates", priority = 6 },
+    },
+    remindersList = {
+      type = "string",
+      default = "Reminders",
+      description = "Apple Reminders list that 'LifeLoop: Add Reminder' adds to.",
+      ui = { category = "LifeLoop", label = "Reminders list", priority = 3 },
+    },
+    projectLists = {
+      type = "boolean",
+      default = true,
+      description = "Send a reminder to a list named after the task's project or area, creating that list the first time it is needed. Off sends everything to the configured Reminders list.",
+      ui = { category = "LifeLoop", label = "One Reminders list per project", priority = 2.9 },
+    },
+    flagTags = {
+      type = "array",
+      items = { type = "string" },
+      -- No `default = {}`: an empty Lua table serialises as a JSON object, which fails an "array"
+      -- schema and takes the whole config.define -- and everything defined after it in this block,
+      -- lifeloop.contract included -- down with it.
+      description = "Tags that mark a projected reminder as flagged. Reminders has no tags of its own; this is the nearest thing it can sort by.",
+      ui = { category = "LifeLoop", label = "Tags that flag a reminder", priority = 2.8 },
+    },
+    autoSync = {
+      type = "boolean",
+      default = false,
+      description = "Periodically push edits to already-projected tasks. Only pushes when the note is newer than the reminder; a calendar event is pushed only while Calendar is already running.",
+      ui = { category = "LifeLoop", label = "Sync projected tasks in the background", priority = 2.6 },
+    },
+    syncMinutes = {
+      type = "number",
+      default = 5,
+      minimum = 1,
+      description = "Minutes between background sync passes. Only runs while a SilverBullet client is open.",
+      ui = { category = "LifeLoop", label = "Sync interval (minutes)", priority = 2.5 },
+    },
+    priorityTags = {
+      type = "object",
+      default = {},
+      description = "Tag to Reminders priority (1-4 high, 5 medium, 6-9 low). The first tag on the task that appears here wins.",
+      ui = { category = "LifeLoop", label = "Tag priorities", priority = 2.7 },
+    },
+    calendarName = {
+      type = "string",
+      default = "Calendar",
+      description = "Calendar that 'LifeLoop: Add to Calendar' adds to. Point it at a Google calendar you have added to Apple Calendar and events land in Google.",
+      ui = { category = "LifeLoop", label = "Calendar", priority = 2 },
+    },
+    eventMinutes = {
+      type = "number",
+      default = 60,
+      description = "Default length of a timed event, in minutes. All-day events have no duration and never use this.",
+      ui = { category = "LifeLoop", label = "Default event length (minutes)", priority = 1 },
+    },
+    journalMentions = {
+      type = "number",
+      default = 5,
+      description = "How many journal entries mentioning a project to show on its page. 0 hides the section.",
+      ui = { category = "LifeLoop", label = "Journal mentions shown", priority = 4 },
+    },
+    actionButtons = {
+      type = "boolean",
+      default = true,
+      description = "Add Capture and Today buttons to the action bar. Turn off to leave the bar exactly as SilverBullet left it.",
+      ui = { category = "LifeLoop", label = "Show action buttons", priority = 5 },
     },
   },
   additionalProperties = false,
@@ -161,6 +225,19 @@ function lifeloop.linkTarget(value)
   return string.trim(string.split(inner, "|")[1])
 end
 
+-- Whether a page is really there.
+--
+-- `space.pageExists` consults a page listing that lags a just-written page: asked immediately
+-- after writing thirty pages it answered "no" for eleven of them. Every guard in LifeLoop that
+-- decides whether to create, overwrite or refuse rests on this question, and a wrong "no" means
+-- appending to a page by replacing it, or promoting onto one that already has content.
+--
+-- Reading is authoritative -- the store either returns the page or throws -- so that is what the
+-- guards ask. It costs a read of a page we were about to touch anyway.
+function lifeloop.pageExists(pageName)
+  return (pcall(function() return space.readPage(pageName) end))
+end
+
 -- Reads and writes go through the editor when the page in question is the one on screen:
 -- writing behind an open buffer loses whatever the buffer holds. This is the same split
 -- SilverBullet's own task and share code makes.
@@ -182,7 +259,7 @@ end
 -- Appends a line to a page, creating it when missing. Used by capture and inbox processing.
 function lifeloop.appendToPage(pageName, line)
   local text = ""
-  if space.pageExists(pageName) then
+  if lifeloop.pageExists(pageName) then
     text = lifeloop.readPageText(pageName)
   end
   if text != "" and not text:endsWith("\n") then
@@ -337,7 +414,7 @@ command.define {
   run = function()
     local changes = {}
     local inboxPage = config.get("lifeloop.inboxPage", "Inbox")
-    if not space.pageExists(inboxPage) then
+    if not lifeloop.pageExists(inboxPage) then
       space.writePage(
         inboxPage,
         "Captured items land here. Work through them with the `LifeLoop: Process Inbox` command.\n\n"
@@ -351,4 +428,36 @@ command.define {
     end
   end
 }
+```
+
+## Action buttons
+On a phone a keyboard shortcut is not an option, and hunting for a command through a menu costs more
+than the capture was worth. Two buttons fix that, so LifeLoop adds them on load.
+
+`actionButton.define` *appends* to your action bar rather than replacing it, so nothing you have
+configured yourself moves or disappears — Capture and Today arrive after whatever is already there.
+That is what makes adding them on load acceptable: it costs you two slots, never a button you
+placed yourself, and `lifeloop.actionButtons = false` takes both back.
+
+`dropdown = false` on Capture keeps it out of the mobile overflow menu. That is the whole point —
+`open → capture → leave` cannot afford the extra tap, while Today is a place you are going anyway
+and can live in the menu.
+```space-lua
+-- priority: 10
+lifeloop = lifeloop or {}
+
+if config.get("lifeloop.actionButtons", true) then
+  actionButton.define {
+    icon = "inbox",
+    command = "LifeLoop: Capture",
+    description = "Capture",
+    dropdown = false,
+  }
+
+  actionButton.define {
+    icon = "calendar",
+    command = "LifeLoop: Today",
+    description = "Today",
+  }
+end
 ```

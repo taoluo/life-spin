@@ -108,7 +108,7 @@ function lifeloop.inbox.moveToProject(entry, projectName)
   if not projectName then
     return false, "no project chosen"
   end
-  if not space.pageExists(projectName) then
+  if not lifeloop.pageExists(projectName) then
     return false, "no such page: " .. projectName
   end
   local content = lifeloop.readPageText(entry.page)
@@ -139,7 +139,7 @@ function lifeloop.inbox.createEntity(entry, tag, pageName)
   if pageName == "" then
     return false, "no name given"
   end
-  if space.pageExists(pageName) then
+  if lifeloop.pageExists(pageName) then
     return false, "a page called '" .. pageName .. "' already exists"
   end
   local frontmatter = "---\ntags: " .. tag .. "\n"
@@ -165,7 +165,7 @@ function lifeloop.inbox.linkAndPromote(entry, projectName, newName)
   if not projectName or not newName or string.trim(newName) == "" then
     return false, "cancelled"
   end
-  if space.pageExists(newName) then
+  if lifeloop.pageExists(newName) then
     return false, "a page called '" .. newName .. "' already exists"
   end
   -- Promote first: a rename that fails must leave the note exactly as it was, and adding the
@@ -188,7 +188,7 @@ function lifeloop.inbox.promoteToEntity(entry, tag, newName)
   if newName == "" then
     return false, "no name given"
   end
-  if space.pageExists(newName) then
+  if lifeloop.pageExists(newName) then
     return false, "a page called '" .. newName .. "' already exists"
   end
   -- Same ordering as above: rename first, tag the page afterwards.

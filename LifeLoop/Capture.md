@@ -63,7 +63,7 @@ function lifeloop.inbox.pending()
   local pageName = lifeloop.inbox.page()
   local entries = {}
 
-  if space.pageExists(pageName) then
+  if lifeloop.pageExists(pageName) then
     local content = lifeloop.readPageText(pageName)
     local cut = lifeloop.inbox.processedOffset(content)
     -- Tasks come through the operational universe so the "not inComment" rule lives in one
@@ -118,7 +118,7 @@ lifeloop.inbox = lifeloop.inbox or {}
 function lifeloop.inbox.add(text)
   local pageName = lifeloop.inbox.page()
   local content = ""
-  if space.pageExists(pageName) then
+  if lifeloop.pageExists(pageName) then
     content = lifeloop.readPageText(pageName)
   end
   local line = "* " .. string.trim(text)
@@ -199,12 +199,14 @@ function lifeloop.inbox.promotePage(entry, newName)
   if newName:startsWith(lifeloop.inbox.page() .. "/") then
     return false, "that name is still inside the inbox"
   end
-  if space.pageExists(newName) then
+  if lifeloop.pageExists(newName) then
     return false, "a page called '" .. newName .. "' already exists"
   end
-  -- The page list behind `pageExists` can lag a just-written page, so the native rename is the
-  -- real guard -- it checks a live listing and throws. Turn that into a clean refusal rather
-  -- than an exception, so a collision is a no-op either way.
+  -- The guard above is the real one, now that it asks the store rather than a listing that lags.
+  -- The native rename was relied on for that once, on the reasoning that it would throw on a
+  -- collision -- but it can also decline to move anything and return quietly, which promotion
+  -- then reported as success. Its exception is still turned into a clean refusal here; it is no
+  -- longer what stands between you and an occupied page.
   local ok, err = pcall(function()
     system.invokeFunction("index.renamePageCommand", { oldPage = entry.page, page = newName })
   end)
@@ -239,7 +241,7 @@ command.define {
   name = "LifeLoop: Open Inbox",
   run = function()
     local pageName = lifeloop.inbox.page()
-    if not space.pageExists(pageName) then
+    if not lifeloop.pageExists(pageName) then
       space.writePage(pageName, "Captured items land here.\n\n")
     end
     editor.navigate(pageName)

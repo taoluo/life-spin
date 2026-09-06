@@ -49,7 +49,7 @@ sb open tmp/test_space               # assigns the space a port
 ln -s "$PWD/LifeLoop.md" tmp/test_space/Library/LifeLoop.md
 ln -s "$PWD/LifeLoop"    tmp/test_space/Library/LifeLoop
 
-bash test/verify.sh                  # 57 assertions, about 20 seconds
+bash test/verify.sh                  # 91 assertions, about 40 seconds
 node test/luacheck.mjs               # parse every Lua block without a client
 ```
 
@@ -91,6 +91,20 @@ service.define {
   run = function(data) return net.proxyFetch(data.uri).body end
 }
 ```
+
+The whole thing without touching the UI, which is what makes it worth doing every time:
+
+```bash
+python3 -m http.server 8899 --directory "$PWD" &
+sb space add "$PWD/tmp/fresh_space" && sb open tmp/fresh_space
+sb script -s fresh_space --json '
+  return system.invokeFunction("configuration-manager.librariesAction", "install",
+    { uri = "http://localhost:8899/LifeLoop.md" })'
+```
+
+Then reload and check that every file in `files:` arrived, that the public surface and every
+command are there, and that the projections render against a space with nothing in it — an empty
+Today and a Projects table with no rows are states the fixture space never reaches.
 
 ## Licence
 

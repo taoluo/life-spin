@@ -100,6 +100,45 @@ function lifeloop.tasks.universe(pageName)
   return query[[from t = index.tasks() where not t.inComment]]
 end
 
+-- Splits a task's first line at its checkbox. Returns the state character and the position of the
+-- closing bracket, or nil when the line is not a task at all.
+--
+-- The list marker is not reliably two characters -- "* ", "- " and "1. " all occur -- so anything
+-- that reads or writes around the checkbox has to find it rather than count to it.
+function lifeloop.tasks.marker(line)
+  local _, stop, state = string.find(line, "^%s*[-*+]%s+%[(.)%]")
+  if not state then
+    _, stop, state = string.find(line, "^%s*%d+[%.%)]%s+%[(.)%]")
+  end
+  if not state then
+    return nil
+  end
+  return state, stop
+end
+
+-- Resolves a task ref to a live page and offset. A ref is an identity, not a location: most are
+-- "Page@offset", but a task carrying an anchor is indexed under the bare anchor name instead, so
+-- the two forms are told apart rather than one assumed. This is the same resolution SilverBullet
+-- performs before it writes a task marker.
+--
+-- Deliberately index-free for the common form. Writing a page drops its objects and re-adds them
+-- a moment later, and a caller reacting to that very write would land in the gap and conclude the
+-- task no longer exists. Arithmetic on the ref cannot go stale that way.
+function lifeloop.tasks.locate(ref)
+  if type(ref) != "string" or ref == "" then
+    return nil
+  end
+  local page, pos = string.match(ref, "^(.*)@(%d+)$")
+  if page and page != "" then
+    return { page = page, pos = tonumber(pos) }
+  end
+  local resolved = index.resolveAnchor(ref)
+  if not resolved or not resolved.ok or not resolved.range then
+    return nil
+  end
+  return { page = resolved.page, pos = resolved.range[1] }
+end
+
 function lifeloop.tasks.open(tasks)
   local out = {}
   for _, t in ipairs(tasks or lifeloop.tasks.universe()) do
@@ -396,15 +435,21 @@ lifeloop = lifeloop or {}
 lifeloop.tasks = lifeloop.tasks or {}
 
 -- The indexed task whose source range contains the cursor, or nil
-local function taskAtCursor()
+-- The task the cursor is inside, or nil. A parent task's range covers its children, so several
+-- can match at once and the innermost is the one meant: with the cursor on a subtask, that
+-- subtask is what you are pointing at.
+function lifeloop.tasks.atCursor()
   local page = editor.getCurrentPage()
   local pos = editor.getCursor()
+  local best
   for _, t in ipairs(lifeloop.tasks.universe(page)) do
     if t.range and t.range[1] <= pos and pos <= t.range[2] then
-      return t
+      if not best or (t.range[2] - t.range[1]) < (best.range[2] - best.range[1]) then
+        best = t
+      end
     end
   end
-  return nil
+  return best
 end
 
 function lifeloop.tasks.toggleTag(tag)
@@ -424,7 +469,7 @@ function lifeloop.tasks.toggleTag(tag)
     return
   end
 
-  local task = taskAtCursor()
+  local task = lifeloop.tasks.atCursor()
   if task and table.includes(task.itags or {}, tag) then
     editor.flashNotification(
       "This task is #" .. tag .. " through a parent item — change it there",
