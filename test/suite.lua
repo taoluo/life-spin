@@ -164,7 +164,7 @@ test("every module loaded", function()
     ["lifeloop.external.eligible"] = lifeloop.external and lifeloop.external.eligible,
     ["lifeloop.journal.mentions"] = lifeloop.journal and lifeloop.journal.mentions,
     ["lifeloop.views.journalMentions"] = lifeloop.views and lifeloop.views.journalMentions,
-    ["lifeloop.promote.task"] = lifeloop.promote and lifeloop.promote.task,
+    ["lifeloop.attach.task"] = lifeloop.attach and lifeloop.attach.task,
     ["lifeloop.tasks.marker"] = lifeloop.tasks and lifeloop.tasks.marker,
     ["lifeloop.pageExists"] = lifeloop.pageExists,
     ["lifeloop.completion.stampByRef"] = lifeloop.completion and lifeloop.completion.stampByRef,
@@ -200,7 +200,7 @@ test("every LifeLoop command is registered", function()
     "LifeLoop: Toggle Waiting", "LifeLoop: Toggle Someday",
     "LifeLoop: Pause Project", "LifeLoop: Complete Project",
     "LifeLoop: Archive Project", "LifeLoop: Reactivate Project",
-    "LifeLoop: Add Reminder", "LifeLoop: Add to Calendar", "LifeLoop: Promote Task",
+    "LifeLoop: Add Reminder", "LifeLoop: Add to Calendar", "LifeLoop: Attach Page to Task",
   }
   local missing = {}
   for _, name in ipairs(expected) do
@@ -886,9 +886,9 @@ return {
 end)
 
 
-group("task promotion")
+group("attaching a page to a task")
 
-local function promotable(page, body)
+local function attachable(page, body)
   space.writePage(page, body)
   waitFor(function() return #lifeloop.tasks.universe(page) > 0 end)
   goTo(page)
@@ -897,14 +897,14 @@ local function promotable(page, body)
   return lifeloop.tasks.atCursor()
 end
 
-test("a promoted task stays an ordinary checkbox and gains a link", function()
-local task = promotable("Scratch/Promoting Ok",
+test("a task with an attached page stays an ordinary checkbox and gains a link", function()
+local task = attachable("Scratch/Promoting Ok",
   '* [ ] benchmark recovery [deadline: "2026-09-08"]\n')
 if not task then return { ok = false, detail = "no task at cursor" } end
-local ok, message = lifeloop.promote.task(task, "Scratch/Promoted Note")
+local ok, message = lifeloop.attach.task(task, "Scratch/Promoted Note")
 editor.save()
 mq.awaitEmptyQueue("indexQueue")
--- Read the buffer, which is what promotion actually wrote to: reading the file races the save.
+-- Read the buffer, which is what attaching actually wrote to: reading the file races the save.
 local source = editor.getText()
 local stillATask = false
 for _, t in ipairs(lifeloop.tasks.universe("Scratch/Promoting Ok")) do
@@ -913,7 +913,7 @@ end
 return {
   ok = ok == true
        and source == '* [ ] [[Scratch/Promoted Note]] benchmark recovery [deadline: "2026-09-08"]\n'
-       and space.readPage("Scratch/Promoted Note") == lifeloop.promote.body
+       and space.readPage("Scratch/Promoted Note") == lifeloop.attach.body
        and stillATask,
   detail = { message = message, source = source, stillATask = stillATask } }
 end)
@@ -926,9 +926,9 @@ return { ok = string.find(body, "Scratch/Promoting Ok", 1, true) == nil
 end)
 
 test("a blank destination writes nothing", function()
-local task = promotable("Scratch/Promoting Blank", "* [ ] leave me alone\n")
+local task = attachable("Scratch/Promoting Blank", "* [ ] leave me alone\n")
 local before = space.readPage("Scratch/Promoting Blank")
-local ok, message = lifeloop.promote.task(task, "   ")
+local ok, message = lifeloop.attach.task(task, "   ")
 return { ok = ok == false and space.readPage("Scratch/Promoting Blank") == before,
          detail = { message = message, after = space.readPage("Scratch/Promoting Blank") } }
 end)
@@ -937,9 +937,9 @@ end)
 -- mode worth guarding is overwriting a page that already had something in it.
 test("a colliding destination writes nothing and does not touch the occupant", function()
 space.writePage("Scratch/Occupied", "someone else's page\n")
-local task = promotable("Scratch/Promoting Collide", "* [ ] find a home\n")
+local task = attachable("Scratch/Promoting Collide", "* [ ] find a home\n")
 local before = space.readPage("Scratch/Promoting Collide")
-local ok, message = lifeloop.promote.task(task, "Scratch/Occupied")
+local ok, message = lifeloop.attach.task(task, "Scratch/Occupied")
 return { ok = ok == false
              and space.readPage("Scratch/Promoting Collide") == before
              and space.readPage("Scratch/Occupied") == "someone else's page\n",
@@ -949,18 +949,18 @@ end)
 -- Navigating away first is the point, not incidental: readPageText prefers the open buffer, so a
 -- write behind it would leave the stale text on screen and the check would pass against it.
 test("a source that changed since it was read writes nothing", function()
-local task = promotable("Scratch/Promoting Stale", "* [ ] the original wording\n")
+local task = attachable("Scratch/Promoting Stale", "* [ ] the original wording\n")
 -- Edit through the buffer, the way a person would. Writing the file behind the open page instead
 -- would race the flush that navigating away triggers, and lose whichever landed first.
 editor.setText("* [ ] something else entirely\n")
 goTo("Scratch/Neutral")
--- Navigating away flushes the buffer, but not before the next statement runs. Promotion reads the
+-- Navigating away flushes the buffer, but not before the next statement runs. Attaching reads the
 -- file, so the edit has to have reached it or the stale text is what gets checked.
 waitFor(function()
   return space.readPage("Scratch/Promoting Stale") == "* [ ] something else entirely\n"
 end)
 local before = space.readPage("Scratch/Promoting Stale")
-local ok, message = lifeloop.promote.task(task, "Scratch/Never Created")
+local ok, message = lifeloop.attach.task(task, "Scratch/Never Created")
 return { ok = ok == false
              and space.readPage("Scratch/Promoting Stale") == before
              and not lifeloop.pageExists("Scratch/Never Created"),
@@ -968,26 +968,26 @@ return { ok = ok == false
 end)
 
 test("a line that stopped being a task writes nothing", function()
-local task = promotable("Scratch/Promoting NotATask", "* [ ] was a task\n")
+local task = attachable("Scratch/Promoting NotATask", "* [ ] was a task\n")
 editor.setText("just a paragraph now\n")
 goTo("Scratch/Neutral")
 waitFor(function() return space.readPage("Scratch/Promoting NotATask") == "just a paragraph now\n" end)
 local before = space.readPage("Scratch/Promoting NotATask")
-local ok, message = lifeloop.promote.task(task, "Scratch/Also Never Created")
+local ok, message = lifeloop.attach.task(task, "Scratch/Also Never Created")
 return { ok = ok == false
              and space.readPage("Scratch/Promoting NotATask") == before
              and not lifeloop.pageExists("Scratch/Also Never Created"),
          detail = { message = message, created = lifeloop.pageExists("Scratch/Also Never Created") } }
 end)
 
-test("promoting a subtask links the subtask, not its parent", function()
+test("attaching to a subtask links the subtask, not its parent", function()
 space.writePage("Scratch/Promoting Sub", "* [ ] parent work\n  * [ ] the actual subtask\n")
 waitFor(function() return #lifeloop.tasks.universe("Scratch/Promoting Sub") == 2 end)
 goTo("Scratch/Promoting Sub")
 local text = editor.getText()
 editor.moveCursor(string.find(text, "actual subtask", 1, true))
 local task = lifeloop.tasks.atCursor()
-local ok = lifeloop.promote.task(task, "Scratch/Promoted Sub")
+local ok = lifeloop.attach.task(task, "Scratch/Promoted Sub")
 editor.save()
 local source = editor.getText()
 return {

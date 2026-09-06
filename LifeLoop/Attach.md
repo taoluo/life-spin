@@ -7,7 +7,7 @@ Almost every task is one line and should stay one line. A few are not: the ones 
 notes, links to artifacts, who else is involved, what was tried, what came back. Those need
 somewhere to put it.
 
-`LifeLoop: Promote Task` gives the task under the cursor a page, and **the task stays an ordinary
+`LifeLoop: Attach Page to Task` gives the task under the cursor a page, and **the task stays an ordinary
 checkbox**:
 
 ```markdown
@@ -19,8 +19,8 @@ ticks and stamps like any other. It has simply gained a link. Nothing was migrat
 kind of task now exists to keep working.
 
 # What ordinary tasks pay
-Nothing. No id, no parent pointer, no status field, no frontmatter — not on the promoted task and
-not on the thousands that will never be promoted. That is the whole point of doing it this way, and
+Nothing. No id, no parent pointer, no status field, no frontmatter — not on the task that gets one and
+not on the thousands that never will. That is the whole point of doing it this way, and
 it is why there is no schema here to describe: the destination page is a page. Put on it whatever
 the work turns out to need.
 
@@ -50,21 +50,21 @@ prevent.
 # Is this worth keeping?
 An experiment, with the condition for deleting it written down first: **if the main thing it
 produces is one nearly-empty Markdown file per ordinary task, it goes.** The evidence that it earns
-its place is promoted pages that accumulate content which genuinely would not have fitted on a
+its place is attached pages that accumulate content which genuinely would not have fitted on a
 line. Check at the next review, and be willing to lose it.
 
 # Implementation
 ```space-lua
 -- priority: 10
 lifeloop = lifeloop or {}
-lifeloop.promote = lifeloop.promote or {}
+lifeloop.attach = lifeloop.attach or {}
 
-lifeloop.promote.body = "## Context\n\n"
+lifeloop.attach.body = "## Context\n\n"
 
 -- Returns ok, message. Every early return is a state in which nothing has been written anywhere.
-function lifeloop.promote.task(task, destination)
+function lifeloop.attach.task(task, destination)
   if not task or not task.range then
-    return false, "no task to promote"
+    return false, "no task to attach a page to"
   end
   destination = string.trim(destination or "")
   if destination == "" then
@@ -89,7 +89,7 @@ function lifeloop.promote.task(task, destination)
   end
 
   -- Destination first: a failure after this leaves a page to delete rather than a task to lose.
-  space.writePage(destination, lifeloop.promote.body)
+  space.writePage(destination, lifeloop.attach.body)
 
   local link = " [[" .. destination .. "]]"
   local ok = pcall(function()
@@ -100,7 +100,7 @@ function lifeloop.promote.task(task, destination)
     -- Only reclaim what is provably still ours. Something else may have written to that name in
     -- between, and deleting someone's content to tidy up after ourselves would be far worse than
     -- leaving a stray page behind.
-    if space.readPage(destination) == lifeloop.promote.body then
+    if space.readPage(destination) == lifeloop.attach.body then
       space.deletePage(destination)
       return false, "could not update the task; nothing was kept"
     end
@@ -112,7 +112,7 @@ function lifeloop.promote.task(task, destination)
 end
 
 command.define {
-  name = "LifeLoop: Promote Task",
+  name = "LifeLoop: Attach Page to Task",
   run = function()
     local task = lifeloop.tasks.atCursor()
     if not task then
@@ -125,12 +125,12 @@ command.define {
     if destination == nil then
       return
     end
-    local ok, message = lifeloop.promote.task(task, destination)
+    local ok, message = lifeloop.attach.task(task, destination)
     if ok then
-      editor.flashNotification("Promoted to " .. message)
+      editor.flashNotification("Attached " .. message)
       editor.navigate(message)
     else
-      editor.flashNotification("Not promoted: " .. message, "error")
+      editor.flashNotification("Not attached: " .. message, "error")
     end
   end
 }

@@ -223,14 +223,18 @@ nothing back. Each carries a graduation and an abandonment criterion written bef
   first. A projection over the native link index, shown as a bottom widget so it never becomes
   structure in anyone's Markdown. Ordered by the entry's own date rather than the file's
   `lastModified`, which is a fact about the file. The row claims a mention and nothing more.
-* **Task promotion** 🧪 *experiment, awaiting a verdict* — `LifeLoop: Promote Task` gives one task a
-  page. The task stays an ordinary checkbox and gains a link; ordinary tasks pay nothing.
+* **Attaching a page to a task** 🧪 *experiment, in trial use since 2026-09-06* — `LifeLoop: Attach Page to Task` gives
+  one task a page. The task stays an ordinary checkbox and gains a link; ordinary tasks pay nothing.
 
-  **What to look at:** whether the pages it creates grow content, or stay one near-empty file per
-  ordinary task. That is the question, and it is answered by looking at your own space — not by a
+  **Kept deliberately, and the reason is worth recording**: when the verdict came due there was no
+  evidence either way — the command had never been run in the real space, so there was nothing to
+  judge. Deleting an unused experiment and keeping an unused one are equally uninformed. It is being
+  used instead, which is the only thing that produces an answer.
+
+  **What to look at, once there is something to look at:** whether the pages it creates grow
+  content, or stay one near-empty file per ordinary task. Answered by looking at the space, not by a
   date and not by this file. The 🧪 stays until someone says which it was; it is a flag asking for a
-  decision, not a countdown to removal. Nothing deletes a command you are using because an
-  experiment went unjudged.
+  decision, not a countdown to removal.
 
 ## Phase 5 — AI assistance
 

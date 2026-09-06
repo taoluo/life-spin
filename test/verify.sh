@@ -26,7 +26,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
         and type(lifeloop.completion.stampByRef) == "function"
         and type(lifeloop.external.run) == "function"
         and type(lifeloop.journal.mentions) == "function"
-        and type(lifeloop.promote.task) == "function" }' 2>/dev/null)
+        and type(lifeloop.attach.task) == "function" }' 2>/dev/null)
   case "$ready" in *'"ready":true'*) settled=$((settled + 1)) ;; *) settled=0 ;; esac
   # Two consecutive good answers, not one. The probe can only ask whether a name exists, which is
   # true of the previous version of the code as well -- so a single success has caught a

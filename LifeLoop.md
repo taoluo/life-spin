@@ -15,7 +15,7 @@ files:
 - LifeLoop/Views.md
 - LifeLoop/External.md
 - LifeLoop/Journal.md
-- LifeLoop/Promote.md
+- LifeLoop/Attach.md
 - LifeLoop/Pages/Today.md
 - LifeLoop/Pages/Upcoming.md
 - LifeLoop/Pages/Projects.md
@@ -67,7 +67,7 @@ That is the whole data model on screen. Everything below is the loop around it.
 | `LifeLoop: Add Reminder` · `LifeLoop: Add to Calendar` | Project the selected tasks into Apple Reminders or your calendar |
 | `LifeLoop: Add Reminder and Calendar` (`/project`) | Both at once, asking the date and time once |
 | `LifeLoop: Sync Projected` | Push later edits to what you already projected |
-| `LifeLoop: Promote Task` | Give one task a page of its own; it stays an ordinary checkbox |
+| `LifeLoop: Attach Page to Task` | Give one task a page of its own; it stays an ordinary checkbox |
 | `LifeLoop: Audit` | Everything violating the LifeLoop contract, reported never fixed |
 | `LifeLoop: Open Inbox` · `LifeLoop: Setup` | |
 
@@ -248,5 +248,5 @@ the project's `DESIGN.md`.
 * [[Library/LifeLoop/Views]] — the projections behind Today and Projects
 * [[Library/LifeLoop/External]] — projecting tasks into Reminders or a calendar, and keeping them in step
 * [[Library/LifeLoop/Journal]] — journal entries that mentioned a project
-* [[Library/LifeLoop/Promote]] — giving one task a page of its own
+* [[Library/LifeLoop/Attach]] — attaching a page to a task that outgrew one line
 * [[Library/LifeLoop/Pages/Today]] · [[Library/LifeLoop/Pages/Upcoming]] · [[Library/LifeLoop/Pages/Projects]] · [[Library/LifeLoop/Pages/Audit]]

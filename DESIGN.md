@@ -133,12 +133,12 @@ left alone.
 convention. Cancel or collide and nothing is written — a failed processing step is a no-op, never
 a half-processed state.
 
-**Promoting a task.** The destination is the user's, never inferred from a folder. Every
+**Attaching a page to a task.** The destination is the user's, never inferred from a folder. Every
 precondition — a task, a name, a name not taken, a source line that still matches — is checked
 before anything is written. Past that the destination is created first, since a failure then leaves
 a page to delete rather than a task to lose; and the compensating delete fires **only** if that page
 is still byte-identical to what was just written. A page something else has touched is left alone
-and named. The task itself stays an ordinary checkbox and gains a link — promotion adds a page, it
+and named. The task itself stays an ordinary checkbox and gains a link — attaching adds a page, it
 does not convert a task into another kind of thing.
 
 **Freezing a review.** Validate that nothing is frozen yet, that the week frontmatter is intact,
