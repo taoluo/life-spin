@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import {
   today, upcoming, projectSignals, day, tasks, backlinks,
-  pending, type LifeloopObject, type SourceHandle,
+  pending, openMentions, mentions, byPage,
+  type LifeloopObject, type SourceHandle,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 
@@ -237,5 +238,67 @@ export class BacklinksView extends BaseProvider {
         };
         return node;
       });
+  }
+}
+
+/**
+ * The Mention Inbox — what has been addressed to you.
+ *
+ * Grouped by page, as upstream groups it, because a mention's context is the page
+ * it was written on and answering three of them at once means opening one file.
+ *
+ * Whose inbox this is comes from `lifeloop.identity`. Unset, the view says so
+ * rather than guessing from a git config or an email address: showing someone
+ * else's mentions as yours is worse than showing none.
+ */
+export class MentionsView extends BaseProvider {
+  protected roots(): Node[] {
+    const me = vscode.workspace.getConfiguration("lifeloop").get<string>("identity", "").trim();
+    if (!me) {
+      const node = new Node("Set lifeloop.identity to see your mentions", vscode.TreeItemCollapsibleState.None);
+      node.command = {
+        command: "workbench.action.openSettings",
+        title: "Open settings",
+        arguments: ["lifeloop.identity"],
+      };
+      return [node];
+    }
+
+    const open = openMentions(this.lifeloop.store, me);
+    if (open.length === 0) {
+      const all = mentions(this.lifeloop.store, me).length;
+      return [new Node(
+        all ? `Nothing open for @${me.replace(/^@/, "")}` : `No one has mentioned @${me.replace(/^@/, "")}`,
+        vscode.TreeItemCollapsibleState.None,
+      )];
+    }
+
+    return byPage(open).map((group) => {
+      const children = group.mentions.map((mention) => {
+        const node = new Node(
+          mention.snippet.slice(0, 100) || "(empty)",
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          undefined,
+          mention.page,
+          mention.pos ?? 0,
+        );
+        node.iconPath = new vscode.ThemeIcon(mention.fromTag === "task" ? "circle-large-outline" : "mention");
+        node.contextValue = "lifeloopMention";
+        node.command = { command: "lifeloop.revealTask", title: "Open", arguments: [node] };
+        return node;
+      });
+      const parent = new Node(
+        group.page,
+        vscode.TreeItemCollapsibleState.Expanded,
+        children,
+        undefined,
+        group.page,
+        children[0]?.offset,
+      );
+      parent.description = `${children.length}`;
+      parent.iconPath = new vscode.ThemeIcon("file");
+      return parent;
+    });
   }
 }

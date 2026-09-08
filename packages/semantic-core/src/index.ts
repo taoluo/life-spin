@@ -11,3 +11,4 @@ export * from "./lua/events.ts";
 export * from "./vault.ts";
 export * from "./mutation.ts";
 export * from "./mutations/index.ts";
+export * from "./mentions.ts";

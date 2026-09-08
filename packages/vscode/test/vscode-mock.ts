@@ -6,7 +6,7 @@
  * the editor — is not faked here, because a fake that deep tests the fake.
  */
 export enum TreeItemCollapsibleState { None = 0, Collapsed = 1, Expanded = 2 }
-export enum CompletionItemKind { File = 16, Keyword = 13, Snippet = 14 }
+export enum CompletionItemKind { File = 16, Keyword = 13, Snippet = 14, User = 25 }
 export enum DiagnosticSeverity { Error = 0, Warning = 1, Information = 2, Hint = 3 }
 
 export class ThemeIcon { constructor(public id: string) {} }
@@ -61,10 +61,19 @@ export class EventEmitter<T> {
 }
 export const Uri = {
   file: (fsPath: string) => ({ fsPath, toString: () => `file://${fsPath}` }),
+  parse: (value: string) => ({ scheme: value.split(":")[0], toString: () => value }),
 };
 export const workspace = {
   textDocuments: [] as any[],
-  getConfiguration: () => ({ get: (_k: string, fallback: any) => fallback }),
+  /** Settings a test wants to pretend the user set: `workspace.settings["lifeloop.identity"]`. */
+  settings: {} as Record<string, any>,
+  getConfiguration: (section?: string) => ({
+    get: (key: string, fallback: any) => {
+      const settings = (workspace as any).settings ?? {};
+      const full = section ? `${section}.${key}` : key;
+      return full in settings ? settings[full] : fallback;
+    },
+  }),
   asRelativePath: (uri: any, _includeFolder?: boolean) => {
     const root = (workspace as any).root ?? "";
     return String(uri.fsPath ?? uri).replace(`${root}/`, "");

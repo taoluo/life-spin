@@ -171,6 +171,14 @@
       {
         "command": "lifeloop.reprefixLine",
         "title": "LifeLoop: Reshape Current Line"
+      },
+      {
+        "command": "lifeloop.showMentions",
+        "title": "LifeLoop: Show Mentions"
+      },
+      {
+        "command": "lifeloop.sign",
+        "title": "LifeLoop: Sign This Block"
       }
     ],
     "views": {
@@ -190,6 +198,10 @@
         {
           "id": "lifeloop.backlinks",
           "name": "Backlinks"
+        },
+        {
+          "id": "lifeloop.mentions",
+          "name": "Mentions"
         }
       ]
     },
@@ -323,6 +335,11 @@
               }
             }
           }
+        },
+        "lifeloop.identity": {
+          "type": "string",
+          "default": "",
+          "description": "Your @name. Used for the Mention Inbox and for signing a block. Left empty, LifeLoop shows no mentions rather than guessing whose they are."
         }
       }
     },

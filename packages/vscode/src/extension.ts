@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { assertRuntime } from "@lifeloop/semantic-core";
 import { LifeLoop } from "./workspace.ts";
-import { TodayView, ProjectsView, InboxView, BacklinksView } from "./views.ts";
+import { TodayView, ProjectsView, InboxView, BacklinksView, MentionsView } from "./views.ts";
 import {
   documentLinks, completion, references, publishDiagnostics, documentSymbols,
 } from "./retrieval.ts";
@@ -11,6 +11,7 @@ import { extendMarkdownIt } from "./preview.ts";
 import { codeLenses, hovers, registerQueryCommands } from "./query-lens.ts";
 import { registerLua, renderSpaceLua, renderExpression, renderSpaceStyle } from "./lua.ts";
 import { register as registerSlash } from "./slash.ts";
+import { register as registerMentions } from "./mentions.ts";
 
 let lifeloop: LifeLoop | undefined;
 
@@ -68,6 +69,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   registerQueryCommands(() => lifeloop, context);
   registerLua(() => lifeloop, context);
   registerSlash(() => lifeloop, context);
+  registerMentions(() => lifeloop, context);
 
   const diagnostics = vscode.languages.createDiagnosticCollection("lifeloop");
   context.subscriptions.push(diagnostics);
@@ -78,6 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
     "lifeloop.projects": new ProjectsView(lifeloop),
     "lifeloop.inbox": new InboxView(lifeloop),
     "lifeloop.backlinks": new BacklinksView(lifeloop),
+    "lifeloop.mentions": new MentionsView(lifeloop),
   };
   for (const [id, provider] of Object.entries(views)) {
     context.subscriptions.push(vscode.window.registerTreeDataProvider(id, provider));

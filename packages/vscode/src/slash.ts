@@ -115,6 +115,16 @@ export function completion(lifeloop: () => LifeLoop | undefined): vscode.Complet
         items.push(item);
       }
 
+      // `/sign` is neither an insertion nor a reshaping — it appends to the *end*
+      // of the block, which only the signing mutation knows how to find.
+      const sign = new vscode.CompletionItem("/sign", vscode.CompletionItemKind.Keyword);
+      sign.detail = "Credit this block to you";
+      sign.range = replacing;
+      sign.insertText = "";
+      sign.command = { command: "lifeloop.sign", title: "Sign this block" };
+      sign.sortText = "2sign";
+      items.push(sign);
+
       for (const command of LINE_COMMANDS) {
         const item = new vscode.CompletionItem(
           `/${command.name}`,
