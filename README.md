@@ -1,4 +1,4 @@
-# LifeLoop for SilverBullet
+# LifeLoop
 
 **Capture without stopping what you are doing. Keep every task with the work it belongs to. See
 what actually matters today. Get the whole picture back every week.**
@@ -7,105 +7,122 @@ Closing that loop is the whole point:
 
     capture → context → act → today → done → review ↺
 
-LifeLoop is a small [SilverBullet](https://silverbullet.md) library that does this with no plug,
-no database and no page format of its own. Your notes stay ordinary Markdown, tasks stay ordinary
-checkboxes, and every view is a query you could have written yourself.
+Your notes stay ordinary Markdown, tasks stay ordinary checkboxes, and every view is derived —
+delete the index and rebuild it, and you have lost nothing.
 
-See [LifeLoop.md](LifeLoop.md) for how to use it, [DESIGN.md](DESIGN.md) for the contract that
-outlives any particular scope, and [ROADMAP.md](ROADMAP.md) for what is built and what is not.
+There are two implementations of the same idea. Both read the same vault.
 
-## Layout
+| | |
+|---|---|
+| [`LifeLoop/`](LifeLoop) | the original [SilverBullet](https://silverbullet.md) library — no plug, no database, no page format of its own |
+| [`packages/`](packages) | the VS Code implementation, on a standalone semantic core |
 
-The repository mirrors the paths the library takes in a space, so the manifest page and its
-files line up with what `Library: Install` writes:
+The vault *is* the migration between them. Same frontmatter, same `[deadline:]`, same
+`## Processed`, same `#waiting`. That was not luck — it is what "Markdown owns durable knowledge"
+was for, and it is the first real test of it.
+
+With one honest exception: **`space-lua` and `space-style` blocks are indexed and never executed.**
+A vault from SilverBullet keeps its notes and loses its scripts. Each block says so as a diagnostic,
+and `LifeLoop: Report Unsupported Blocks` counts them — see [`COMPATIBILITY.md`](COMPATIBILITY.md).
+
+## The documents, and which answers what
+
+| | |
+|---|---|
+| [`LifeOS for VS Code.md`](LifeOS%20for%20VS%20Code.md) | what the system is, and what it refuses to become |
+| [`LifeOS Execution Plan.md`](LifeOS%20Execution%20Plan.md) | phases, decisions, gates, and what building it changed |
+| [`DESIGN.md`](DESIGN.md) | who owns which fact, and what the code may do to your Markdown |
+| [`WHY.md`](WHY.md) | why leave SilverBullet at all — including the case for not bothering |
+| [`COMPATIBILITY.md`](COMPATIBILITY.md) | which semantics are promised identical, and how that is proved |
+| [`ROADMAP.md`](ROADMAP.md) | the SilverBullet library's own scope |
+
+Phases 0 to 3 are implemented. Phase 4 (rich views) and Phase 5 (AI) are **future roadmap, not
+scheduled** — the expected outcome is that most of them never ship, and that is a success.
+
+## The VS Code implementation
 
 ```
-LifeLoop.md              → Library/LifeLoop      (the manifest: name, files, docs)
-LifeLoop/                → Library/LifeLoop/     (everything the manifest lists)
+packages/semantic-core   parse · index · query · mutate — no UI, no editor
+packages/vscode          the extension
+packages/cli             lifeloop index | query | dump | search
+packages/apple-bridge    Reminders, Calendar, Notes — imports nothing from vscode
+vendor/silverbullet      SilverBullet's parser and indexers, pinned and unmodified
 ```
 
-## Development
+### Why the parser is vendored rather than rewritten
 
-Symlink both into a space instead of copying, so edits are live:
+SilverBullet's semantics *are* its implementation — `inComment`, inherited `itags`,
+`links`/`ilinks`, the two ref forms, what counts as an item. A clean-room rewrite keeps the shape
+and loses the corners, silently. So the parser and extraction functions are **copied at a pinned
+commit and called**, not reproduced, and `npm run vendor:check` fails the build on any local edit.
+
+That makes conformance a proof rather than a sample: it is the same code, and **285 of upstream's
+own assertions run against our copy** on every `npm test`.
+
+### Getting started
 
 ```bash
-ln -s "$PWD/LifeLoop.md"  ~/myspace/Library/LifeLoop.md
-ln -s "$PWD/LifeLoop"     ~/myspace/Library/LifeLoop
+npm install
+npm run verify                      # typecheck, vendor integrity, schema pin, 486 tests
+npx tsx packages/cli/src/main.ts index  ~/vault
+npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
 
-Space Lua reloads on save; run `System: Reload` if a definition seems stale.
-
-## Testing
-
-There is no build step. Verification runs against a real SilverBullet client: the object index,
-Space Lua and queries all live in the client, so exercising this code means driving one. The
-[Runtime API](https://silverbullet.md/Features/Runtime%20API) does that, and the `sb` CLI that
-ships with the desktop app is its front end.
+To install the extension into your own VS Code:
 
 ```bash
-sb space add "$PWD/tmp/test_space"   # once
-sb open tmp/test_space               # assigns the space a port
-
-ln -s "$PWD/LifeLoop.md" tmp/test_space/Library/LifeLoop.md
-ln -s "$PWD/LifeLoop"    tmp/test_space/Library/LifeLoop
-
-bash test/verify.sh                  # 91 assertions, about 40 seconds
-node test/luacheck.mjs               # parse every Lua block without a client
+npm run install-extension     # build → package → install
 ```
 
-The whole suite is a single round trip: `test/suite.lua` runs every assertion inside the client
-and returns the results. One CLI call per test cost about thirty seconds each, which made the
-suite unusable at fifty of them.
+See [`RELEASING.md`](RELEASING.md) for handing the `.vsix` to someone else, or publishing. For
+development, open `packages/vscode` in VS Code and press F5.
 
-Symlink rather than copy: a stale copy silently tests code you are no longer writing.
-`test/verify.sh` reloads the client, waits for it to come back, resets its fixtures, and is safe
-to re-run. Do not edit it while it is running — bash reads scripts lazily by byte offset.
-
-The suite spends as much effort on what must *not* happen as on what must:
-
-* a stale inbox item is left completely alone
-* a task completed before LifeLoop existed is never stamped with today's date
-* a tick from a query view records nothing, because that event cannot say which task it was
-* freezing a review twice is byte-for-byte identical, and a missing section aborts the whole thing
-* a nested inbox item moves as an entire subtree or not at all
-
-Without the desktop app, the same API is available from the Docker image, which bundles Chromium:
+### Testing
 
 ```bash
-docker run --rm -p 3000:3000 -v "$PWD/tmp/test_space:/space" \
-  ghcr.io/silverbulletmd/silverbullet:2.10.0-runtime-api
-curl -s -d 'return lifeloop.week("2026-09-03")' localhost:3000/.runtime/lua_script
+npm test                  # 486 headless tests, ~15s
+npm run test:integration  # 9 tests inside a real VS Code (downloads it once)
+npm run verify            # everything above, plus typecheck and the two guards
 ```
 
-Before a release, install the library for real — a fresh space, `Library: Install` pointed at the
-manifest URL, reload, then walk the loop. Symlinked development never exercises the manifest, the
-`files:` list, or their relative paths.
+Four tiers, cheapest first: unit tests on pure functions; upstream's own tests against the vendored
+copy; contract tests where **every refusal asserts the vault is byte-identical afterwards**; and
+end-to-end runs of the whole loop on a real filesystem.
 
-Installing from a *local* server needs one piece of scaffolding: Std registers a `net.readURI`
-service for `https:` only, so add the `http:` equivalent to the throwaway space's `CONFIG`:
+The suite spends as much effort on what must *not* happen as on what must — a stale inbox item is
+left completely alone, a task already done is never re-stamped with today's date, a collision
+leaves the source exactly as pending as it was, and a projection acting on a row that no longer
+describes its source refuses rather than guessing.
 
-```lua
-service.define {
-  selector = "net.readURI:http:*",
-  match = {},
-  run = function(data) return net.proxyFetch(data.uri).body end
-}
-```
+Two guards are structural rather than aspirational:
 
-The whole thing without touching the UI, which is what makes it worth doing every time:
+* **`npm run vendor:check`** — hashes all 125 vendored files against the pinned commit, and fails
+  if any imports from `packages/`.
+* **`npm run schema:check`** — records every frontmatter key and task attribute the system reads,
+  and fails when the set grows. If a feature added a field to everyone's Markdown, that is a design
+  conversation, not a merge. [`schema.json`](schema.json) records why each one was admitted.
 
-```bash
-python3 -m http.server 8899 --directory "$PWD" &
-sb space add "$PWD/tmp/fresh_space" && sb open tmp/fresh_space
-sb script -s fresh_space --json '
-  return system.invokeFunction("configuration-manager.librariesAction", "install",
-    { uri = "http://localhost:8899/LifeLoop.md" })'
-```
+### Apple integration
 
-Then reload and check that every file in `files:` arrived, that the public surface and every
-command are there, and that the projections render against a space with nothing in it — an empty
-Today and a Projects table with no rows are states the fixture space never reaches.
+Reminders, Calendar and Notes, split by what you mean rather than by vendor: reminding and
+repeating belong to Reminders, an actual interval belongs to Calendar, capture on a phone belongs
+to Notes, and the commitment stays here. Write capability is not ownership — you can edit in any of
+them; each fact still has exactly one owner.
+
+Driven against the real applications, which found four things no fake could:
+
+* `whose id is in argv` does not work — AppleScript will not coerce a list into a type specifier.
+* `every event of every calendar whose uid is …` returns a list *per calendar*, so reads are scoped
+  to one named calendar; scanning six outlasts the scripting bridge's patience.
+* `missing value` stringifies to the literal text `"missing value"`, so every reminder in a real
+  list reported a completion date it did not have.
+* **Reminders' scripting dictionary has no recurrence property at all** — checked against
+  `properties of` a real reminder. Excluding recurring reminders is a precondition for the reverse
+  flow being correct, so over AppleScript a task may be completed from a reminder but **never
+  reopened**, and a binding seen to un-complete itself stops driving anything from then on.
+  EventKit answers this directly; that is the trigger for moving to it.
 
 ## Licence
 
-MIT
+MIT. Vendored SilverBullet sources are MIT, Copyright 2022 Zef Hemel — see
+[`vendor/silverbullet/PROVENANCE.md`](vendor/silverbullet/PROVENANCE.md).

@@ -202,6 +202,12 @@ This needs no stored state, which is what makes it safe with two clients open at
 one re-runs the same comparison and finds nothing to do.
 
 ### Calendar cannot be asked who edited last
+**Reminders' scripting dictionary has no recurrence property either** — checked against
+`properties of` a real reminder, not assumed: fourteen properties, and recurrence is not one. So
+nothing on this route can tell a repeating commitment from a one-shot one, which is why the reverse
+completion path in the VS Code implementation refuses to *reopen* a task from Reminders at all.
+EventKit's `EKReminder.hasRecurrenceRules` answers it; AppleScript cannot.
+
 Calendar's scripting dictionary has **no modification date on an event** — checked, not assumed. So
 the comparison above is impossible there, and a calendar event is pushed whenever the page is newer
 than this client's last successful push, remembered locally in the client's own datastore.
