@@ -183,6 +183,18 @@
       {
         "command": "lifeloop.toggleXray",
         "title": "LifeLoop: Toggle X-Ray"
+      },
+      {
+        "command": "lifeloop.tagPicker",
+        "title": "LifeLoop: Tag Picker"
+      },
+      {
+        "command": "lifeloop.metaPicker",
+        "title": "LifeLoop: Meta Page Picker"
+      },
+      {
+        "command": "lifeloop.anythingPicker",
+        "title": "LifeLoop: Anything Picker"
       }
     ],
     "views": {
