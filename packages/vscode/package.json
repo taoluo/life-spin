@@ -155,6 +155,18 @@
       {
         "command": "lifeloop.newFromTemplate",
         "title": "LifeLoop: New Page from Template"
+      },
+      {
+        "command": "lifeloop.bakeSection",
+        "title": "LifeLoop: Bake Section at Cursor"
+      },
+      {
+        "command": "lifeloop.unbakeSection",
+        "title": "LifeLoop: Unbake Section at Cursor"
+      },
+      {
+        "command": "lifeloop.updateBakedSections",
+        "title": "LifeLoop: Update Baked Sections"
       }
     ],
     "views": {
@@ -338,6 +350,12 @@
         "key": "alt+left",
         "mac": "alt+left",
         "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
+      },
+      {
+        "command": "lifeloop.updateBakedSections",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorTextFocus && editorLangId == markdown"
       }
     ]
   },

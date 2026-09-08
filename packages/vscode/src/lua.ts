@@ -151,6 +151,28 @@ export function renderExpression(expression: string): string | undefined {
   return expressions.get(expression);
 }
 
+/**
+ * Evaluate one expression to Markdown, on demand.
+ *
+ * Baking needs this and the preview does not: the preview reads a map filled in
+ * when the index settles, because markdown-it renders synchronously. Baking is a
+ * command, so it can wait for the real answer — and it must, because it writes the
+ * result into the user's file.
+ */
+export async function evaluateToMarkdown(
+  instance: LifeLoop,
+  expression: string,
+): Promise<{ ok: true; markdown: string } | { ok: false; error: string }> {
+  if (!isEnabled()) {
+    return { ok: false, error: "Space Lua execution is off (lifeloop.lua.enabled)" };
+  }
+  const result = await runLua(expression, hostFor(instance), "expression", space as any);
+  if (!result.ok) return { ok: false, error: result.error };
+  const markdown = valueToMarkdown(result.value).trim();
+  if (!markdown) return { ok: false, error: `${expression} produced nothing to write` };
+  return { ok: true, markdown };
+}
+
 /** A vault's own CSS, scoped and filtered, for the preview to wear. */
 let spaceStyle = "";
 

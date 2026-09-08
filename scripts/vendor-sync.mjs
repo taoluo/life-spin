@@ -36,6 +36,10 @@ const SEEDS = [
   // it, and parsing it our own way would be inventing a second reading of
   // something already written down.
   "plug-api/lib/transclusion.ts",
+  // Baked sections — `<!--#lua EXPR -->` body `<!--/lua-->`. Also *file* syntax,
+  // and the one place where getting the delimiters subtly wrong would corrupt a
+  // page on the next update rather than merely render it oddly.
+  "client/baked_sections/regions.ts",
 ];
 
 const aliasToPath = (spec) => {

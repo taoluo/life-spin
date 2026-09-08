@@ -13,10 +13,12 @@
     "client/space_lua/stdlib/os.ts",
     "client/space_lua/stdlib/encoding.ts",
     "client/space_lua/stdlib/pattern.ts",
-    "plug-api/lib/transclusion.ts"
+    "plug-api/lib/transclusion.ts",
+    "client/baked_sections/regions.ts"
   ],
   "upstreamTests": [
     "client/asset_bundle/bundle.test.ts",
+    "client/baked_sections/regions.test.ts",
     "client/config.test.ts",
     "client/data/kv_primitives.test.ts",
     "client/markdown_parser/custom_syntax.test.ts",
@@ -54,10 +56,12 @@
     "@lezer/markdown",
     "js-yaml"
   ],
-  "fileCount": 135,
+  "fileCount": 137,
   "files": {
     "client/asset_bundle/bundle.test.ts": "7b275ea3c9e12431d81c57069bef7ab8dd9ada0c685e559ffb6830729087c361",
     "client/asset_bundle/bundle.ts": "2205800f8cab467a7d4241813d7cee42cecb7e8c38f1408d368d2728d3b5c37c",
+    "client/baked_sections/regions.test.ts": "e2b36886bd3cc78c6a4b397f158bfc44875be879ec7d2f7e6cf3c5d3fd543db8",
+    "client/baked_sections/regions.ts": "ac255cb6dc27bf17510fe6aea5ca2d5407f11e0c2770f0d1277a75ff12d44b1a",
     "client/config.test.ts": "d11bef93400a2eda2d31de327459c2710d4a2f502406889e2a6a9f002aa3a6ef",
     "client/config.ts": "7db5375515618c846aa69741c56100ca85eb5224d79930c775e9bfa038e859dc",
     "client/data/datastore.ts": "fcde559731cddcc4c6bd32dddf3a658fe031adc0b6acfa97a29f6ad211c8eda2",

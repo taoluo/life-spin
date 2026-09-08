@@ -4,11 +4,13 @@ import {
   setTaskAttribute, setProjectStatus, attachPageToTask, promotePage, freezeReview,
   PROJECT_STATES, review, week, day, today, upcoming,
   templates, readTemplate, builtinTemplate, createFromTemplate,
+  bakeAt, unbakeAt, updateBaked,
   type InboxItem, type Refusal, type PageTemplate,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import type { Node } from "./views.ts";
 import { openPage, scriptNamespaces } from "./retrieval.ts";
+import { evaluateToMarkdown } from "./lua.ts";
 
 /**
  * Every command goes through a named mutation (I5). None of them writes a file
@@ -472,6 +474,66 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       await after();
     });
   }
+
+  /**
+   * Baked sections — write the rendered output into the page, wrapped in HTML
+   * comments, so the Markdown reads correctly *outside* LifeLoop too.
+   *
+   * The cursor's page has to be saved to disk before any of this: the mutation
+   * layer reads the file, and baking a stale copy would write yesterday's output
+   * over today's edits.
+   */
+  const bakeTarget = async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "markdown") return null;
+    if (editor.document.isDirty) await editor.document.save();
+    return {
+      editor,
+      page: lifeloop.pageNameOfUri(editor.document.uri),
+      offset: editor.document.offsetAt(editor.selection.active),
+    };
+  };
+
+  const evaluate = (expression: string) => evaluateToMarkdown(lifeloop, expression);
+
+  on("lifeloop.bakeSection", async () => {
+    const target = await bakeTarget();
+    if (!target) return;
+    const result = await bakeAt(lifeloop.vault, target.page, target.offset, evaluate);
+    if (report(result, "baked")) await after();
+  });
+
+  on("lifeloop.unbakeSection", async () => {
+    const target = await bakeTarget();
+    if (!target) return;
+    if (report(await unbakeAt(lifeloop.vault, target.page, target.offset), "unbaked")) await after();
+  });
+
+  on("lifeloop.updateBakedSections", async () => {
+    const target = await bakeTarget();
+    if (!target) return;
+    const result = await updateBaked(lifeloop.vault, target.page, evaluate);
+    if (!result.ok) {
+      report(result, "");
+      return;
+    }
+    const { updated, failed } = result.value;
+    // What failed is named. A silent partial refresh is how someone comes to trust
+    // a table that has been wrong for a month.
+    if (failed.length) {
+      vscode.window.showWarningMessage(
+        `LifeLoop: ${updated} updated, ${failed.length} left as they were — ${failed
+          .map((f) => `${f.expression}: ${f.error}`)
+          .join("; ")}`,
+      );
+    } else {
+      vscode.window.setStatusBarMessage(
+        updated ? `LifeLoop: ${updated} baked section(s) updated` : "LifeLoop: already current",
+        3000,
+      );
+    }
+    if (updated) await after();
+  });
 
   on("lifeloop.openPage", () => openPage(lifeloop));
   on("lifeloop.reindex", async () => {
