@@ -45,6 +45,13 @@ the built-in one — because the thing people most want to change about a daily 
 it, and that should not need a code change. `suggestedName`, `confirmName` and `openIfExists` in
 frontmatter, `${date.today()}` in names and bodies, and `|^|` for where the cursor lands.
 
+A template's `command:` name is reachable directly — VS Code cannot add a name it has never heard
+of to the Command Palette, so the command takes an argument instead:
+
+```json
+{ "key": "cmd+k m", "command": "lifeloop.newFromTemplate", "args": "New meeting" }
+```
+
 **The loop.** `LifeLoop: Capture` writes one line to your Inbox without navigating away.
 `Process Inbox` links it to a project — keeping the wording where it happened — or turns it into a
 task. Today shows overdue, due and scheduled work in disjoint sections, and ticking a row stamps

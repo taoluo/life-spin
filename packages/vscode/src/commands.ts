@@ -249,23 +249,56 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     fromTemplate("daily", "Daily", `${lifeloop.config("journalFolder", "Journal")}/${day()}`),
   );
 
-  /** Any template the vault defines, offered by name. */
-  on("lifeloop.newFromTemplate", async () => {
+  /**
+   * Any template the vault defines, offered by name — or named directly.
+   *
+   * A template's `command:` key is what it wants to be called, and VS Code cannot
+   * add a name it has never heard of to the Command Palette: the palette lists
+   * what a manifest declared at install time. So the *contributed* command takes
+   * an argument instead, which makes `command:` reachable from a keybinding the
+   * user writes once:
+   *
+   *     { "key": "cmd+k m", "command": "lifeloop.newFromTemplate", "args": "New meeting" }
+   *
+   * Install-time contribution plus an argument, rather than a second registry —
+   * the same conclusion `command.define` reached, arrived at from the other side.
+   */
+  on("lifeloop.newFromTemplate", async (wanted?: string) => {
     const available: PageTemplate[] = [
       ...templates(lifeloop.vault),
       ...(["page", "project", "daily", "review"] as const).map(builtinTemplate),
     ];
-    const picked = await vscode.window.showQuickPick(
-      available.map((t) => ({
-        label: t.command ?? t.page.replace(/^Templates\//, "").replace(/^builtin:/, ""),
-        detail: t.page.startsWith("builtin:") ? "built in" : t.page,
-        template: t,
-      })),
-      { placeHolder: "Which template?" },
-    );
-    if (!picked) return;
+    const nameOf = (t: PageTemplate) =>
+      t.command ?? t.page.replace(/^Templates\//, "").replace(/^builtin:/, "");
 
-    const template = picked.template;
+    let template: PageTemplate | undefined;
+    if (typeof wanted === "string" && wanted.trim()) {
+      const target = wanted.trim().toLowerCase();
+      template = available.find(
+        (t) => nameOf(t).toLowerCase() === target || t.page.toLowerCase() === target,
+      );
+      if (!template) {
+        // Named and not found: say which names exist rather than silently
+        // opening a picker the keybinding did not ask for.
+        vscode.window.showWarningMessage(
+          `LifeLoop: no template called "${wanted}" — try ${available.map(nameOf).join(", ")}`,
+        );
+        return;
+      }
+    }
+
+    if (!template) {
+      const picked = await vscode.window.showQuickPick(
+        available.map((t) => ({
+          label: nameOf(t),
+          detail: t.page.startsWith("builtin:") ? "built in" : t.page,
+          template: t,
+        })),
+        { placeHolder: "Which template?" },
+      );
+      if (!picked) return;
+      template = picked.template;
+    }
     let name = template.suggestedName ?? "";
     if (template.confirmName || !name) {
       const answer = await vscode.window.showInputBox({
