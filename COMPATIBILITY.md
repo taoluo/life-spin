@@ -110,6 +110,7 @@ time. **13 of the 21 blocks in SilverBullet's own documentation run through it u
 | `widget.*`, `dom.*` | build content; the preview renders it, since VS Code cannot place it inline |
 | `editor.*` | the portable half: `flashNotification`, `navigate`, `getCurrentPage`, `getText`, `copyToClipboard`, `openUrl` |
 | `string`, `table`, `math`, `os` | Lua's own library — used three times more than any host API |
+| `tostring`, `tonumber`, `type`, `pairs`, `ipairs`, `next`, `pcall`, `xpcall`, `error`, `assert`, `select`, `print`, `raw*`, `*metatable` | the bare globals, without which almost no script runs |
 | `event.listen`, `mq.*`, `syntax.define` | registries; a client drives them |
 | `query[[...]]` | **SLIQ**, in full — see below |
 
@@ -137,6 +138,16 @@ such hook, but the Markdown preview is a webview we already style. Rules are **s
 preview body and filtered: `@import`, `url()` and markup smuggled through `</style>` are refused by
 name. A note may not make the preview fetch anything. The block still shows as code as well —
 hiding it would make a page look like it had lost a section.
+
+The globals are written by hand rather than vendored, and that is the point: upstream's
+`stdlib.ts` defines `tostring` and `pairs` in the same file as `net` and `js`, so taking the file
+would take those too. Building the list keeps them out by construction instead of by intention —
+`js.import`, `net.fetch`, `dofile` and `load` all fail, and a test asserts it.
+
+Multi-value returns needed Lua's own type. A JavaScript array is *one* value, so
+`local ok, err = pcall(f)` bound `ok` to the whole array and left `err` nil, and `for _, v in
+ipairs(t)` never received an iterator. `LuaMultiRes` is the answer; both failures pointed at the
+calling script rather than at the builtin.
 
 *Deliberately absent:* `net` (arbitrary fetch) and `js.import` (arbitrary JavaScript). Not vendored,
 and `js.import` refuses **by name** rather than being undefined — "may not load arbitrary

@@ -4,6 +4,10 @@ import {
   LuaEnv, LuaStackFrame, LuaBuiltinFunction, LuaTable, jsToLuaValue, luaValueToJS,
 } from "../../../../vendor/silverbullet/client/space_lua/runtime.ts";
 import { makeLuaBudget, LuaBudgetStopped } from "../../../../vendor/silverbullet/client/space_lua/budget.ts";
+import {
+  luaToString, luaLen, luaKeys, luaCall, luaTypeName, LuaRuntimeError, LuaMultiRes,
+} from "../../../../vendor/silverbullet/client/space_lua/runtime.ts";
+import { luaToNumberDetailed } from "../../../../vendor/silverbullet/client/space_lua/tonumber.ts";
 import { stringApi } from "../../../../vendor/silverbullet/client/space_lua/stdlib/string.ts";
 import { tableApi } from "../../../../vendor/silverbullet/client/space_lua/stdlib/table.ts";
 import { mathApi } from "../../../../vendor/silverbullet/client/space_lua/stdlib/math.ts";
@@ -86,6 +90,109 @@ function synthesising(make: (key: string) => unknown): LuaTable {
   return base;
 }
 
+function installGlobals(env: LuaEnv): void {
+  const global = (name: string, impl: (sf: any, ...args: any[]) => unknown) =>
+    env.set(name, new LuaBuiltinFunction(impl));
+
+  /**
+   * Several of these return *more than one* value, and Lua has a type for that.
+   * A JavaScript array is a single value: `local ok, err = pcall(f)` bound `ok` to
+   * the whole array and left `err` nil, and `for _, v in ipairs(t)` never received
+   * an iterator at all. Both failures pointed at the caller rather than at this.
+   */
+  const many = (...values: unknown[]) => new LuaMultiRes(values);
+
+  global("tostring", (sf, value) => luaToString(value, sf));
+  global("tonumber", (_sf, value, base) => {
+    const parsed = luaToNumberDetailed(value, base === undefined ? undefined : Number(base));
+    // Lua's `tonumber` answers nil for anything it cannot read, rather than raising.
+    return parsed && Number.isFinite(parsed.value) ? parsed.value : null;
+  });
+  global("type", (_sf, value) => luaTypeName(value));
+  global("rawlen", (_sf, value) => luaLen(value));
+  global("rawget", (_sf, t: any, k) => t?.rawGet?.(k) ?? null);
+  global("rawset", (_sf, t: any, k, v) => { t?.rawSet?.(k, v); return t; });
+  global("rawequal", (_sf, a, b) => a === b);
+  global("getmetatable", (_sf, t: any) => t?.metatable ?? null);
+  global("setmetatable", (_sf, t: any, meta: any) => { if (t) t.metatable = meta ?? null; return t; });
+  global("select", (_sf, n, ...rest) =>
+    n === "#" ? rest.length : many(...rest.slice(Math.max(0, Number(n) - 1))),
+  );
+
+  /**
+   * `error` throws and `pcall` catches. A script that guards its own failures is
+   * a script the caller does not have to.
+   */
+  global("error", (sf, message) => {
+    throw new LuaRuntimeError(typeof message === "string" ? message : String(message), sf);
+  });
+  global("assert", (sf, value, message) => {
+    if (value === false || value === null || value === undefined) {
+      throw new LuaRuntimeError(
+        typeof message === "string" ? message : "assertion failed!", sf,
+      );
+    }
+    return value;
+  });
+  global("pcall", async (sf, target, ...args) => {
+    try {
+      return many(true, await luaCall(target, args, sf.astCtx, sf));
+    } catch (error) {
+      return many(false, (error as Error).message);
+    }
+  });
+  global("xpcall", async (sf, target, handler, ...args) => {
+    try {
+      return many(true, await luaCall(target, args, sf.astCtx, sf));
+    } catch (error) {
+      return many(false, await luaCall(handler, [(error as Error).message], sf.astCtx, sf));
+    }
+  });
+
+  // Output goes nowhere useful in an editor, so `print` is accepted and discarded
+  // rather than left undefined — a script that logs should still run.
+  global("print", () => null);
+
+  /**
+   * Iteration. `pairs` and `ipairs` return the triple Lua's `for ... in` expects:
+   * an iterator, the thing being iterated, and a starting control value.
+   */
+  const nextFor = (keys: unknown[]) =>
+    new LuaBuiltinFunction((sf: any, t: any, control: unknown) => {
+      const at = control === null || control === undefined
+        ? 0
+        : keys.findIndex((k) => k === control) + 1;
+      if (at >= keys.length) return null;
+      const key = keys[at];
+      return many(key, t?.get ? t.get(key, sf) : null);
+    });
+
+  global("next", (sf, t: any, control) => {
+    const keys = luaKeys(t);
+    const at = control === null || control === undefined
+      ? 0
+      : keys.findIndex((k: unknown) => k === control) + 1;
+    if (at >= keys.length) return null;
+    return many(keys[at], t?.get ? t.get(keys[at], sf) : null);
+  });
+  global("pairs", (_sf, t: any) => many(nextFor(luaKeys(t)), t, null));
+  global("ipairs", (_sf, t: any) => {
+    // `luaLen` can defer to a metamethod and answer later; iteration needs a
+    // number now, so a lazy length falls back to the array part.
+    const measured = luaLen(t);
+    const length = typeof measured === "number" ? measured : (t?.arrayPart?.length ?? 0);
+    return many(
+      new LuaBuiltinFunction((sf: any, table: any, index: number) => {
+        const at = Number(index ?? 0) + 1;
+        if (at > length) return null;
+        return many(at, table?.rawGet ? table.rawGet(at) : null);
+      }),
+      t,
+      0,
+    );
+  });
+}
+
 function table(entries: Record<string, unknown>): LuaTable {
   const t = new LuaTable();
   for (const [key, value] of Object.entries(entries)) t.set(key, value);
@@ -148,6 +255,21 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
    * `net` (arbitrary fetch) and `js` (arbitrary module import), which are the two
    * capabilities a script in a note should least have.
    */
+  /**
+   * Lua's global functions.
+   *
+   * Not the namespaced tables — those are `string.*` and friends — but the bare
+   * ones: `tostring`, `pairs`, `type`, `pcall`. Without them almost no real script
+   * runs, and the failure names the symbol rather than the omission: the first
+   * query on SilverBullet's own front page died with "attempt to call a nil value
+   * (global 'tostring')".
+   *
+   * Written here rather than vendored because upstream's `stdlib.ts` defines these
+   * alongside `net` and `js` — arbitrary fetch and arbitrary module import — and
+   * taking the file would take those too. Building the list by hand is what keeps
+   * them out by construction rather than by intention.
+   */
+  installGlobals(env);
   env.set("string", stringApi);
   env.set("table", tableApi);
   env.set("math", mathApi);
