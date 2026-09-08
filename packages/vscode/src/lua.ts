@@ -134,6 +134,15 @@ const rendered = new Map<string, string>();
 /** Answers for `${...}` expressions, keyed by the expression as written. */
 const expressions = new Map<string, string>();
 
+/**
+ * The space every block and expression evaluates in.
+ *
+ * One environment per vault, not per snippet: a library page defines
+ * `templates.featureItem` and a query on another page calls it. Rebuilt whenever
+ * the index settles, so a definition that was edited takes effect.
+ */
+let space: unknown;
+
 export function renderSpaceLua(script: string): string | undefined {
   return rendered.get(script.trim());
 }
@@ -160,6 +169,7 @@ async function refreshWidgets(instance: LifeLoop): Promise<void> {
   rendered.clear();
   expressions.clear();
   spaceStyle = "";
+  space = undefined;
   if (!isEnabled()) return;
 
   /**
@@ -176,7 +186,7 @@ async function refreshWidgets(instance: LifeLoop): Promise<void> {
     for (const expression of interpolations(document.getText())) {
       if (seen.has(expression)) continue;
       seen.add(expression);
-      const result = await runLua(expression, hostFor(instance));
+      const result = await runLua(expression, hostFor(instance), "expression", space as any);
       // An expression that fails is left as written rather than replaced with an
       // error: the page still reads as what its author typed.
       if (result.ok) expressions.set(expression, valueToMarkdown(result.value));
@@ -185,6 +195,19 @@ async function refreshWidgets(instance: LifeLoop): Promise<void> {
 
   // A vault's own CSS, gathered whether or not scripts run: styling is data, and
   // applying it needs no evaluator.
+  /**
+   * Definitions first, then everything that uses them.
+   *
+   * Blocks are loaded into one shared environment before any query runs, because
+   * a query calling a template has to find it — and the block defining it may
+   * live on a page the reader never opens.
+   */
+  const loaded = await collectDeclarations(
+    scripts(instance).map((b) => b.script),
+    hostFor(instance),
+  );
+  space = loaded.space;
+
   const styles = instance.store.objects("space-style").map((b) => String(b.style ?? b.script ?? ""));
   const filtered = styles.map((css) => safeSpaceStyle(css));
   spaceStyle = filtered.map((f) => f.css).filter(Boolean).join("\n");
@@ -197,7 +220,7 @@ async function refreshWidgets(instance: LifeLoop): Promise<void> {
   }
 
   for (const { script } of scripts(instance)) {
-    const result = await runLua(script, hostFor(instance), "block");
+    const result = await runLua(script, hostFor(instance), "block", space as any);
     if (!result.ok) {
       rendered.set(
         script.trim(),
@@ -371,7 +394,7 @@ export function registerLua(lifeloop: () => LifeLoop | undefined, context: vscod
     });
     if (!source) return;
 
-    const result = await runLua(source, hostFor(instance));
+    const result = await runLua(source, hostFor(instance), "expression", space as any);
     if (!result.ok) {
       vscode.window.showWarningMessage(`LifeLoop: ${result.error}`);
       return;

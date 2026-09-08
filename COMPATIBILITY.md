@@ -145,6 +145,28 @@ JavaScript" is a far better answer than `attempt to index a nil value`, which po
 Widget output goes into a webview, so the tag set is closed and every value is escaped. A script
 naming an unknown tag gets its text, not its markup.
 
+### The queries a SilverBullet vault actually contains
+
+Every query on silverbullet.md reads `from x = tags.something` — not `index.tasks()`. Ours worked
+and theirs did not, which is the whole difference between "SLIQ runs" and "a SilverBullet vault's
+queries run". Two things were missing, and both are now there:
+
+**`tags.*` as a source.** A name matches on `itags`, not on `tag`, because a page with
+`tags: feature` in its frontmatter is indexed as a `page` whose itags include `feature` — which is
+exactly what their own example leans on when it selects from `tags.feature` and then narrows to
+`f.tag == "page"`. An unknown tag answers empty rather than failing the page.
+
+Getting there took two wrong turns worth recording, because both error messages pointed away from
+the cause. A JavaScript `Proxy` cannot provide a computed key on a `LuaTable`: the runtime reads a
+key by calling the table's own `get()`, which consults internal storage. Proxying it either shadowed
+`get` itself — *"obj.get is not a function"* — or was bypassed entirely — *"Collection is nil"*.
+Lua's own mechanism, a metatable with `__index`, is the answer and the only one.
+
+**One environment per vault, not per snippet.** `select templates.featureItem(f)` on their front
+page defines the template in a library page and calls it from a query somewhere else. Evaluating
+each snippet freshly made that impossible however well the query itself ran. Blocks are loaded into
+a shared space first, then queries run in it.
+
 ### SLIQ needed nothing built
 
 The integrated query language works, and writing a parser for it would have been wasted effort:

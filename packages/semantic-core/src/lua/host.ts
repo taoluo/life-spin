@@ -66,6 +66,26 @@ const fn = (impl: (...args: any[]) => unknown) =>
     jsToLuaValue(impl(...args.map((a) => luaValueToJS(a, sf)))),
   );
 
+/**
+ * A table that answers any key by computing it.
+ *
+ * Lua already has the mechanism for this — a metatable with `__index` — and
+ * nothing else works. A JavaScript `Proxy` cannot do it: the runtime reads a key
+ * by calling the table's own `get()` method, which consults internal storage and
+ * never touches the trap. Proxying it either shadowed `get` itself ("obj.get is
+ * not a function") or was bypassed entirely ("Collection is nil"). Both failures
+ * pointed at the collection rather than at the lookup.
+ */
+function synthesising(make: (key: string) => unknown): LuaTable {
+  const base = new LuaTable();
+  const meta = new LuaTable();
+  meta.set("__index", new LuaBuiltinFunction((_sf: any, _self: unknown, key: unknown) =>
+    typeof key === "string" ? make(key) : null,
+  ));
+  base.metatable = meta;
+  return base;
+}
+
 function table(entries: Record<string, unknown>): LuaTable {
   const t = new LuaTable();
   for (const [key, value] of Object.entries(entries)) t.set(key, value);
@@ -146,6 +166,30 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
     objects: fn((tag: string) => store.objects(String(tag))),
     has: fn((path: string) => vault.exists(String(path))),
   }));
+
+  /**
+   * `tags.*` — the entry point every query on SilverBullet's own front page uses.
+   *
+   *     from t = tags.task where not t.done
+   *     from p = tags.page order by p.lastModified desc
+   *     from f = tags.feature where f.tag == "page"
+   *
+   * Not `index.tasks()`. Ours worked and theirs did not, which meant a vault's
+   * existing queries all failed — the difference between "SLIQ runs" and "a
+   * SilverBullet vault's queries run".
+   *
+   * A name matches on `itags`, not on `tag`: a page with `tags: feature` in its
+   * frontmatter is indexed as a `page` whose itags include `feature`, and
+   * `tags.feature` has to find it. That is exactly what the third query above
+   * relies on — it selects from `tags.feature` and then narrows to pages.
+   */
+  env.set("tags", synthesising((name) =>
+    jsToLuaValue(
+      store.objects().filter(
+        (o) => o.tag === name || (o.itags as string[] | undefined)?.includes(name),
+      ),
+    ),
+  ));
 
   /** `space.*` — pages, read-only. */
   env.set("space", table({
@@ -239,14 +283,7 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
     new: widgetValue("widget"),
     refreshAll: fn(() => null),
   }));
-  env.set("dom", new Proxy(table({}), {
-    get(target: any, prop: string) {
-      if (typeof prop !== "string" || prop.startsWith("__")) return target[prop];
-      const existing = target.get?.(prop);
-      if (existing) return existing;
-      return widgetValue(`dom.${prop}`);
-    },
-  }) as any);
+  env.set("dom", synthesising((tag) => widgetValue(`dom.${tag}`)));
 
   /**
    * `js.import` is refused by name rather than left undefined.
@@ -386,8 +423,18 @@ export async function runLua(
   source: string,
   options: HostOptions,
   mode: "expression" | "block" = "expression",
+  /**
+   * A space to evaluate in, so definitions made elsewhere are visible.
+   *
+   * SilverBullet has one environment per space: a block defines
+   * `templates.featureItem`, and a query on another page calls it. Evaluating
+   * every snippet in a fresh environment made that impossible — which is why the
+   * `select templates.featureItem(f)` on their own front page could never have
+   * worked here, however well the query itself ran.
+   */
+  space?: LuaEnv,
 ): Promise<LuaResult> {
-  const { env } = buildEnv(options);
+  const env = space ?? buildEnv(options).env;
   const sf = boundedFrame(env, options.budgetMs ?? 2000);
 
   try {
@@ -424,6 +471,8 @@ export async function runLua(
 
 export type Collected = {
   declared: Declarations;
+  /** The environment every block ran in, so later evaluation can see their definitions. */
+  space: LuaEnv;
   errors: { script: string; error: string }[];
   /**
    * Call a function a declaration handed us — an action button's `run`, say.
@@ -470,5 +519,5 @@ export async function collectDeclarations(
     }
   };
 
-  return { declared, errors, call };
+  return { declared, errors, call, space: env };
 }
