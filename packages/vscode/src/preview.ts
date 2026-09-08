@@ -192,6 +192,13 @@ export function renderWidgetValue(value: unknown): string {
     return `<div class="lifeloop-widget">${children}</div>`;
   }
   if (kind === "markdown") return `<div class="lifeloop-widget">${children}</div>`;
+  if (kind === "embed.youtube") {
+    // The id is matched from the URL and escaped, so a note cannot point the
+    // frame anywhere it likes.
+    const id = escape((tagged.children?.[0] ?? "") as string);
+    return `<div class="lifeloop-widget"><a href="https://www.youtube.com/watch?v=${id}">` +
+      `▶ youtube.com/watch?v=${id}</a></div>`;
+  }
 
   const tag = kind.startsWith("dom.") ? kind.slice(4).toLowerCase() : "";
   if (SAFE_TAGS.has(tag)) return `<${tag}>${children}</${tag}>`;

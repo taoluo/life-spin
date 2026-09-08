@@ -385,3 +385,18 @@ describe("space-style in the preview", () => {
     expect(css).not.toContain("</style");
   });
 });
+
+describe("embeds in the preview", () => {
+  test("a youtube embed becomes a link, with its id escaped", async () => {
+    const { renderWidgetValue } = await import("../src/preview.ts");
+    const html = renderWidgetValue({ __widget: "embed.youtube", children: ["mik1EbTshX4"] });
+    expect(html).toContain("youtube.com/watch?v=mik1EbTshX4");
+
+    // The id comes out of a note, and the output goes into a webview.
+    const nasty = renderWidgetValue({
+      __widget: "embed.youtube", children: ['x"><script>alert(1)</script>'],
+    });
+    expect(nasty).not.toContain("<script");
+    expect(nasty).toContain("&lt;script");
+  });
+});

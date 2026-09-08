@@ -63,7 +63,7 @@ own assertions run against our copy** on every `npm test`.
 
 ```bash
 npm install
-npm run verify                      # typecheck, vendor integrity, schema pin, 492 tests
+npm run verify                      # typecheck, vendor integrity, schema pin, 507 tests
 npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
@@ -80,7 +80,7 @@ development, open `packages/vscode` in VS Code and press F5.
 ### Testing
 
 ```bash
-npm test                  # 492 headless tests, ~15s
+npm test                  # 507 headless tests, ~15s
 npm run test:integration  # 9 tests inside a real VS Code (downloads it once)
 npm run verify            # everything above, plus typecheck and the two guards
 ```

@@ -2,7 +2,9 @@ import * as vscode from "vscode";
 import { assertRuntime } from "@lifeloop/semantic-core";
 import { LifeLoop } from "./workspace.ts";
 import { TodayView, ProjectsView, InboxView, BacklinksView } from "./views.ts";
-import { documentLinks, completion, references, publishDiagnostics } from "./retrieval.ts";
+import {
+  documentLinks, completion, references, publishDiagnostics, documentSymbols,
+} from "./retrieval.ts";
 import { register } from "./commands.ts";
 import { registerApple } from "./apple.ts";
 import { extendMarkdownIt } from "./preview.ts";
@@ -55,6 +57,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
     vscode.languages.registerDocumentLinkProvider(markdown, documentLinks(lifeloop)),
     vscode.languages.registerCompletionItemProvider(markdown, completion(lifeloop), "[", "#"),
     vscode.languages.registerReferenceProvider(markdown, references(lifeloop)),
+    vscode.languages.registerDocumentSymbolProvider(markdown, documentSymbols(lifeloop)),
     // A query block gets a count and an action above it, and its table on hover.
     // The preview shows the same answer rendered in place; all three call the
     // same projection.

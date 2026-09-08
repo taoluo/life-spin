@@ -135,6 +135,22 @@
       {
         "command": "lifeloop.applyActionButtons",
         "title": "LifeLoop: Add Declared Action Buttons"
+      },
+      {
+        "command": "lifeloop.moveUp",
+        "title": "LifeLoop: Move Item Up"
+      },
+      {
+        "command": "lifeloop.moveDown",
+        "title": "LifeLoop: Move Item Down"
+      },
+      {
+        "command": "lifeloop.moveIndent",
+        "title": "LifeLoop: Indent Item"
+      },
+      {
+        "command": "lifeloop.moveOutdent",
+        "title": "LifeLoop: Outdent Item"
       }
     ],
     "views": {
@@ -294,6 +310,30 @@
         "key": "ctrl+enter",
         "mac": "cmd+enter",
         "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "lifeloop.moveUp",
+        "key": "alt+up",
+        "mac": "alt+up",
+        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
+      },
+      {
+        "command": "lifeloop.moveDown",
+        "key": "alt+down",
+        "mac": "alt+down",
+        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
+      },
+      {
+        "command": "lifeloop.moveIndent",
+        "key": "alt+right",
+        "mac": "alt+right",
+        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
+      },
+      {
+        "command": "lifeloop.moveOutdent",
+        "key": "alt+left",
+        "mac": "alt+left",
+        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
       }
     ]
   },

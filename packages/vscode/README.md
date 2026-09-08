@@ -34,6 +34,11 @@ are read-only and time-limited. SilverBullet's integrated query language works a
 
     ${query[[ from index.tasks() where _.deadline < "2026-09-16" order by _.deadline ]]}
 
+**Outlining that knows what an item owns.** VS Code already moves lines, folds and indents, and
+already outlines Markdown headings. What it cannot know is that a list item owns the lines nested
+under it — so its own `Alt+Down` on a parent leaves the children behind. `Alt+↑/↓/←/→` here take
+the whole subtree, and tasks appear in the Outline view alongside headings.
+
 **The loop.** `LifeLoop: Capture` writes one line to your Inbox without navigating away.
 `Process Inbox` links it to a project — keeping the wording where it happened — or turns it into a
 task. Today shows overdue, due and scheduled work in disjoint sections, and ticking a row stamps

@@ -206,6 +206,28 @@ Substituting early means a returned list becomes a real list rather than escaped
 expression with no answer is left exactly as written — a page that still reads as what its author
 typed beats a blank.
 
+## Where VS Code already has the answer
+
+Three things were listed as missing that were not, and the correction is worth keeping because it
+is the same mistake twice: reading "SilverBullet has a feature" as "the host lacks it".
+
+**Outlining.** VS Code folds, moves lines, indents and outdents, and its Outline view lists
+Markdown headings through the built-in extension's symbol provider. The one thing it cannot know is
+that a list item *owns* the lines nested under it, so `Alt+Down` on a parent orphans its children.
+That gap is filled — the subtree moves as a unit, the same rule `DESIGN.md` states for processing an
+inbox item — and tasks are added to the Outline rather than replacing what is there.
+
+**Custom commands.** `command.define` is accepted so a block containing one still runs, and
+deliberately **not** registered. VS Code registers commands at runtime without trouble, but the
+Command Palette lists what an extension declared in its manifest at install time, and a manifest
+cannot know what is in someone's notes. A contributed command that listed the others was built and
+then removed: commands contributed at install time are enough, and a second way to reach them is
+complexity nobody asked for.
+
+**Syntax highlighting.** `syntax.define`'s markers are a runtime declaration, and VS Code's
+equivalent — a TextMate grammar with `injectTo` — is an install-time contribution. Same capability,
+different binding time. The renderer half of the same declaration works today, through the preview.
+
 ## Tier 4 — indexed and not executed
 
 One category sits outside the three tiers because it is neither ours nor promised: blocks

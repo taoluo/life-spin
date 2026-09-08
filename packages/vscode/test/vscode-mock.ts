@@ -26,6 +26,14 @@ export class Range {
 }
 export class Selection extends Range {}
 export class Location { constructor(public uri: any, public range: any) {} }
+export class DocumentSymbol {
+  children: DocumentSymbol[] = [];
+  constructor(
+    public name: string, public detail: string, public kind: number,
+    public range: any, public selectionRange: any,
+  ) {}
+}
+export const SymbolKind = { Field: 7, Event: 23 };
 export class CodeLens { constructor(public range: any, public command?: any) {} }
 export class Hover { constructor(public contents: any, public range?: any) {} }
 export class DocumentLink { constructor(public range: any, public target?: any) {} }
@@ -79,6 +87,7 @@ export const window = {
   registerTreeDataProvider: () => ({ dispose: () => {} }),
 };
 export const languages = {
+  registerDocumentSymbolProvider: () => ({ dispose: () => {} }),
   registerCodeLensProvider: () => ({ dispose: () => {} }),
   registerHoverProvider: () => ({ dispose: () => {} }),
   registerDocumentLinkProvider: () => ({ dispose: () => {} }),

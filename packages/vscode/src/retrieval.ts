@@ -300,6 +300,42 @@ function describeScript(script: string): string {
   return `It has ${parts.join("; ")}.`;
 }
 
+/**
+ * Tasks in the Outline view.
+ *
+ * VS Code already outlines Markdown headings — the built-in extension provides
+ * that — so this adds the one thing it cannot know about: which lines are tasks,
+ * nested under the heading they live beneath. Symbol providers compose, so both
+ * appear rather than one replacing the other.
+ */
+export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvider {
+  return {
+    provideDocumentSymbols(document) {
+      const page = lifeloop.pageNameOfUri(document.uri);
+      const tasks = lifeloop.store
+        .objects("task")
+        .filter((t) => t.page === page && t.inComment !== true);
+
+      return tasks.map((task) => {
+        const [from] = (task.range as [number, number] | undefined) ?? [0, 0];
+        const start = document.positionAt(Math.min(from, document.getText().length));
+        const range = document.lineAt(start.line).range;
+        const symbol = new vscode.DocumentSymbol(
+          String(task.name ?? "").trim() || "(empty task)",
+          [
+            task.done ? "done" : "open",
+            typeof task.deadline === "string" ? `due ${task.deadline}` : "",
+          ].filter(Boolean).join("  ·  "),
+          task.done ? vscode.SymbolKind.Event : vscode.SymbolKind.Field,
+          range,
+          range,
+        );
+        return symbol;
+      });
+    },
+  };
+}
+
 /** 1.5 — alias-aware open, over page names and headings. */
 export async function openPage(lifeloop: LifeLoop): Promise<void> {
   type Item = vscode.QuickPickItem & { page: string; offset?: number };

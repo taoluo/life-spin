@@ -226,3 +226,52 @@ describe("events, queues and custom syntax", () => {
     expect(matches).toHaveLength(1);
   });
 });
+
+describe("commands and embeds a vault defines", () => {
+  test("SilverBullet's own command.define syntax is accepted and callable", async () => {
+    const host = await hostFor({ "W.md": "x\n" });
+    const { declared, errors, call } = await collectDeclarations(
+      [`command.define {
+          name = "Hello world",
+          run = function()
+            return "greeted"
+          end
+        }`],
+      host,
+    );
+    // Accepted, so the rest of the block still runs. Nothing registers it: the
+    // Command Palette lists what a manifest declared at install time, and that is
+    // enough.
+    expect(errors).toEqual([]);
+    expect(declared.commands).toMatchObject([{ name: "Hello world" }]);
+
+    const result = await call(declared.commands[0].run);
+    expect(result).toMatchObject({ ok: true, value: "greeted" });
+    host.cleanup();
+  });
+
+  test("a command with no name is refused rather than registered namelessly", async () => {
+    const host = await hostFor({ "W.md": "x\n" });
+    const { declared, errors } = await collectDeclarations(
+      [`command.define { run = function() end }`],
+      host,
+    );
+    expect(declared.commands).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    host.cleanup();
+  });
+
+  test("embed.youtube recognises a link and refuses to guess at one it cannot read", async () => {
+    const host = await hostFor({ "W.md": "x\n" });
+    const ok = await runLua(`embed.youtube "https://www.youtube.com/watch?v=mik1EbTshX4"`, host);
+    expect(ok).toMatchObject({ ok: true, value: { __widget: "embed.youtube", children: ["mik1EbTshX4"] } });
+
+    const short = await runLua(`embed.youtube "https://youtu.be/bb1USz_cEBY"`, host);
+    expect((short as any).value.children).toEqual(["bb1USz_cEBY"]);
+
+    // Not a video link: a plain link rather than a broken frame.
+    const other = await runLua(`embed.youtube "https://example.com"`, host);
+    expect((other as any).value.__widget).toBe("markdown");
+    host.cleanup();
+  });
+});

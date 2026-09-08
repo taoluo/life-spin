@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import {
-  capture, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked,
+  capture, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked, moveItem,
   setTaskAttribute, setProjectStatus, attachPageToTask, promotePage, freezeReview,
   PROJECT_STATES, review, week, day, today, upcoming, type InboxItem, type Refusal,
 } from "@lifeloop/semantic-core";
@@ -356,6 +356,32 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     });
     await vscode.window.showTextDocument(document, { preview: true });
   });
+
+  /**
+   * Outlining, on whole items.
+   *
+   * VS Code already moves lines, folds and indents; what it cannot know is that a
+   * list item owns the lines nested under it, so its own `Alt+Down` leaves a
+   * parent's children behind. These take the subtree.
+   */
+  for (const move of ["up", "down", "indent", "outdent"] as const) {
+    on(`lifeloop.move${move[0].toUpperCase()}${move.slice(1)}`, async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.languageId !== "markdown") return;
+      const line = editor.selection.active.line;
+      const page = lifeloop.pageNameOfUri(editor.document.uri);
+
+      const result = await moveItem(lifeloop.vault, page, line, move);
+      if (!result.ok) {
+        vscode.window.setStatusBarMessage(`LifeLoop: ${result.message}`, 3000);
+        return;
+      }
+      // Follow the item rather than leaving the cursor where the text used to be.
+      const target = new vscode.Position(result.value.line, editor.selection.active.character);
+      editor.selection = new vscode.Selection(target, target);
+      await after();
+    });
+  }
 
   on("lifeloop.openPage", () => openPage(lifeloop));
   on("lifeloop.reindex", async () => {

@@ -109,6 +109,8 @@ export type Declarations = {
   taskStates: TaskStateSpec[];
   /** Buttons a vault wants in the UI. A client decides where they go. */
   actionButtons: Record<string, unknown>[];
+  /** Commands a vault defines for itself. */
+  commands: { name: string; description?: unknown; run: unknown }[];
   /** Event listeners, queue subscriptions and custom syntax. */
   registries: Registries;
 };
@@ -133,7 +135,7 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
   const env = new LuaEnv();
   const declared: Declarations = {
     tags: [], services: [], identities: [], config: {}, taskStates: [], actionButtons: [],
-    registries: emptyRegistries(),
+    commands: [], registries: emptyRegistries(),
   };
   const queue = options.queue ?? new MessageQueue();
 
@@ -264,6 +266,45 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
 
   env.set("actionButton", table({
     define: fn((spec: unknown) => { declared.actionButtons.push(spec as any); return null; }),
+  }));
+
+  /**
+   * `command.define` — recorded, and deliberately not registered.
+   *
+   * VS Code can register a command at runtime, but it cannot add one to the
+   * Command Palette: the palette lists what an extension declared in its manifest
+   * at install time, and a manifest cannot know what is in someone's notes. The
+   * workaround — a contributed command that lists the others — was built and then
+   * removed, because commands contributed at install time are enough and a second
+   * way to reach them is complexity nobody asked for.
+   *
+   * The declaration is still accepted rather than left undefined, so a block that
+   * happens to contain one still runs and everything else in it still counts.
+   */
+  env.set("command", table({
+    define: fn((spec: any) => {
+      const name = String(spec?.name ?? "").trim();
+      if (!name) throw new Error("command.define needs a name");
+      declared.commands.push({ name, description: spec?.description, run: spec?.run });
+      return null;
+    }),
+  }));
+
+  /**
+   * `embed.*` — a link turned into something a page can show.
+   *
+   * A widget rather than raw HTML, so the same escaping and closed tag set apply.
+   * Only providers we can render are answered; anything else says so rather than
+   * producing a broken frame.
+   */
+  env.set("embed", table({
+    youtube: fn((url: string) => {
+      const id = /(?:v=|youtu\.be\/|embed\/)([\w-]{6,})/.exec(String(url))?.[1];
+      return id
+        ? { __widget: "embed.youtube", children: [id] }
+        : { __widget: "markdown", children: [`[${url}](${url})`] };
+    }),
+    url: fn((url: string) => ({ __widget: "markdown", children: [`[${url}](${url})`] })),
   }));
 
   /**
