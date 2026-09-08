@@ -14,6 +14,7 @@ import { register as registerSlash } from "./slash.ts";
 import { register as registerMentions } from "./mentions.ts";
 import { register as registerXray } from "./xray.ts";
 import { register as registerPickers } from "./pickers.ts";
+import { register as registerDecorations } from "./decoration.ts";
 
 let lifeloop: LifeLoop | undefined;
 
@@ -74,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   registerMentions(() => lifeloop, context);
   registerXray(() => lifeloop, context);
   registerPickers(() => lifeloop, context);
+  registerDecorations(() => lifeloop, context);
 
   const diagnostics = vscode.languages.createDiagnosticCollection("lifeloop");
   context.subscriptions.push(diagnostics);

@@ -12,3 +12,4 @@ export * from "./vault.ts";
 export * from "./mutation.ts";
 export * from "./mutations/index.ts";
 export * from "./mentions.ts";
+export * from "./decoration.ts";

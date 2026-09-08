@@ -86,6 +86,10 @@ export const workspace = {
   openTextDocument: async () => ({}),
 };
 export const window = {
+  registerFileDecorationProvider: () => ({ dispose: () => {} }),
+  createTextEditorDecorationType: () => ({ dispose: () => {} }),
+  onDidChangeVisibleTextEditors: () => ({ dispose: () => {} }),
+  visibleTextEditors: [] as any[],
   activeTextEditor: undefined as any,
   onDidChangeActiveTextEditor: () => ({ dispose: () => {} }),
   showQuickPick: async () => undefined,

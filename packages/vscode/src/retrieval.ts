@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
-import { brokenLinks, backlinks } from "@lifeloop/semantic-core";
+import {
+  brokenLinks, backlinks, decorations, labelFor, visible, ordered,
+} from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 
 /**
@@ -57,13 +59,25 @@ export function completion(lifeloop: LifeLoop): vscode.CompletionItemProvider {
 
       const wiki = /\[\[([^\]]*)$/.exec(line);
       if (wiki) {
-        return lifeloop.vault.list().map((path) => {
-          const page = path.replace(/\.md$/, "");
-          const item = new vscode.CompletionItem(page, vscode.CompletionItemKind.File);
-          item.insertText = page;
-          item.detail = "page";
-          return item;
-        });
+        // Decorated: a page's prefix shows in the list, a hidden page stays out of
+        // it, and priority orders it — the surfaces we own honour `pageDecoration`
+        // even though VS Code's own Quick Open cannot be told about it.
+        const decorated = decorations(lifeloop.store);
+        const pages = lifeloop.vault.list().map((path) => path.replace(/\.md$/, ""));
+        return ordered(pages, decorated)
+          .filter((page) => visible(decorated.get(page), "picker"))
+          .map((page, index) => {
+            const item = new vscode.CompletionItem(
+              labelFor(page, decorated.get(page)),
+              vscode.CompletionItemKind.File,
+            );
+            // The label may carry a prefix; what gets written is the page name.
+            item.insertText = page;
+            item.filterText = page;
+            item.detail = "page";
+            item.sortText = String(index).padStart(5, "0");
+            return item;
+          });
       }
 
       const tag = /#([\w/-]*)$/.exec(line);
@@ -339,11 +353,17 @@ export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvid
 /** 1.5 — alias-aware open, over page names and headings. */
 export async function openPage(lifeloop: LifeLoop): Promise<void> {
   type Item = vscode.QuickPickItem & { page: string; offset?: number };
-  const items: Item[] = lifeloop.vault.list().map((path) => ({
-    label: path.replace(/\.md$/, ""),
-    description: "page",
-    page: path.replace(/\.md$/, ""),
-  }));
+  const decorated = decorations(lifeloop.store);
+  const items: Item[] = ordered(
+    lifeloop.vault.list().map((path) => path.replace(/\.md$/, "")),
+    decorated,
+  )
+    .filter((page) => visible(decorated.get(page), "picker"))
+    .map((page) => ({
+      label: labelFor(page, decorated.get(page)),
+      description: "page",
+      page,
+    }));
   for (const header of lifeloop.store.objects("header")) {
     const [from] = (header.range as [number, number] | undefined) ?? [0, 0];
     items.push({
