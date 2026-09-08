@@ -31,6 +31,11 @@ const SEEDS = [
   "client/space_lua/stdlib/os.ts",
   "client/space_lua/stdlib/encoding.ts",
   "client/space_lua/stdlib/pattern.ts",
+  // Transclusion syntax — `![[page]]`, `![[image.png|300]]`, `![[page#header]]`.
+  // It is *file* syntax, so a vault arriving from SilverBullet already contains
+  // it, and parsing it our own way would be inventing a second reading of
+  // something already written down.
+  "plug-api/lib/transclusion.ts",
 ];
 
 const aliasToPath = (spec) => {

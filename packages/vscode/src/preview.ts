@@ -2,6 +2,7 @@ import {
   runProjection, projectionNames, day, type ProjectionName, type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
+import { expand } from "./transclusion.ts";
 
 /**
  * Queries that render in the Markdown preview.
@@ -354,6 +355,17 @@ export function extendMarkdownIt(
   renderSpaceStyle?: () => string,
 ) {
   return (md: any) => {
+    // Transclusion first, and before anything is parsed: an embedded page's
+    // Markdown becomes real Markdown, and any `${...}` it carries is then answered
+    // by the interpolation rule below exactly as if it had been written here.
+    if (md.core?.ruler?.before) {
+      md.core.ruler.before("normalize", "lifeloop-transclude", (state: any) => {
+        const instance = lifeloop();
+        if (!instance || typeof state.src !== "string" || !state.src.includes("![")) return;
+        state.src = expand(instance, state.src);
+      });
+    }
+
     // `core.ruler` is always there in markdown-it proper, but a host that hands us
     // a narrower object should lose interpolation rather than the whole preview.
     if (renderExpression && md.core?.ruler?.before) {

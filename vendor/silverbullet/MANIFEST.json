@@ -12,7 +12,8 @@
     "client/space_lua/stdlib/math.ts",
     "client/space_lua/stdlib/os.ts",
     "client/space_lua/stdlib/encoding.ts",
-    "client/space_lua/stdlib/pattern.ts"
+    "client/space_lua/stdlib/pattern.ts",
+    "plug-api/lib/transclusion.ts"
   ],
   "upstreamTests": [
     "client/asset_bundle/bundle.test.ts",
@@ -33,6 +34,7 @@
     "plug-api/lib/json.test.ts",
     "plug-api/lib/ref.test.ts",
     "plug-api/lib/resolve.test.ts",
+    "plug-api/lib/transclusion.test.ts",
     "plug-api/lib/tree.test.ts",
     "plugs/index/anchor.test.ts",
     "plugs/index/cheap_yaml.test.ts",
@@ -52,7 +54,7 @@
     "@lezer/markdown",
     "js-yaml"
   ],
-  "fileCount": 133,
+  "fileCount": 135,
   "files": {
     "client/asset_bundle/bundle.test.ts": "7b275ea3c9e12431d81c57069bef7ab8dd9ada0c685e559ffb6830729087c361",
     "client/asset_bundle/bundle.ts": "2205800f8cab467a7d4241813d7cee42cecb7e8c38f1408d368d2728d3b5c37c",
@@ -128,6 +130,8 @@
     "plug-api/lib/resolve.ts": "4c823686502a07e0eed2e7d31cc82652c5505d5b14f7020f1c5307eaf82e5709",
     "plug-api/lib/resolve_path.ts": "e290a73189539218c5fab7a743a9b85b3753cdc572ba63b49a3cde8c07421d7f",
     "plug-api/lib/tags.ts": "43612b751daa57b94e6cab67c0a76120c5dacb498e4d59a0fea419ac4de7f608",
+    "plug-api/lib/transclusion.test.ts": "51fc417d3631dd41ad4fe5d7072a6a316a61ec6baddd99674933189990595886",
+    "plug-api/lib/transclusion.ts": "06310a783fd2be6ad6918892a65491074a1eeae952dc399ba4e7b2a8fc53d6fa",
     "plug-api/lib/tree.test.ts": "2a18ac24125bc74dc758dffa7426c6a19ed4cf4280766444a0625369b111c93c",
     "plug-api/lib/tree.ts": "fcca46deef465fda1c529966f428cf6ec56bb0236d6e4547d7d3304c593f03ea",
     "plug-api/syscall.ts": "9cd4c64cfaf60b75f8a91fa5ac0a3c41770b086afb88508534b0aee7bcf5dc5e",
