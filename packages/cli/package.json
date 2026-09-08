@@ -1,0 +1,8 @@
+{
+  "name": "@lifeloop/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": { "lifeloop": "./src/main.ts" },
+  "dependencies": { "@lifeloop/semantic-core": "*" }
+}

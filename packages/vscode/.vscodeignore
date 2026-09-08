@@ -1,0 +1,10 @@
+# Everything is bundled into dist/extension.js, so the sources are not shipped.
+src/**
+test/**
+out/**
+tsconfig.json
+**/*.map
+**/*.ts
+!dist/extension.js
+.vscode-test/**
+node_modules/**

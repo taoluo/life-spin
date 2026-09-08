@@ -1,0 +1,329 @@
+{
+  "name": "lifeloop-vscode",
+  "displayName": "LifeLoop",
+  "description": "Capture without stopping. Keep tasks with the work they belong to. See what matters today.",
+  "version": "0.1.0",
+  "publisher": "lifeloop",
+  "private": false,
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Notebooks",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:markdown",
+    "workspaceContains:**/*.md"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lifeloop.capture",
+        "title": "LifeLoop: Capture",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lifeloop.openInbox",
+        "title": "LifeLoop: Open Inbox"
+      },
+      {
+        "command": "lifeloop.processInbox",
+        "title": "LifeLoop: Process Inbox"
+      },
+      {
+        "command": "lifeloop.openToday",
+        "title": "LifeLoop: Today",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "lifeloop.openDaily",
+        "title": "LifeLoop: Open Daily Note"
+      },
+      {
+        "command": "lifeloop.openReview",
+        "title": "LifeLoop: Weekly Review"
+      },
+      {
+        "command": "lifeloop.freezeReview",
+        "title": "LifeLoop: Freeze Review"
+      },
+      {
+        "command": "lifeloop.openPage",
+        "title": "LifeLoop: Open Page"
+      },
+      {
+        "command": "lifeloop.reindex",
+        "title": "LifeLoop: Rebuild Index"
+      },
+      {
+        "command": "lifeloop.toggleWaiting",
+        "title": "LifeLoop: Toggle Waiting"
+      },
+      {
+        "command": "lifeloop.toggleSomeday",
+        "title": "LifeLoop: Toggle Someday"
+      },
+      {
+        "command": "lifeloop.setDeadline",
+        "title": "LifeLoop: Set Deadline"
+      },
+      {
+        "command": "lifeloop.setScheduled",
+        "title": "LifeLoop: Set Scheduled"
+      },
+      {
+        "command": "lifeloop.attachPage",
+        "title": "LifeLoop: Attach Page to Task"
+      },
+      {
+        "command": "lifeloop.setProjectStatus",
+        "title": "LifeLoop: Set Project Status"
+      },
+      {
+        "command": "lifeloop.completeTask",
+        "title": "Complete",
+        "icon": "$(check)"
+      },
+      {
+        "command": "lifeloop.revealTask",
+        "title": "Go to source",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "lifeloop.refreshViews",
+        "title": "LifeLoop: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "lifeloop.addReminder",
+        "title": "LifeLoop: Add Reminder"
+      },
+      {
+        "command": "lifeloop.addToCalendar",
+        "title": "LifeLoop: Add to Calendar"
+      },
+      {
+        "command": "lifeloop.syncProjected",
+        "title": "LifeLoop: Sync Projected"
+      },
+      {
+        "command": "lifeloop.importNotes",
+        "title": "LifeLoop: Import from Apple Notes"
+      },
+      {
+        "command": "lifeloop.openQueryResult",
+        "title": "LifeLoop: Open Query Result"
+      },
+      {
+        "command": "lifeloop.reportUnsupported",
+        "title": "LifeLoop: Report Unsupported Blocks"
+      },
+      {
+        "command": "lifeloop.evalLua",
+        "title": "LifeLoop: Evaluate Space Lua"
+      },
+      {
+        "command": "lifeloop.runSpaceLua",
+        "title": "LifeLoop: Run Space Lua Blocks"
+      },
+      {
+        "command": "lifeloop.cycleTaskState",
+        "title": "LifeLoop: Cycle Task State"
+      },
+      {
+        "command": "lifeloop.applyActionButtons",
+        "title": "LifeLoop: Add Declared Action Buttons"
+      }
+    ],
+    "views": {
+      "lifeloop": [
+        {
+          "id": "lifeloop.today",
+          "name": "Today"
+        },
+        {
+          "id": "lifeloop.projects",
+          "name": "Projects"
+        },
+        {
+          "id": "lifeloop.inbox",
+          "name": "Inbox"
+        },
+        {
+          "id": "lifeloop.backlinks",
+          "name": "Backlinks"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lifeloop",
+          "title": "LifeLoop",
+          "icon": "resources/loop.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "lifeloop.capture",
+          "when": "view == lifeloop.inbox",
+          "group": "navigation"
+        },
+        {
+          "command": "lifeloop.refreshViews",
+          "when": "view =~ /^lifeloop\\./",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "lifeloop.completeTask",
+          "when": "viewItem == lifeloopTask",
+          "group": "inline"
+        },
+        {
+          "command": "lifeloop.revealTask",
+          "when": "viewItem == lifeloopTask",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "LifeLoop",
+      "properties": {
+        "lifeloop.inboxPage": {
+          "type": "string",
+          "default": "Inbox",
+          "description": "Page captures land on."
+        },
+        "lifeloop.journalFolder": {
+          "type": "string",
+          "default": "Journal",
+          "description": "Folder for daily notes."
+        },
+        "lifeloop.reviewFolder": {
+          "type": "string",
+          "default": "Reviews",
+          "description": "Folder for weekly reviews."
+        },
+        "lifeloop.upcomingDays": {
+          "type": "number",
+          "default": 14,
+          "description": "Days shown by Upcoming."
+        },
+        "lifeloop.staleDays": {
+          "type": "number",
+          "default": 21,
+          "description": "Days before a project page counts as unchanged."
+        },
+        "lifeloop.reminderList": {
+          "type": "string",
+          "default": "",
+          "description": "Reminders list new reminders go to. Empty means the default list."
+        },
+        "lifeloop.calendarName": {
+          "type": "string",
+          "default": "Calendar",
+          "description": "Calendar new events go to, and the only one bindings are looked up in."
+        },
+        "lifeloop.eventMinutes": {
+          "type": "number",
+          "default": 60,
+          "description": "Default length of an event created from a task."
+        },
+        "lifeloop.notesFolder": {
+          "type": "string",
+          "default": "LifeLoop Inbox",
+          "description": "Apple Notes folder imported into the Inbox. Never the whole library."
+        },
+        "lifeloop.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Sync projected reminders on a timer. Off by default: nothing should touch your Reminders because an extension was installed."
+        },
+        "lifeloop.syncMinutes": {
+          "type": "number",
+          "default": 5,
+          "description": "Minutes between background sync passes."
+        },
+        "lifeloop.queryCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a result count above each query block. The hover and the Markdown preview work either way."
+        },
+        "lifeloop.executeSpaceLua": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run Space Lua blocks from your notes. Off by default: a vault can be shared, synced or cloned, and none of that means you meant to run the code inside it. Scripts are read-only and time-limited."
+        },
+        "lifeloop.spaceLuaBudgetMs": {
+          "type": "number",
+          "default": 2000,
+          "description": "How long one Space Lua script may run before it is stopped."
+        },
+        "lifeloop.taskStates": {
+          "type": "array",
+          "default": [],
+          "description": "Custom task states to cycle through, e.g. [{\"state\":\" \"},{\"state\":\"w\"},{\"state\":\"x\",\"done\":true}]. A done state is always added if you leave it out. Note that a marker other than [ ] or [x] is not a checkbox to other Markdown tools.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "maxLength": 1
+              },
+              "done": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "markdown.markdownItPlugins": true,
+    "markdown.previewStyles": [
+      "./resources/preview.css"
+    ],
+    "keybindings": [
+      {
+        "command": "lifeloop.cycleTaskState",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == markdown"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-extension.mjs",
+    "watch": "node ../../scripts/build-extension.mjs --watch",
+    "vscode:prepublish": "node ../../scripts/build-extension.mjs",
+    "package": "vsce package --no-dependencies --out ../../dist/",
+    "install-local": "node ../../scripts/install-extension.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0"
+  },
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tao/silverbullet-lifeloop.git"
+  },
+  "keywords": [
+    "markdown",
+    "notes",
+    "tasks",
+    "pkm",
+    "gtd",
+    "para",
+    "zettelkasten"
+  ],
+  "galleryBanner": {
+    "color": "#1f2430",
+    "theme": "dark"
+  }
+}

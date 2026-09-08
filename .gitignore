@@ -11,6 +11,19 @@
 node_modules/
 *.map
 
-# Local reference checkout and scratch space — not part of the library
-silverbullet/
+# Local reference checkout and scratch space — not part of the library.
+# Anchored to the root on purpose: a bare `silverbullet/` also matches
+# vendor/silverbullet/, which would silently leave the vendored sources
+# uncommitted and make vendor:check assert the integrity of nothing.
+/silverbullet/
 tmp/
+
+# Derived index — delete it and rebuild, that is the whole point
+.lifeloop/
+dist/
+.vscode-test/
+packages/vscode/out/
+schema.json.bak
+
+# Packaged extensions — built, not tracked
+dist/*.vsix
