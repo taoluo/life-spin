@@ -40,11 +40,11 @@ persisting. There is no second implementation to differ from.
 
 That makes the proof stronger and cheaper than sampling a corpus, and it stands on two legs:
 
-1. **The code is upstream's, byte for byte.** `vendor:check` hashes all 125 vendored files against
+1. **The code is upstream's, byte for byte.** `vendor:check` hashes all 137 vendored files against
    `MANIFEST.json` and fails the build on any edit, and on any import from `packages/`.
 2. **Upstream's own assertions run here.** 28 of SilverBullet's test files are vendored alongside
    the code they test — parser, frontmatter, anchors, snippets, tree, refs, conflict detection,
-   the Lua parser and runtime — and `npm test` runs all **285** of them against our copy.
+   the Lua parser and runtime — and `npm test` runs all **298** of them against our copy.
 
 Same code plus its author's own tests passing is a conformance argument by construction. A corpus
 diff samples inputs and hopes they cover the corners; this covers whatever upstream thought worth
@@ -80,7 +80,7 @@ the ones that were always the real ones:
 So the live-client harness is still worth building, for **layers B and C only**:
 
 ```
-A  extraction        proved by construction — vendored code + 285 upstream tests
+A  extraction        proved by construction — vendored code + 298 upstream tests
 B  index primitives  needs a live SilverBullet: tasks by tag, backlinks,
                      inherited tags, nested-item context, what a comment hides
 C  mutation bytes    needs the Lua library: same vault, same operation,
@@ -219,8 +219,37 @@ typed beats a blank.
 
 ## Where VS Code already has the answer
 
-Three things were listed as missing that were not, and the correction is worth keeping because it
-is the same mistake twice: reading "SilverBullet has a feature" as "the host lacks it".
+Several things were listed as missing that were not, and the correction is worth keeping because it
+is the same mistake repeated: reading "SilverBullet has a feature" as "the host lacks it".
+
+**Editing non-Markdown files.** SilverBullet needs a Document Editor because it *only* has a
+Markdown editor; opening a CSV or an image there is a feature someone had to build. VS Code editing
+every file type is its job. This is not a gap, and it is listed here so it stops being counted as
+one.
+
+**The slash-command menu.** `/` is a completion provider with `/` as a trigger character, returning
+snippets — so fuzzy matching, keyboard navigation and the user's own completion settings come from
+the host rather than from a menu of ours. The ported part is the *content*: pages tagged
+`meta/template/slash`, named after the last component of their page name, exactly as upstream names
+them. `|^|` becomes the snippet's `$0`.
+
+`/h1`–`/h4` and `/task` are a different kind and are treated as one: they reshape the current line
+rather than insert at it, replacing whatever prefix it had instead of stacking onto it.
+
+**Mentions.** Completion, clicking and finding are a completion provider, a document link provider
+and a reference provider, so `@ada` gets Shift+F12 and the peek window for nothing. The Mention
+Inbox is a tree view beside Today and Backlinks. What was actually missing was never the widgets —
+the index already held identity objects and at-mention relations — it was that nothing above the
+index used them.
+
+**X-Ray.** Upstream's consistency lens — every range the indexer extracted, underlined, with its
+attributes on hover — is a text decoration and a hover provider. No webview. For a port it earns its
+place twice: it is the fastest way to check that we and SilverBullet read the same structure out of
+the same bytes, and it makes a gap self-diagnosing rather than something found by reading code.
+
+**Pickers.** Tag, Meta and Anything are `QuickPick` over the index. The Anything Picker is
+deliberately not a page picker with more rows: quick open already finds files, so this lists
+*objects* — tasks, headings, identities, tags — which is the half quick open cannot see.
 
 **Outlining.** VS Code folds, moves lines, indents and outdents, and its Outline view lists
 Markdown headings through the built-in extension's symbol provider. The one thing it cannot know is
@@ -252,6 +281,48 @@ weekly review is now something you edit rather than something you fork.
 **Syntax highlighting.** `syntax.define`'s markers are a runtime declaration, and VS Code's
 equivalent — a TextMate grammar with `injectTo` — is an install-time contribution. Same capability,
 different binding time. The renderer half of the same declaration works today, through the preview.
+
+## Ported in part, and where the seam is
+
+Three features cross the line between what the format says and what a host can show. Each is ported
+as far as the host allows, and the remainder is written down here rather than left to be found.
+
+**Transclusion.** `![[page]]`, `![[page#header]]` and `![[image.png|300]]` are *file* syntax — a
+vault from SilverBullet already contains them, and a page full of literal brackets is a page that
+has lost its content. The parser is upstream's, vendored with its own tests. Expansion happens
+before markdown-it parses, so an embedded page's headings and lists are real ones and any `${...}`
+it carries is answered as if written in place.
+
+The seam: the **preview** embeds, the **editor** keeps showing the source. VS Code cannot render
+inside a document, which is the loss `WHY.md` already records; transclusion does not change it.
+
+**Baked sections.** `<!--#lua EXPR -->` … `<!--/lua-->` keeps a directive and its rendered output
+side by side. The markers are HTML comments, so every other renderer ignores them and shows the
+table — which is the whole point: the file reads correctly on GitHub while staying re-runnable
+here. Marker syntax and the escaping rule are upstream's, vendored, because subtly wrong delimiters
+corrupt a page on the *next* update rather than merely rendering it oddly.
+
+The seam: baking is manual, as it is upstream. Nothing refreshes on its own, because that would
+mean rewriting files behind the user's back.
+
+**Page decoration.** `prefix`, `hide`, `tree.hide` and `tree.priority` are honoured in the pickers
+and completions we own, and the emoji prefix becomes an Explorer badge through a file decoration
+provider.
+
+The seam: `icon` and `cssClasses` have no host equivalent — Explorer icons come from the user's icon
+theme and there is no stylesheet to hook into — and **VS Code's own Quick Open cannot be decorated
+by an extension at all**. So a page marked `hide` stays reachable there. `hide` is a tidying tool
+here, never a privacy one.
+
+## Not ported, deliberately
+
+**Object Graph.** The only feature on the list that would require a webview, and with it message
+passing, state synchronisation and a content security policy — none of which the preview path needs
+today. It is also the feature every notes tool builds and few people use twice. Not a capability
+gap so much as a decision.
+
+**Virtual pages.** `TextDocumentContentProvider` would do it, and there is nothing to put in one
+yet. Infrastructure without a consumer, deferred until something asks.
 
 ## Tier 4 — indexed and not executed
 

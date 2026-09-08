@@ -56,14 +56,14 @@ SilverBullet's semantics *are* its implementation — `inComment`, inherited `it
 and loses the corners, silently. So the parser and extraction functions are **copied at a pinned
 commit and called**, not reproduced, and `npm run vendor:check` fails the build on any local edit.
 
-That makes conformance a proof rather than a sample: it is the same code, and **285 of upstream's
+That makes conformance a proof rather than a sample: it is the same code, and **298 of upstream's
 own assertions run against our copy** on every `npm test`.
 
 ### Getting started
 
 ```bash
 npm install
-npm run verify                      # typecheck, vendor integrity, schema pin, 525 tests
+npm run verify                      # typecheck, vendor integrity, schema pin, 625 tests
 npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
@@ -80,7 +80,7 @@ development, open `packages/vscode` in VS Code and press F5.
 ### Testing
 
 ```bash
-npm test                  # 525 headless tests, ~15s
+npm test                  # 625 headless tests, ~16s
 npm run test:integration  # 9 tests inside a real VS Code (downloads it once)
 npm run verify            # everything above, plus typecheck and the two guards
 ```
@@ -96,7 +96,7 @@ describes its source refuses rather than guessing.
 
 Two guards are structural rather than aspirational:
 
-* **`npm run vendor:check`** — hashes all 125 vendored files against the pinned commit, and fails
+* **`npm run vendor:check`** — hashes all 137 vendored files against the pinned commit, and fails
   if any imports from `packages/`.
 * **`npm run schema:check`** — records every frontmatter key and task attribute the system reads,
   and fails when the set grows. If a feature added a field to everyone's Markdown, that is a design

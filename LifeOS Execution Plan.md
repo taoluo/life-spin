@@ -415,7 +415,7 @@ no composite action can half-complete. Ported from LifeLoop's tested contracts:
   There is one: we vendor and call SilverBullet's extraction, and `indexMarkdown()` already returns
   objects without persisting. So extraction conformance is proved by construction instead —
   `vendor:check` hashes all 125 files against the pinned commit, and **28 of upstream's own test
-  files are vendored alongside the code they test**, running **285 assertions** against our copy on
+  files are vendored alongside the code they test**, running **298 assertions** against our copy on
   every `npm test`. Same code plus its author's own tests is a stronger argument than sampling a
   corpus, which only covers the corners someone thought to include.
 
