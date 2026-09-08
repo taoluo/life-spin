@@ -79,7 +79,7 @@ npx ovsx publish dist/lifeloop-*.vsix -p $OPEN_VSX_TOKEN
 ## Before publishing anything
 
 ```bash
-npm run verify                # typecheck, vendor integrity, schema pin, 514 tests
+npm run verify                # typecheck, vendor integrity, schema pin, 525 tests
 npm run test:integration      # 9 tests inside a real VS Code
 ```
 

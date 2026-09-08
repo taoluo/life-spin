@@ -151,6 +151,10 @@
       {
         "command": "lifeloop.moveOutdent",
         "title": "LifeLoop: Outdent Item"
+      },
+      {
+        "command": "lifeloop.newFromTemplate",
+        "title": "LifeLoop: New Page from Template"
       }
     ],
     "views": {

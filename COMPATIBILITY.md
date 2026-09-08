@@ -235,6 +235,20 @@ cannot know what is in someone's notes. A contributed command that listed the ot
 then removed: commands contributed at install time are enough, and a second way to reach them is
 complexity nobody asked for.
 
+**Page templates.** A first version: a template is a page under `Templates/`, and SilverBullet's
+own frontmatter keys are read as-is — `suggestedName`, `confirmName`, `openIfExists`, `command` —
+so a vault arriving from there does not need its templates rewritten. `|^|` places the cursor.
+
+The substitutions available without scripting are a fixed, small set (`${date.today()}`,
+`${week.start()}` and their neighbours), because a daily note has to work in a vault that never
+switched Space Lua on. Anything else is left as written, so a template using a full expression
+still reads as itself and the preview answers it when scripting is enabled.
+
+What this replaced matters as much as what it added: the daily note, the weekly review and the page
+an attached task gets were all shapes hardcoded in the commands that created them. They remain as
+fallbacks, so a vault with no templates behaves exactly as before — but the shape of your own
+weekly review is now something you edit rather than something you fork.
+
 **Syntax highlighting.** `syntax.define`'s markers are a runtime declaration, and VS Code's
 equivalent — a TextMate grammar with `injectTo` — is an install-time contribution. Same capability,
 different binding time. The renderer half of the same declaration works today, through the preview.

@@ -2,7 +2,9 @@ import * as vscode from "vscode";
 import {
   capture, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked, moveItem,
   setTaskAttribute, setProjectStatus, attachPageToTask, promotePage, freezeReview,
-  PROJECT_STATES, review, week, day, today, upcoming, type InboxItem, type Refusal,
+  PROJECT_STATES, review, week, day, today, upcoming,
+  templates, readTemplate, builtinTemplate, createFromTemplate,
+  type InboxItem, type Refusal, type PageTemplate,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import type { Node } from "./views.ts";
@@ -208,37 +210,92 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
   });
 
-  // 1.11 — the daily note: a log and somewhere to think.
-  on("lifeloop.openDaily", async () => {
-    const folder = lifeloop.config("journalFolder", "Journal");
-    const page = `${folder}/${day()}`;
-    if (!lifeloop.vault.exists(`${page}.md`)) {
-      lifeloop.vault.write(`${page}.md`, `# ${day()}\n\n## Log\n\n`);
-      await after();
+  /**
+   * Open a page a template describes, creating it if it is not there.
+   *
+   * A vault's own `Templates/Daily` wins over the built-in shape, which is the
+   * point: the thing people most want to change about a daily note is what is in
+   * it, and that should not require editing an extension.
+   */
+  const fromTemplate = async (
+    kind: "daily" | "review" | "project" | "page",
+    named: string,
+    suggested?: string,
+  ) => {
+    const vaultTemplate = readTemplate(lifeloop.vault, `Templates/${named}`);
+    const template = vaultTemplate ?? builtinTemplate(kind);
+    const name = suggested ?? template.suggestedName;
+    if (!name) return;
+
+    const result = await createFromTemplate(lifeloop.vault, template, name);
+    if (!result.ok) {
+      vscode.window.showWarningMessage(`LifeLoop: ${result.message}`);
+      return;
     }
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
+    if (!result.value.existed) await after();
+
+    const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(result.value.page));
+    const editor = await vscode.window.showTextDocument(document);
+    // Land the caret where the template asked, which is the difference between
+    // saving typing and saving typing *and* a click.
+    if (result.value.cursor !== null) {
+      const at = document.positionAt(result.value.cursor);
+      editor.selection = new vscode.Selection(at, at);
+    }
+  };
+
+  // 1.11 — the daily note: a log and somewhere to think.
+  on("lifeloop.openDaily", () =>
+    fromTemplate("daily", "Daily", `${lifeloop.config("journalFolder", "Journal")}/${day()}`),
+  );
+
+  /** Any template the vault defines, offered by name. */
+  on("lifeloop.newFromTemplate", async () => {
+    const available: PageTemplate[] = [
+      ...templates(lifeloop.vault),
+      ...(["page", "project", "daily", "review"] as const).map(builtinTemplate),
+    ];
+    const picked = await vscode.window.showQuickPick(
+      available.map((t) => ({
+        label: t.command ?? t.page.replace(/^Templates\//, "").replace(/^builtin:/, ""),
+        detail: t.page.startsWith("builtin:") ? "built in" : t.page,
+        template: t,
+      })),
+      { placeHolder: "Which template?" },
+    );
+    if (!picked) return;
+
+    const template = picked.template;
+    let name = template.suggestedName ?? "";
+    if (template.confirmName || !name) {
+      const answer = await vscode.window.showInputBox({
+        prompt: "Name for the new page",
+        value: name,
+      });
+      if (answer === undefined) return;
+      name = answer;
+    }
+    const result = await createFromTemplate(lifeloop.vault, template, name);
+    if (!result.ok) {
+      vscode.window.showWarningMessage(`LifeLoop: ${result.message}`);
+      return;
+    }
+    if (!result.value.existed) await after();
+    const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(result.value.page));
+    const editor = await vscode.window.showTextDocument(document);
+    if (result.value.cursor !== null) {
+      const at = document.positionAt(result.value.cursor);
+      editor.selection = new vscode.Selection(at, at);
+    }
   });
 
   // 1.12 — the Weekly Review, live until frozen.
-  on("lifeloop.openReview", async () => {
-    const folder = lifeloop.config("reviewFolder", "Reviews");
-    const range = week(day());
-    const page = `${folder}/${range.start}`;
-    if (!lifeloop.vault.exists(`${page}.md`)) {
-      lifeloop.vault.write(`${page}.md`, [
-        "---", `week: ${range.start}`, "---", "",
-        `# Week of ${range.start}`, "",
-        "## Completed", "", "${lifeloop.review.completed()}", "",
-        "## Open", "", "${lifeloop.review.stillOpen()}", "",
-        "## Active Projects", "", "${lifeloop.review.activeProjects()}", "",
-        "## Waiting", "", "${lifeloop.review.waiting()}", "",
-        "## Inbox", "", "${lifeloop.review.inbox()}", "",
-        "## Reflection", "", "",
-      ].join("\n"));
-      await after();
-    }
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
-  });
+  on("lifeloop.openReview", () =>
+    fromTemplate(
+      "review", "Review",
+      `${lifeloop.config("reviewFolder", "Reviews")}/${week(day()).start}`,
+    ),
+  );
 
   on("lifeloop.freezeReview", async () => {
     const editor = vscode.window.activeTextEditor;

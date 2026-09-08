@@ -39,6 +39,12 @@ already outlines Markdown headings. What it cannot know is that a list item owns
 under it — so its own `Alt+Down` on a parent leaves the children behind. `Alt+↑/↓/←/→` here take
 the whole subtree, and tasks appear in the Outline view alongside headings.
 
+**Templates are pages.** The daily note and the weekly review were shapes written into the
+extension; now they are pages you can edit. Put a `Templates/Daily` in your vault and it wins over
+the built-in one — because the thing people most want to change about a daily note is what is in
+it, and that should not need a code change. `suggestedName`, `confirmName` and `openIfExists` in
+frontmatter, `${date.today()}` in names and bodies, and `|^|` for where the cursor lands.
+
 **The loop.** `LifeLoop: Capture` writes one line to your Inbox without navigating away.
 `Process Inbox` links it to a project — keeping the wording where it happened — or turns it into a
 task. Today shows overdue, due and scheduled work in disjoint sections, and ticking a row stamps
