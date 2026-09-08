@@ -6,7 +6,7 @@
  * the editor — is not faked here, because a fake that deep tests the fake.
  */
 export enum TreeItemCollapsibleState { None = 0, Collapsed = 1, Expanded = 2 }
-export enum CompletionItemKind { File = 16, Keyword = 13 }
+export enum CompletionItemKind { File = 16, Keyword = 13, Snippet = 14 }
 export enum DiagnosticSeverity { Error = 0, Warning = 1, Information = 2, Hint = 3 }
 
 export class ThemeIcon { constructor(public id: string) {} }
@@ -37,8 +37,10 @@ export const SymbolKind = { Field: 7, Event: 23 };
 export class CodeLens { constructor(public range: any, public command?: any) {} }
 export class Hover { constructor(public contents: any, public range?: any) {} }
 export class DocumentLink { constructor(public range: any, public target?: any) {} }
+export class SnippetString { constructor(public value = "") {} }
 export class CompletionItem {
-  insertText?: string; detail?: string;
+  insertText?: string | SnippetString; detail?: string;
+  documentation?: any; range?: any; sortText?: string; command?: any;
   constructor(public label: string, public kind?: CompletionItemKind) {}
 }
 export class Diagnostic {

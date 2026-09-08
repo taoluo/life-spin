@@ -167,6 +167,10 @@
       {
         "command": "lifeloop.updateBakedSections",
         "title": "LifeLoop: Update Baked Sections"
+      },
+      {
+        "command": "lifeloop.reprefixLine",
+        "title": "LifeLoop: Reshape Current Line"
       }
     ],
     "views": {
@@ -221,6 +225,12 @@
           "command": "lifeloop.revealTask",
           "when": "viewItem == lifeloopTask",
           "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lifeloop.reprefixLine",
+          "when": "false"
         }
       ]
     },

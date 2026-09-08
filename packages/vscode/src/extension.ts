@@ -10,6 +10,7 @@ import { registerApple } from "./apple.ts";
 import { extendMarkdownIt } from "./preview.ts";
 import { codeLenses, hovers, registerQueryCommands } from "./query-lens.ts";
 import { registerLua, renderSpaceLua, renderExpression, renderSpaceStyle } from "./lua.ts";
+import { register as registerSlash } from "./slash.ts";
 
 let lifeloop: LifeLoop | undefined;
 
@@ -66,6 +67,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   );
   registerQueryCommands(() => lifeloop, context);
   registerLua(() => lifeloop, context);
+  registerSlash(() => lifeloop, context);
 
   const diagnostics = vscode.languages.createDiagnosticCollection("lifeloop");
   context.subscriptions.push(diagnostics);
