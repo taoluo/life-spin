@@ -179,6 +179,10 @@
       {
         "command": "lifeloop.sign",
         "title": "LifeLoop: Sign This Block"
+      },
+      {
+        "command": "lifeloop.toggleXray",
+        "title": "LifeLoop: Toggle X-Ray"
       }
     ],
     "views": {

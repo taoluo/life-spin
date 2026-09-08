@@ -12,6 +12,7 @@ import { codeLenses, hovers, registerQueryCommands } from "./query-lens.ts";
 import { registerLua, renderSpaceLua, renderExpression, renderSpaceStyle } from "./lua.ts";
 import { register as registerSlash } from "./slash.ts";
 import { register as registerMentions } from "./mentions.ts";
+import { register as registerXray } from "./xray.ts";
 
 let lifeloop: LifeLoop | undefined;
 
@@ -70,6 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   registerLua(() => lifeloop, context);
   registerSlash(() => lifeloop, context);
   registerMentions(() => lifeloop, context);
+  registerXray(() => lifeloop, context);
 
   const diagnostics = vscode.languages.createDiagnosticCollection("lifeloop");
   context.subscriptions.push(diagnostics);
