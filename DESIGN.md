@@ -200,6 +200,24 @@ not part of what those views mean. Projection logic lives in `lifeloop.views.*`,
 and knows nothing about where it is displayed. The one thing a host must provide is Markdown
 rendering, since that is what keeps a projected checkbox writing back to its source.
 
+**Projection identity.** Every actionable row a projection renders carries an opaque handle to its
+canonical source. Presentation is never identity: display text, sort order, grouping and position
+in the view may not be used to work out what a row points at. Before a write, the source is
+re-resolved from that handle and checked against the state the projection recorded when it rendered
+the row; a stale, moved or ambiguous source produces no write.
+
+This is stated here rather than in a view, because it binds every surface that could exist later —
+Today and Upcoming now, and a table, a card, a board or a tool result if any of those is ever built.
+A view that has to reconstruct which task a click meant has already lost.
+
+Note how this sits against the ceiling above, because the two look contradictory and are not. There,
+reacting to a host event, the only text available came from the index and may already have been
+replaced — matching on it buys false confidence, so the guarantee stops at what the event asserts.
+Here the projection read the source itself when it rendered, so what it holds is a receipt for what
+the user was shown, and comparing it back detects that the source moved underneath. Identity comes
+from the ref in both cases. The recorded state is only ever a staleness check, never a way to find
+a task.
+
 **Action representation.** Inline tasks are the canonical default. Richer task entities may exist
 one day for work that accumulates durable state — notes, artifacts, dependencies, participants,
 execution history, results. Ordinary tasks must pay nothing for that possibility: no ids, no
@@ -255,10 +273,17 @@ application can delete it without telling anyone, so a stored id is a claim that
 answer is never to trust it on sight — every run asks the owner first, and a reminder that has been
 deleted over there has its mark erased rather than resurrected.
 
-Calendar exposes no modification date on an event at all, so that comparison is impossible there and
-the weaker rule applies: an event is pushed when the page is newer than this client's last
-successful push. An edit made in Calendar can be overwritten by a later edit here. That asymmetry is
-the price of an application that will not say when it was last touched.
+Calendar's *scripting dictionary* exposes no modification date on an event — checked, not assumed —
+so that comparison is impossible over the route this uses, and the weaker rule applies: an event is
+pushed when the page is newer than this client's last successful push. An edit made in Calendar can
+be overwritten by a later edit here.
+
+That asymmetry is the price of the interface, not a fact about calendars, and the distinction is
+worth keeping straight because it decides whether the weaker rule is permanent. It is not.
+EventKit's `EKCalendarItem` carries `lastModifiedDate` for events and reminders alike, so a bridge
+built on that gets the same comparison Reminders already gets here. A limitation of one interface
+should not be recorded as a property of the domain — the next implementation would inherit a
+constraint that was never true.
 
 **Reading a completed reminder back into LifeLoop.** The one reverse direction worth having, since
 people tick things on a watch. Still not built — but two of its three prerequisites arrived with the
