@@ -13,7 +13,11 @@ class JavaScriptArrayTable extends LuaTable {
   }
 
   async query(query: LuaCollectionQuery, env: LuaEnv, sf: LuaStackFrame, config?: any): Promise<any> {
-    const values = Array.from({ length: this.length }, (_, index) => this.rawGet(index + 1));
+    const values = this.empty()
+      ? []
+      : this.length > 0
+        ? Array.from({ length: this.length }, (_, index) => this.rawGet(index + 1))
+        : [this];
     return jsToLuaValue(await new ArrayQueryCollection(values).query(query, env, sf, config));
   }
 }

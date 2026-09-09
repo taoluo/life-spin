@@ -70,6 +70,19 @@ describe("what a script can read", () => {
     host.cleanup();
   });
 
+  test.each([
+    ["empty", "local rows = lifeloop.people({limit = 0})"],
+    ["emptied", "local rows = lifeloop.people(); rows[1] = nil"],
+  ])("a record-shaped %s projection array is queried as one record", async (_name, setup) => {
+    const host = await hostFor({ "Alice.md": "---\ntags: person\n---\n" });
+    expect(await runLua(
+      `${setup}; rows.note = 'kept'; return query[[ from row = rows ]]`,
+      host,
+      "block",
+    )).toEqual({ ok: true, value: [{ note: "kept" }] });
+    host.cleanup();
+  });
+
   test("space.readPage reads a page, and a missing one is an error not a crash", async () => {
     const host = await hostFor({ "W.md": "hello\n" });
     expect(await runLua("space.readPage('W')", host)).toMatchObject({
