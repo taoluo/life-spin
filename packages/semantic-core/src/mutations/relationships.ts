@@ -36,7 +36,7 @@ export async function logInteraction(
   for (const name of people) {
     const source = personSource(vault, name);
     if (!source) return refuse("missing", `no such Person page: ${name}`);
-    expected.set(source.path, source.text);
+    if (!expected.has(source.path)) expected.set(source.path, source.text);
   }
   if (!validDate(date)) return refuse("invalid", `not a date: ${date}`);
   if (!INTERACTION_KINDS.includes(kind)) return refuse("invalid", `unsupported interaction: ${kind}`);
@@ -54,7 +54,7 @@ export async function logInteraction(
   const next = `${body}${body.length && !body.endsWith("\n") ? eol : ""}${line}${eol}`;
   const cs = changeSet(`log ${kind} with ${people.join(", ")}`);
   for (const [guardedPath, guardedText] of expected) cs.expected.set(guardedPath, guardedText);
-  cs.expected.set(path, before);
+  if (!cs.expected.has(path)) cs.expected.set(path, before);
   cs.writes.set(path, next);
   return applied(vault, cs, { page, line, people });
 }

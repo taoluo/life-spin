@@ -77,4 +77,58 @@ describe("relationship mutations", () => {
     expect(result).toMatchObject({ ok: false, reason: "stale" });
     expect(inner.exists("Journal/2026-09-09.md")).toBe(false);
   });
+
+  test("does not replace a task receipt when its source is the selected Person", async () => {
+    const original = "---\ntags: person\n---\n* [ ] Call [[People/Alice]]\n";
+    const changed = "---\ntags: person\n---\n* [ ] Different task\n";
+    const journal = "existing\n";
+    const inner = MemoryVault.of({
+      "People/Alice.md": original,
+      "Journal/2026-09-09.md": journal,
+    });
+    let raced = false;
+    const vault: Vault = {
+      root: inner.root, list: () => inner.list(), read: (path) => inner.read(path),
+      write: (path, content) => inner.write(path, content), remove: (path) => inner.remove(path),
+      exists: (path) => {
+        if (!raced && path === "People/Alice.md") {
+          raced = true;
+          void inner.write(path, changed);
+        }
+        return inner.exists(path);
+      },
+    };
+    expect(await logInteraction(
+      vault, "People/Alice", "2026-09-09", "call", "", "Journal",
+      new Map([["People/Alice.md", original]]),
+    )).toMatchObject({ ok: false, reason: "stale" });
+    expect(inner.read("People/Alice.md")).toBe(changed);
+    expect(inner.read("Journal/2026-09-09.md")).toBe(journal);
+  });
+
+  test("does not replace a task receipt when its source is today's Journal", async () => {
+    const original = "* [ ] Call [[People/Alice]]\n";
+    const changed = "* [ ] Different task\n";
+    const inner = MemoryVault.of({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Journal/2026-09-09.md": original,
+    });
+    let raced = false;
+    const vault: Vault = {
+      root: inner.root, list: () => inner.list(), read: (path) => inner.read(path),
+      write: (path, content) => inner.write(path, content), remove: (path) => inner.remove(path),
+      exists: (path) => {
+        if (!raced && path === "Journal/2026-09-09.md") {
+          raced = true;
+          void inner.write(path, changed);
+        }
+        return inner.exists(path);
+      },
+    };
+    expect(await logInteraction(
+      vault, "People/Alice", "2026-09-09", "call", "", "Journal",
+      new Map([["Journal/2026-09-09.md", original]]),
+    )).toMatchObject({ ok: false, reason: "stale" });
+    expect(inner.read("Journal/2026-09-09.md")).toBe(changed);
+  });
 });
