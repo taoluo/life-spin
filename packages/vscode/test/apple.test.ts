@@ -123,15 +123,17 @@ describe("restricted Pre-meeting Brief", () => {
     });
   }
 
-  test("requests one sealed UID and opens one complete brief", async () => {
+  test("requests one sealed UID and opens one complete navigable brief", async () => {
     vscode.workspace.settings["lifeloop.calendarName"] = "Personal";
-    const interaction = "intro\r\n* Called [[People/Alice]] [interaction: call]\r\n";
+    const anchoredLine = '* [ ] Meet [[People/Alice]] $meeting [event: "E1"]';
+    const interaction = "intro\r\n* Called [[People/Alice]] [interaction: call]\r\n" +
+      "* Met [[People/Alice]] [interaction: coffee] $met\r\n";
     const { lifeloop, dir } = await workspaceWith({
-      ...files(),
+      ...files(anchoredLine),
       "Journal/2026-09-01.md": interaction,
     });
     const source = taskTarget(lifeloop, {
-      handle: { ref: "Work@0", expectedText: line, expectedState: " " },
+      handle: { ref: "Work@meeting", expectedText: anchoredLine, expectedState: " " },
     })!;
     const readExact = vi.fn(async (): Promise<CalendarExactRead> => ({ kind: "found", event }));
     const open = vi.fn();
@@ -144,6 +146,8 @@ describe("restricted Pre-meeting Brief", () => {
       expect(open.mock.calls[0][0]).toContain(
         `[[Journal/2026-09-01@${interaction.indexOf("* Called")}]]`,
       );
+      expect(open.mock.calls[0][0]).toContain("[[Journal/2026-09-01@met]]");
+      expect(open.mock.calls[0][0]).toContain("[[Work@meeting]]");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

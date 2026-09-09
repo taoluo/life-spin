@@ -1,5 +1,5 @@
 import {
-  runProjection, projectionNames, projections, relationshipDate, relationshipProjectionNames,
+  personContext, runProjection, projectionNames, projections, relationshipDate, relationshipProjectionNames,
   day, type ProjectionName, type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
@@ -222,9 +222,17 @@ export function toNavigableMarkdown(
     if (column === "people" && Array.isArray(value)) {
       return value.map((person) => personLink(lifeloop, String(person))).join(", ");
     }
-    if (column === "ref" && typeof value === "string") return sourceLink(lifeloop, value);
+    if (column === "ref" && typeof value === "string") {
+      return sourceLink(lifeloop, value, typeof row.page === "string" ? row.page : undefined);
+    }
     if (column === "openFollowupRefs" && Array.isArray(value)) {
-      return value.map((ref) => sourceLink(lifeloop, String(ref))).join(", ");
+      const followups = typeof row.person === "string"
+        ? personContext(lifeloop.store, row.person)?.openFollowups ?? [] : [];
+      return value.map((ref) => {
+        const matches = followups.filter((task) => String(task.ref) === String(ref));
+        const page = matches.length === 1 ? String(matches[0].page ?? "") : undefined;
+        return sourceLink(lifeloop, String(ref), page);
+      }).join(", ");
     }
     return cell(row, column);
   });

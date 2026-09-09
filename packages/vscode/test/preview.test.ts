@@ -318,21 +318,61 @@ describe("the same query on three surfaces", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("adds Person and CRLF source links only to the full-result renderer", async () => {
+  test("adds Person, CRLF, and anchored source links only to full results", async () => {
     const { runQueryBlock, toMarkdown, toNavigableMarkdown } = await import("../src/preview.ts");
-    const sourceText = "intro\r\n* Coffee [[People/Alice]] [interaction: coffee]\r\n";
+    const sourceText = "intro\r\n* Coffee [[People/Alice]] [interaction: coffee]\r\n" +
+      "* Met [[People/Alice]] [interaction: meeting] $met\r\n";
     const { lifeloop, dir } = await workspaceWith({
       "People/Alice.md": "---\ntags: person\n---\n",
       "Journal/2026-09-09.md": sourceText,
+      "Work.md": "* [ ] Follow up [[People/Alice]] $followup\n",
     });
     try {
-      const outcome = runQueryBlock(lifeloop, "interactions\nfields: ref, people");
+      const outcome = runQueryBlock(lifeloop, "interactions\nfields: ref, page, people");
       const raw = toMarkdown(outcome);
       const full = toNavigableMarkdown(lifeloop, outcome, "interactions");
       expect(raw).not.toContain("file://");
       expect(raw).not.toContain("[[Journal/");
       expect(full).toContain(`file://${join(dir, "People/Alice.md")}`);
       expect(full).toContain(`[[Journal/2026-09-09@${sourceText.indexOf("* Coffee")}]]`);
+      expect(full).toContain("[[Journal/2026-09-09@met]]");
+
+      const context = runQueryBlock(lifeloop, "person-context\nperson: People/Alice\nfields: openFollowupRefs");
+      expect(toMarkdown(context)).toContain("followup");
+      expect(toMarkdown(context)).not.toContain("[[Work@followup]]");
+      expect(toNavigableMarkdown(lifeloop, context, "person-context")).toContain("[[Work@followup]]");
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("leaves missing, duplicate, and ambiguous anchored sources as text", async () => {
+    const { runQueryBlock, toMarkdown, toNavigableMarkdown } = await import("../src/preview.ts");
+    const anchored = "* Met [[People/Alice]] [interaction: meeting] $met\r\n";
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Journal/2026-09-08.md": anchored,
+      "Journal/2026-09-09.md": anchored,
+      "Work/A.md": "* [ ] One [[People/Alice]] $same\n",
+      "Work/B.md": "* [ ] Two [[People/Alice]] $same\n",
+      "me.md": "unrelated page\n",
+      "sam.md": "unrelated page\n",
+    });
+    try {
+      const interaction = runQueryBlock(lifeloop, "interactions\nfields: ref");
+      const initial = toNavigableMarkdown(lifeloop, interaction, "interactions");
+      expect(initial).toContain("[[Journal/2026-09-09@met]]");
+      expect(initial).toContain("[[Journal/2026-09-08@met]]");
+
+      await lifeloop.vault.write("Journal/2026-09-09.md", anchored.replace(" $met", ""));
+      expect(toNavigableMarkdown(lifeloop, interaction, "interactions")).not.toContain("[[met]]");
+      await lifeloop.vault.write("Journal/2026-09-09.md", `${anchored}* Duplicate $met\r\n`);
+      expect(toNavigableMarkdown(lifeloop, interaction, "interactions"))
+        .not.toContain("[[Journal/2026-09-09@met]]");
+
+      const context = runQueryBlock(lifeloop, "person-context\nperson: People/Alice\nfields: openFollowupRefs");
+      expect(toMarkdown(context)).toContain("same,same");
+      const full = toNavigableMarkdown(lifeloop, context, "person-context");
+      expect(full).not.toContain("[[same]]");
+      expect(full).not.toContain("[[Work/");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

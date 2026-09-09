@@ -28,7 +28,7 @@ const markdownText = (value: unknown): string => String(value ?? "")
 /** A temporary, read-only projection of authoritative Calendar and Markdown facts. */
 type BriefLinks = {
   person: (person: string, label: string) => string;
-  source: (ref: string) => string;
+  source: (ref: string, page: string) => string;
 };
 
 export function renderPreMeetingBrief(
@@ -50,7 +50,7 @@ export function renderPreMeetingBrief(
     const name = person.split("/").at(-1) ?? person;
     const last = context.lastInteraction;
     const followups = links && context.openFollowups.length
-      ? ` · ${context.openFollowups.map((task) => links.source(String(task.ref))).join(", ")}`
+      ? ` · ${context.openFollowups.map((task) => links.source(String(task.ref), String(task.page))).join(", ")}`
       : "";
     lines.push(
       "",
@@ -63,7 +63,7 @@ export function renderPreMeetingBrief(
       lines.push("- Recent context:");
       for (const entry of context.interactions.slice(0, 5)) {
         lines.push(`  - ${entry.date} · ${markdownText(entry.kind)} · ${markdownText(entry.text)}` +
-          (links ? ` · ${links.source(entry.ref)}` : ""));
+          (links ? ` · ${links.source(entry.ref, entry.page)}` : ""));
       }
     }
   }
@@ -199,7 +199,7 @@ export async function openPreMeetingBrief(
   }
   const markdown = renderPreMeetingBrief(result.event, contexts as PersonContext[], {
     person: (person, label) => personLink(lifeloop, person, label),
-    source: (ref) => sourceLink(lifeloop, ref),
+    source: (ref, page) => sourceLink(lifeloop, ref, page),
   });
   const open = options.open ?? (async (content: string) => {
     const document = await vscode.workspace.openTextDocument({ content, language: "markdown" });
