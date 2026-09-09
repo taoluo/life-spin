@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import {
   Store, indexVault, query,
-  day, projectionNames, runProjection, projections, CONTRACT_VERSION,
+  projectionNames, runProjection, projections, CONTRACT_VERSION, type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 
 const [, , command, ...rest] = process.argv;
@@ -47,21 +47,23 @@ switch (command) {
     // Phase 3: the CLI walks the contract table rather than keeping its own list.
     // That is what makes it a second consumer worth having — a hand-rolled switch
     // here would let the two clients drift and prove nothing.
-    const args = {
-      date: value("date") ?? day(),
-      days: Number(value("days") ?? 14),
-      project: value("project") ?? "",
-      page: value("page") ?? (what === "backlinks" ? value("to") : ""),
-      person: value("person"),
-      from: value("from"),
-      to: value("to"),
-      kind: value("kind"),
-    };
-    emit(
-      (projectionNames as string[]).includes(what)
-        ? runProjection(store, what as any, args)
-        : query(store, { source: what, limit: Number(value("limit") ?? 100) }).rows,
-    );
+    const args = Object.fromEntries([
+      ["date", value("date")],
+      ["days", value("days") === undefined ? undefined : Number(value("days"))],
+      ["project", value("project")],
+      ["page", value("page") ?? (what === "backlinks" ? value("to") : undefined)],
+      ["person", value("person")], ["from", value("from")], ["to", value("to")],
+      ["kind", value("kind")],
+    ].filter(([, v]) => v !== undefined)) as ProjectionArgs;
+    const rawLimit = value("limit");
+    const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+      throw new Error(`--limit must be a non-negative integer, got ${rawLimit}`);
+    }
+    const result = (projectionNames as string[]).includes(what)
+      ? runProjection(store, what as any, args)
+      : query(store, { source: what, limit: limit ?? 100 }).rows;
+    emit(limit !== undefined && Array.isArray(result) ? result.slice(0, limit) : result);
     store.close();
     break;
   }

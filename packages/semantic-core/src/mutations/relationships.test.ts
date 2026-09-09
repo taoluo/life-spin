@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MemoryVault } from "../vault.ts";
+import { MemoryVault, type Vault } from "../vault.ts";
 import { createReconnectTask, logInteraction } from "./relationships.ts";
 
 describe("relationship mutations", () => {
@@ -47,5 +47,34 @@ describe("relationship mutations", () => {
     expect(await logInteraction(vault, [], "2026-09-09", "call"))
       .toMatchObject({ ok: false, reason: "invalid" });
     expect(vault.list()).toEqual(["People/Alice.md"]);
+  });
+
+  test("guards selected People and caller-supplied task source in the final change set", async () => {
+    const inner = MemoryVault.of({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Work.md": "* [ ] Call [[People/Alice]]\n",
+    });
+    let raced = false;
+    const vault: Vault = {
+      root: inner.root,
+      list: () => inner.list(),
+      read: (path) => inner.read(path),
+      write: (path, content) => inner.write(path, content),
+      remove: (path) => inner.remove(path),
+      exists: (path) => {
+        if (!raced && path === "Journal/2026-09-09.md") {
+          raced = true;
+          void inner.write("People/Alice.md", "---\ntags: note\n---\n");
+          void inner.write("Work.md", "* [ ] Changed [[People/Alice]]\n");
+        }
+        return inner.exists(path);
+      },
+    };
+    const result = await logInteraction(
+      vault, "People/Alice", "2026-09-09", "call", "", "Journal",
+      new Map([["Work.md", "* [ ] Call [[People/Alice]]\n"]]),
+    );
+    expect(result).toMatchObject({ ok: false, reason: "stale" });
+    expect(inner.exists("Journal/2026-09-09.md")).toBe(false);
   });
 });

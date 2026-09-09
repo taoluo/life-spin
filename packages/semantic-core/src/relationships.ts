@@ -13,6 +13,8 @@ export type Interaction = {
   offset: number;
 };
 
+export type InteractionRow = Omit<Interaction, "offset">;
+
 export type PersonContext = {
   person: LifeloopObject;
   interactions: Interaction[];
@@ -48,7 +50,7 @@ export type ReconnectRow = {
 
 export type PersonContextRow = PersonRow & {
   openFollowupRefs: string[];
-  recentInteractions: Interaction[];
+  recentInteractions: InteractionRow[];
 };
 
 export type BirthdaySignal = {
@@ -58,27 +60,30 @@ export type BirthdaySignal = {
   daysUntil: number;
 };
 
-const isoDate = (value: unknown): string | null => {
+export const relationshipDate = (value: unknown): string | null => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null;
 };
 
-const pageDate = (page: LifeloopObject): string | null => {
+export const pageDate = (page: LifeloopObject): string | null => {
   const journal = String(page.ref).startsWith("Journal/") ||
     (page.itags as string[] | undefined)?.includes("journal");
   if (!journal) return null;
-  const declared = isoDate(page.date);
+  const declared = relationshipDate(page.date);
   if (declared) return declared;
   const name = String(page.ref).split("/").at(-1);
-  return isoDate(name);
+  return relationshipDate(name);
 };
 
-const cadence = (value: unknown): number | undefined => {
+export const cadence = (value: unknown): number | undefined => {
   const match = typeof value === "string" ? /^(\d+)d$/.exec(value.trim()) : null;
   if (!match) return undefined;
   const days = Number(match[1]);
-  return days > 0 ? days : undefined;
+  const probe = new Date("9999-12-31T00:00:00Z");
+  probe.setUTCDate(probe.getUTCDate() + days);
+  return days > 0 && Number.isSafeInteger(days) && Number.isFinite(probe.getTime())
+    ? days : undefined;
 };
 
 const strings = (value: unknown): string[] =>
@@ -86,14 +91,14 @@ const strings = (value: unknown): string[] =>
     .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     .map((item) => item.trim());
 
-const birthday = (value: unknown): string | undefined => {
+export const birthday = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const raw = value.trim();
   const match = /^(?:(\d{4})-)?(\d{2})-(\d{2})$/.exec(raw);
   if (!match) return undefined;
   const year = match[1] ?? "2000"; // leap year keeps 02-29 valid as an annual fact
   const date = `${year}-${match[2]}-${match[3]}`;
-  return isoDate(date) ? raw : undefined;
+  return relationshipDate(date) ? raw : undefined;
 };
 
 const nextBirthday = (value: string, from: string): string | undefined => {
@@ -101,7 +106,7 @@ const nextBirthday = (value: string, from: string): string | undefined => {
   let year = Number(from.slice(0, 4));
   // A leap-day birthday may need to skip several years; it never moves to Feb 28.
   for (let attempts = 0; attempts < 8; attempts++, year++) {
-    const candidate = isoDate(`${year}-${monthDay}`);
+    const candidate = relationshipDate(`${year}-${monthDay}`);
     if (candidate && candidate >= from) return candidate;
   }
   return undefined;
@@ -186,13 +191,14 @@ export function personRows(store: Store): PersonRow[] {
   return people(store).map((person) => {
     const name = String(person.ref);
     const context = personContext(store, name)!;
+    const born = birthday(person.birthday);
     return {
       person: name,
       groups: strings(person.groups),
-      birthday: birthday(person.birthday),
-      contactEveryDays: context.cadenceDays,
-      lastInteractionDate: context.lastInteraction?.date,
-      reconnectOn: context.reconnectOn,
+      ...(born ? { birthday: born } : {}),
+      ...(context.cadenceDays !== undefined ? { contactEveryDays: context.cadenceDays } : {}),
+      ...(context.lastInteraction ? { lastInteractionDate: context.lastInteraction.date } : {}),
+      ...(context.reconnectOn ? { reconnectOn: context.reconnectOn } : {}),
       openFollowups: context.openFollowups.length,
     };
   }).sort((a, b) => a.person.localeCompare(b.person));
@@ -201,13 +207,13 @@ export function personRows(store: Store): PersonRow[] {
 export function interactionRows(
   store: Store,
   filter: { person?: string; from?: string; to?: string; kind?: string } = {},
-): Interaction[] {
+): InteractionRow[] {
   return interactions(store).filter((entry) =>
     (!filter.person || entry.people.includes(filter.person)) &&
     (!filter.from || entry.date >= filter.from) &&
     (!filter.to || entry.date <= filter.to) &&
     (!filter.kind || entry.kind === filter.kind)
-  );
+  ).map(({ offset: _offset, ...entry }) => entry);
 }
 
 export function reconnectRows(store: Store, date: string): ReconnectRow[] {
@@ -215,7 +221,7 @@ export function reconnectRows(store: Store, date: string): ReconnectRow[] {
     person: signal.person,
     kind: signal.kind,
     due: signal.due,
-    lastInteractionDate: signal.lastInteraction?.date,
+    ...(signal.lastInteraction ? { lastInteractionDate: signal.lastInteraction.date } : {}),
   }));
 }
 
@@ -226,13 +232,13 @@ export function personContextRows(store: Store, person: string): PersonContextRo
   return [{
     ...row,
     openFollowupRefs: context.openFollowups.map((task) => String(task.ref)),
-    recentInteractions: context.interactions.slice(0, 10),
+    recentInteractions: context.interactions.slice(0, 10).map(({ offset: _offset, ...entry }) => entry),
   }];
 }
 
 /** Annual Person facts due from `date` through the configured look-ahead. */
 export function birthdaySignals(store: Store, date: string, days: number): BirthdaySignal[] {
-  if (!isoDate(date) || !Number.isInteger(days) || days < 0) return [];
+  if (!relationshipDate(date) || !Number.isInteger(days) || days < 0) return [];
   const signals: BirthdaySignal[] = [];
   for (const row of personRows(store)) {
     if (!row.birthday) continue;

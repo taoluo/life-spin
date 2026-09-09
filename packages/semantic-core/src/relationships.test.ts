@@ -79,6 +79,55 @@ describe("personal relationship facts", () => {
     x.done();
   });
 
+  test("rejects invalid relationship arguments without tightening legacy projections", async () => {
+    const x = await indexed({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Journal/2026-09-09.md": "* Coffee [[People/Alice]] [interaction: coffee]\n",
+    });
+    expect(() => runProjection(x.store, "people", { person: "People/Alice" })).toThrow("does not accept person");
+    expect(() => runProjection(x.store, "interactions", { person: "People/Missing" })).toThrow("no such Person");
+    expect(() => runProjection(x.store, "interactions", { from: "nope" })).toThrow("not an ISO date");
+    expect(() => runProjection(x.store, "interactions", { from: "2026-09-10", to: "2026-09-09" })).toThrow("after to");
+    expect(() => runProjection(x.store, "interactions", { kind: "" })).toThrow("non-empty");
+    expect(() => runProjection(x.store, "reconnect", { date: "2026-02-31" })).toThrow("not an ISO date");
+    expect(() => runProjection(x.store, "person-context", { person: "People/Missing" })).toThrow("no such Person");
+    expect(() => runProjection(x.store, "open", { date: "legacy-extra-is-ignored" })).not.toThrow();
+    x.done();
+  });
+
+  test("freezes exact public rows, custom kinds, bounds, and null-first ordering", async () => {
+    const history = Array.from({ length: 12 }, (_, i) =>
+      `* Coffee ${i} [[People/Alice]] [interaction: coffee]`).join("\n");
+    const x = await indexed({
+      "People/Alice.md": "---\ntags: person\ncontact-every: 999999999999999999999999999999d\n---\n",
+      "People/Bob.md": "---\ntags: person\ncontact-every: 30d\n---\n",
+      "People/Carol.md": "---\ntags: person\ncontact-every: 30d\n---\n",
+      "Journal/2026-09-09.md": `${history}\n`,
+      "Journal/2026-07-01.md": "* Called [[People/Carol]] [interaction: call]\n",
+    });
+    expect(() => personRows(x.store)).not.toThrow();
+    const peopleRows = personRows(x.store);
+    expect(Object.keys(peopleRows[0])).toEqual(["person", "groups", "lastInteractionDate", "openFollowups"]);
+    expect(peopleRows[0]).not.toHaveProperty("birthday");
+    expect(peopleRows[0]).not.toHaveProperty("contactEveryDays");
+
+    const rows = interactionRows(x.store, { kind: "coffee" });
+    expect(rows).toHaveLength(12);
+    expect(rows[0].kind).toBe("coffee");
+    expect(Object.keys(rows[0])).toEqual(["ref", "page", "date", "kind", "text", "people"]);
+    expect(rows[0]).not.toHaveProperty("offset");
+
+    const context = personContextRows(x.store, "People/Alice")[0];
+    expect(context.recentInteractions).toHaveLength(10);
+    expect(context.recentInteractions.every((row) => !Object.hasOwn(row, "offset"))).toBe(true);
+
+    expect(reconnectRows(x.store, "2026-09-09").map((row) => [row.person, row.due])).toEqual([
+      ["People/Bob", null],
+      ["People/Carol", "2026-07-31"],
+    ]);
+    x.done();
+  });
+
   test("uses direct Person links for actions and inherited links only for context", async () => {
     const x = await indexed({
       "People/Alice.md": "---\ntags: person\n---\n",

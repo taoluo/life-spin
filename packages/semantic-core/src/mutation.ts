@@ -123,40 +123,56 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
    * fails is reported rather than swallowed, because a half-applied set someone
    * knows about is recoverable and a silent one is not.
    */
-  const undo: { path: string; before: string | null; after: string | null }[] = [];
+  const effects = [
+    ...[...cs.writes].map(([path, after]) => ({
+      path, before: vault.exists(path) ? vault.read(path) : null, after,
+    })),
+    ...cs.removes.map((path) => ({
+      path, before: vault.exists(path) ? vault.read(path) : null, after: null,
+    })),
+  ];
   const written: string[] = [];
 
   try {
     for (const [path, content] of cs.writes) {
-      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null, after: content });
       await vault.write(path, content);
       written.push(path);
     }
     for (const path of cs.removes) {
-      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null, after: null });
       await vault.remove(path);
       written.push(path);
     }
   } catch (error) {
-    const failed: string[] = [];
-    for (const step of undo.reverse()) {
+    const read = () => effects.map((step) => {
       try {
-        const current = vault.exists(step.path) ? vault.read(step.path) : null;
-        if (current === step.before) continue;
-        if (current !== step.after) { failed.push(step.path); continue; }
-        if (step.before === null) await vault.remove(step.path);
-        else await vault.write(step.path, step.before);
+        return { ...step, current: vault.exists(step.path) ? vault.read(step.path) : null };
       } catch {
-        failed.push(step.path);
+        return { ...step, current: undefined };
+      }
+    });
+    const observed = read();
+    if (observed.every((step) => step.current === step.after)) {
+      return { ok: true, changed: effects.map((step) => step.path), value: undefined };
+    }
+    if (observed.every((step) => step.current === step.before)) {
+      return refuse("unknown", `${(error as Error).message}; authoritative reread found no applied changes`);
+    }
+    if (observed.every((step) => step.current === step.before || step.current === step.after)) {
+      for (const step of [...observed].reverse()) {
+        if (step.current !== step.after) continue;
+        try {
+          if (step.before === null) await vault.remove(step.path);
+          else await vault.write(step.path, step.before);
+        } catch { /* reconciled below */ }
+      }
+      if (read().every((step) => step.current === step.before)) {
+        return refuse("unknown", `${(error as Error).message}; verified rollback restored the prior contents`);
       }
     }
-    if (failed.length) {
-      throw new Error(
-        `${(error as Error).message}. Could not undo ${failed.join(", ")} — ` +
-          `'${cs.description}' is half applied.`,
-      );
-    }
-    throw error;
+    return refuse(
+      "unknown",
+      `${(error as Error).message}; '${cs.description}' has an unknown outcome and must be reconciled before retry`,
+    );
   }
 
   return { ok: true, changed: written, value: undefined };

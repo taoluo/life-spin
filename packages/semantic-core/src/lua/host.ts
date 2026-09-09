@@ -15,7 +15,7 @@ import { osApi } from "../../../../vendor/silverbullet/client/space_lua/stdlib/o
 import type { Store } from "../store.ts";
 import type { Vault } from "../vault.ts";
 import { tasks, backlinks, brokenLinks } from "../query.ts";
-import { runProjection, projectionNames, type ProjectionName } from "../contract.ts";
+import { runProjection, projectionNames, type ProjectionArgs, type ProjectionName } from "../contract.ts";
 import { day } from "../projections.ts";
 import {
   emptyRegistries, MessageQueue, SUPPORTED_EVENTS,
@@ -332,18 +332,14 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
     ...Object.fromEntries(
       projectionNames.map((name) => [
         name,
-        fn((args?: Record<string, unknown>) =>
-          runProjection(store, name as ProjectionName, {
-            date: (args?.date as string) ?? day(),
-            days: args?.days as number,
-            project: args?.project as string,
-            page: args?.page as string,
-            person: args?.person as string,
-            from: args?.from as string,
-            to: args?.to as string,
-            kind: args?.kind as string,
-          }),
-        ),
+        fn((args?: Record<string, unknown>) => {
+          const { limit, ...explicit } = args ?? {};
+          if (limit !== undefined && (!Number.isInteger(limit as number) || (limit as number) < 0)) {
+            throw new Error(`limit must be a non-negative integer, got ${String(limit)}`);
+          }
+          const result = runProjection(store, name as ProjectionName, explicit as ProjectionArgs);
+          return limit !== undefined && Array.isArray(result) ? result.slice(0, limit as number) : result;
+        }),
       ]),
     ),
     today: fn((args?: Record<string, unknown>) =>

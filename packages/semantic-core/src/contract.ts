@@ -2,7 +2,7 @@ import type { Store } from "./store.ts";
 import type { LifeloopObject } from "./extract.ts";
 import { query, tasks, backlinks, brokenLinks, type QueryRequest, type QueryResult } from "./query.ts";
 import { today, upcoming, review, projectSignals, day } from "./projections.ts";
-import { interactionRows, people as personPages, personContextRows, personRows, reconnectRows } from "./relationships.ts";
+import { interactionRows, relationshipDate, people as personPages, personContextRows, personRows, reconnectRows } from "./relationships.ts";
 
 /**
  * The public query contract (Phase 3).
@@ -49,6 +49,9 @@ export type Projection = {
   name: ProjectionName;
   /** What this projection answers, in one line, for a client to show. */
   describes: string;
+  allowedArgs?: readonly (keyof ProjectionArgs)[];
+  requiredArgs?: readonly (keyof ProjectionArgs)[];
+  fields?: readonly string[];
   run(store: Store, args: ProjectionArgs): unknown;
 };
 
@@ -113,21 +116,30 @@ export const projections: Record<ProjectionName, Projection> = {
   people: {
     name: "people",
     describes: "Person pages with derived relationship facts",
+    allowedArgs: [],
+    fields: ["person", "groups", "birthday", "contactEveryDays", "lastInteractionDate", "reconnectOn", "openFollowups"],
     run: (store) => personRows(store),
   },
   interactions: {
     name: "interactions",
     describes: "explicit dated interactions, optionally filtered by Person, date or kind",
+    allowedArgs: ["person", "from", "to", "kind"],
+    fields: ["ref", "page", "date", "kind", "text", "people"],
     run: (store, a) => interactionRows(store, a),
   },
   reconnect: {
     name: "reconnect",
     describes: "People whose explicit contact cadence is due",
+    allowedArgs: ["date"],
+    fields: ["person", "kind", "due", "lastInteractionDate"],
     run: (store, a) => reconnectRows(store, a.date ?? day()),
   },
   "person-context": {
     name: "person-context",
     describes: "derived relationship context for one exact Person page",
+    allowedArgs: ["person"],
+    requiredArgs: ["person"],
+    fields: ["person", "groups", "birthday", "contactEveryDays", "lastInteractionDate", "reconnectOn", "openFollowups", "openFollowupRefs", "recentInteractions"],
     run: (store, a) => {
       if (!a.person) throw new Error("person-context requires person: Page/Name");
       if (!personPages(store).some((page) => page.ref === a.person)) {
@@ -140,6 +152,40 @@ export const projections: Record<ProjectionName, Projection> = {
 
 export const projectionNames = Object.keys(projections) as ProjectionName[];
 
+export const relationshipProjectionNames = [
+  "people", "interactions", "reconnect", "person-context",
+] as const;
+export type RelationshipProjectionName = typeof relationshipProjectionNames[number];
+
+export function validateRelationshipProjectionArgs(
+  store: Store,
+  name: RelationshipProjectionName,
+  args: ProjectionArgs,
+): void {
+  const projection = projections[name];
+  const allowed = projection.allowedArgs ?? [];
+  for (const key of Object.keys(args) as (keyof ProjectionArgs)[]) {
+    if (args[key] !== undefined && !allowed.includes(key)) {
+      throw new Error(`${name} does not accept ${key}`);
+    }
+  }
+  for (const key of projection.requiredArgs ?? []) {
+    if (args[key] === undefined || args[key] === "") throw new Error(`${name} requires ${key}`);
+  }
+  for (const key of ["date", "from", "to"] as const) {
+    if (args[key] !== undefined && !relationshipDate(args[key])) {
+      throw new Error(`${key}: ${String(args[key])} is not an ISO date`);
+    }
+  }
+  if (args.from && args.to && args.from > args.to) throw new Error("from is after to");
+  if (args.kind !== undefined && (typeof args.kind !== "string" || !args.kind.trim())) {
+    throw new Error("kind must be non-empty");
+  }
+  if (args.person !== undefined && !personPages(store).some((page) => page.ref === args.person)) {
+    throw new Error(`no such Person page: ${String(args.person)}`);
+  }
+}
+
 export function runProjection(
   store: Store,
   name: ProjectionName,
@@ -147,6 +193,9 @@ export function runProjection(
 ): unknown {
   const projection = projections[name];
   if (!projection) throw new Error(`no such projection: ${name}`);
+  if ((relationshipProjectionNames as readonly string[]).includes(name)) {
+    validateRelationshipProjectionArgs(store, name as RelationshipProjectionName, args);
+  }
   return projection.run(store, args);
 }
 

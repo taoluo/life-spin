@@ -11,12 +11,13 @@ const oneLine = (value: string) => value.replace(/[\r\n]+/g, " ").replace(/\s+/g
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
-function personPath(vault: Vault, person: string): string | null {
+function personSource(vault: Vault, person: string): { path: string; text: string } | null {
   if (!validPageName(person) || person.includes("[[") || person.includes("]]")) return null;
   const path = pathOf(person);
   if (!vault.exists(path)) return null;
-  const page = pageObject(vault.read(path), pageMetaFor(person));
-  return (page.itags as string[] | undefined)?.includes("person") ? path : null;
+  const text = vault.read(path);
+  const page = pageObject(text, pageMetaFor(person));
+  return (page.itags as string[] | undefined)?.includes("person") ? { path, text } : null;
 }
 
 /** Append one explicit interaction to its dated Journal page. */
@@ -27,11 +28,15 @@ export async function logInteraction(
   kind: InteractionKind,
   note = "",
   journalFolder = "Journal",
+  expectedSources: ReadonlyMap<string, string> = new Map(),
 ): Promise<MutationResult<{ page: string; line: string; people: string[] }>> {
   const people = [...new Set(Array.isArray(person) ? person : [person])];
   if (!people.length) return refuse("invalid", "an interaction needs at least one Person");
+  const expected = new Map(expectedSources);
   for (const name of people) {
-    if (!personPath(vault, name)) return refuse("missing", `no such Person page: ${name}`);
+    const source = personSource(vault, name);
+    if (!source) return refuse("missing", `no such Person page: ${name}`);
+    expected.set(source.path, source.text);
   }
   if (!validDate(date)) return refuse("invalid", `not a date: ${date}`);
   if (!INTERACTION_KINDS.includes(kind)) return refuse("invalid", `unsupported interaction: ${kind}`);
@@ -48,6 +53,7 @@ export async function logInteraction(
   const body = before ?? initial;
   const next = `${body}${body.length && !body.endsWith("\n") ? eol : ""}${line}${eol}`;
   const cs = changeSet(`log ${kind} with ${people.join(", ")}`);
+  for (const [guardedPath, guardedText] of expected) cs.expected.set(guardedPath, guardedText);
   cs.expected.set(path, before);
   cs.writes.set(path, next);
   return applied(vault, cs, { page, line, people });
@@ -60,7 +66,7 @@ export async function createReconnectTask(
   scheduled: string,
   page = "Inbox",
 ): Promise<MutationResult<{ page: string; line: string }>> {
-  if (!personPath(vault, person)) return refuse("missing", `no such Person page: ${person}`);
+  if (!personSource(vault, person)) return refuse("missing", `no such Person page: ${person}`);
   if (!validDate(scheduled)) return refuse("invalid", `not a date: ${scheduled}`);
   if (!validPageName(page)) return refuse("invalid", `not a page name: ${page}`);
   const line = `* [ ] Reconnect with [[${person}]] [scheduled: "${scheduled}"] [reconnect: true]`;
