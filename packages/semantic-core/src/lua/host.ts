@@ -593,9 +593,6 @@ export async function runLua(
     if (mode === "expression") {
       const expression = parseExpressionString(source);
       const value = await evalExpression(expression, env, sf);
-      if (expression.type === "Query" && value instanceof LuaTable && value.empty()) {
-        return { ok: true, value: [] };
-      }
       return { ok: true, value: await luaValueToJS(value, sf) };
     }
 

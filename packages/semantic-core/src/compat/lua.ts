@@ -1,12 +1,20 @@
 import { isPromise } from "../../../../vendor/silverbullet/client/space_lua/rp.ts";
 import {
-  LuaStackFrame, LuaTable, jsToLuaValue as upstreamJsToLuaValue,
+  LuaEnv, LuaStackFrame, LuaTable, jsToLuaValue as upstreamJsToLuaValue,
 } from "../../../../vendor/silverbullet/client/space_lua/runtime.ts";
+import {
+  ArrayQueryCollection, type LuaCollectionQuery,
+} from "../../../../vendor/silverbullet/client/space_lua/query_collection.ts";
 
 /** Preserve JavaScript array identity without changing the vendored runtime. */
 class JavaScriptArrayTable extends LuaTable {
   override toJS(sf = LuaStackFrame.lostFrame): Record<string, any> | any[] {
-    return this.length === 0 ? [] : super.toJS(sf);
+    return this.empty() ? [] : super.toJS(sf);
+  }
+
+  async query(query: LuaCollectionQuery, env: LuaEnv, sf: LuaStackFrame, config?: any): Promise<any> {
+    const values = Array.from({ length: this.length }, (_, index) => this.rawGet(index + 1));
+    return jsToLuaValue(await new ArrayQueryCollection(values).query(query, env, sf, config));
   }
 }
 

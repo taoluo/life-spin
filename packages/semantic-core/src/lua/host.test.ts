@@ -50,6 +50,26 @@ describe("what a script can read", () => {
     host.cleanup();
   });
 
+  test.each([
+    ["parenthesized", "(query[[ from p = lifeloop.people() limit 0 ]])", "expression", []],
+    ["block return", "return query[[ from p = lifeloop.people() limit 0 ]]", "block", []],
+    ["nested", "{ rows = query[[ from p = lifeloop.people() limit 0 ]] }", "expression", { rows: [] }],
+  ] as const)("%s empty query results stay arrays", async (_name, source, mode, value) => {
+    const host = await hostFor({ "Alice.md": "---\ntags: person\n---\n" });
+    expect(await runLua(source, host, mode)).toEqual({ ok: true, value });
+    host.cleanup();
+  });
+
+  test("an associative field keeps an empty array wrapper object-shaped", async () => {
+    const host = await hostFor({ "Alice.md": "---\ntags: person\n---\n" });
+    expect(await runLua(
+      "local rows = lifeloop.people({limit = 0}); rows.note = 'kept'; return rows",
+      host,
+      "block",
+    )).toEqual({ ok: true, value: { note: "kept" } });
+    host.cleanup();
+  });
+
   test("space.readPage reads a page, and a missing one is an error not a crash", async () => {
     const host = await hostFor({ "W.md": "hello\n" });
     expect(await runLua("space.readPage('W')", host)).toMatchObject({
