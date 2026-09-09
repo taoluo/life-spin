@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import {
-  day, directPersonLinks, personContext, resolveHandle, tasks,
+  day, directPersonLinks, personContext, tasks,
   type PersonContext,
 } from "@lifeloop/semantic-core";
 import {
@@ -9,9 +9,10 @@ import {
   type CalendarObservationStore, type CalendarObservation,
   resolveCalendarConflict, resolveNoteConflict, resolveReminderConflict,
   type CalendarEvent,
+  type CalendarExactRead,
 } from "@lifeloop/apple-bridge";
 import type { LifeLoop } from "./workspace.ts";
-import { taskTarget, type TaskTargetInput } from "./task-target.ts";
+import { taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
 
 type SyncConflict =
   | { kind: "calendar"; id: string; ref: string; local: string; remote: string; reason: string }
@@ -110,6 +111,85 @@ async function requireApp(
   return false;
 }
 
+type BriefTarget = {
+  handle: TaskCommandHandle;
+  uid: string;
+  calendarName: string;
+  directPeople: string[];
+};
+
+type BriefOptions = {
+  available?: () => Promise<boolean>;
+  readExact?: (uid: string, calendarName: string) => Promise<CalendarExactRead>;
+  open?: (markdown: string) => Promise<unknown> | unknown;
+};
+
+async function validateBrief(
+  lifeloop: LifeLoop,
+  input: TaskTargetInput | undefined,
+  sealed?: BriefTarget,
+): Promise<BriefTarget | string> {
+  await lifeloop.currentTaskStates();
+  const target = taskTarget(lifeloop, input);
+  if (!target?.task) return "put the cursor on an indexed task";
+  const matches = [...target.line.matchAll(/\[event:\s*"([^"\r\n]+)"\]/g)];
+  if (matches.length !== 1) return "this task needs exactly one Calendar binding";
+  const directPeople = directPersonLinks(lifeloop.store, target.task);
+  if (!directPeople.length) return "add a direct Person link to this task first";
+  const current: BriefTarget = {
+    handle: target.handle,
+    uid: matches[0][1],
+    calendarName: lifeloop.config("calendarName", "Calendar"),
+    directPeople,
+  };
+  if (sealed && (
+    current.handle.ref !== sealed.handle.ref ||
+    current.handle.expectedText !== sealed.handle.expectedText ||
+    current.handle.expectedState !== sealed.handle.expectedState ||
+    current.uid !== sealed.uid ||
+    current.calendarName !== sealed.calendarName ||
+    JSON.stringify(current.directPeople) !== JSON.stringify(sealed.directPeople)
+  )) return "the task, linked People, event, or configured calendar changed while preparing the brief";
+  return current;
+}
+
+export async function openPreMeetingBrief(
+  lifeloop: LifeLoop,
+  input?: TaskTargetInput,
+  options: BriefOptions = {},
+): Promise<void> {
+  const warn = (message: string) => void vscode.window.showWarningMessage(`LifeLoop: ${message}`);
+  const initial = await validateBrief(lifeloop, input);
+  if (typeof initial === "string") { warn(initial); return; }
+
+  const available = options.available ?? (() => requireApp("Calendar"));
+  if (!(await available())) return;
+  const ready = await validateBrief(lifeloop, { handle: initial.handle }, initial);
+  if (typeof ready === "string") { warn(ready); return; }
+
+  const readExact = options.readExact ?? ((uid: string, calendarName: string) =>
+    new Calendar().readExact(uid, calendarName));
+  const result = await readExact(initial.uid, initial.calendarName);
+  const final = await validateBrief(lifeloop, { handle: initial.handle }, initial);
+  if (typeof final === "string") { warn(final); return; }
+  if (result.kind !== "found") {
+    warn(result.kind === "missing" ? "event is missing" : "event binding is ambiguous in Calendar");
+    return;
+  }
+
+  const contexts = final.directPeople.map((person) => personContext(lifeloop.store, person));
+  if (contexts.some((context) => context === null)) {
+    warn("a linked Person changed while preparing the brief");
+    return;
+  }
+  const markdown = renderPreMeetingBrief(result.event, contexts as PersonContext[]);
+  const open = options.open ?? (async (content: string) => {
+    const document = await vscode.workspace.openTextDocument({ content, language: "markdown" });
+    await vscode.window.showTextDocument(document, { preview: true });
+  });
+  await open(markdown);
+}
+
 export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionContext): void {
   const on = (name: string, handler: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(name, handler));
@@ -186,51 +266,7 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
 
   on("lifeloop.preMeetingBrief", async (input?: TaskTargetInput) => {
     try {
-      await lifeloop.reindex();
-      const at = taskTarget(lifeloop, input);
-      if (!at?.task) {
-        vscode.window.showWarningMessage("LifeLoop: put the cursor on an indexed task");
-        return;
-      }
-      const source = resolveHandle(lifeloop.vault, at.handle);
-      if ("ok" in source) {
-        vscode.window.showWarningMessage(`LifeLoop: ${source.message}`);
-        return;
-      }
-      const uid = typeof at.task.event === "string" ? at.task.event : "";
-      if (!uid) {
-        vscode.window.showWarningMessage("LifeLoop: this task has no Calendar binding");
-        return;
-      }
-      const personRefs = directPersonLinks(lifeloop.store, at.task);
-      if (!personRefs.length) {
-        vscode.window.showWarningMessage("LifeLoop: add a direct Person link to this task first");
-        return;
-      }
-      if (!(await requireApp("Calendar"))) return;
-
-      const calendarName = lifeloop.config("calendarName", "Calendar");
-      const event = (await new Calendar().read([uid], calendarName)).get(uid);
-      if (!event || event.cancelled) {
-        const reason = event?.cancelled ? "event is cancelled" : "event is missing";
-        conflicts.set(`calendar:${uid}`, {
-          kind: "calendar", id: uid, ref: String(at.task.ref), local: at.name, remote: "", reason,
-        });
-        await persistConflicts();
-        auditLine(`Calendar conflict ${at.task.ref}: ${reason}`);
-        vscode.window.showWarningMessage(`LifeLoop: ${reason}; the sync conflict was saved for Resolve`);
-        return;
-      }
-      const contexts = personRefs.map((person) => personContext(lifeloop.store, person));
-      if (contexts.some((context) => context === null)) {
-        vscode.window.showWarningMessage("LifeLoop: a linked Person changed while preparing the brief");
-        return;
-      }
-      const document = await vscode.workspace.openTextDocument({
-        content: renderPreMeetingBrief(event, contexts as PersonContext[]),
-        language: "markdown",
-      });
-      await vscode.window.showTextDocument(document, { preview: true });
+      await openPreMeetingBrief(lifeloop, input);
     } catch (error) {
       auditLine(`Pre-meeting Brief failed: ${(error as Error).message}`);
       vscode.window.showErrorMessage(`LifeLoop: Pre-meeting Brief failed — ${(error as Error).message}`);

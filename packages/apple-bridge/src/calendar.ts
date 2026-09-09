@@ -28,6 +28,11 @@ export type CalendarEvent = {
   cancelled: boolean;
 };
 
+export type CalendarExactRead =
+  | { kind: "found"; event: CalendarEvent }
+  | { kind: "missing" }
+  | { kind: "ambiguous" };
+
 const READ_SCRIPT = `
 on run argv
   set calName to item 1 of argv
@@ -122,6 +127,20 @@ export class Calendar {
           location: r.location, cancelled: false },
       ]),
     );
+  }
+
+  /** Exact single-binding read for Brief; unlike `read`, duplicates stay ambiguous. */
+  async readExact(uid: string, calendar: string): Promise<CalendarExactRead> {
+    const out = await this.run(withSeparators(READ_SCRIPT), [calendar, uid], { timeoutMs: 60_000 });
+    const records = parseRecords(out, ["uid", "summary", "start", "end", "location"])
+      .filter((record) => record.uid === uid);
+    if (records.length === 0) return { kind: "missing" };
+    if (records.length !== 1) return { kind: "ambiguous" };
+    const [record] = records;
+    return { kind: "found", event: {
+      uid: record.uid, summary: record.summary, start: record.start, end: record.end,
+      location: record.location, cancelled: false,
+    } };
   }
 
   /**
