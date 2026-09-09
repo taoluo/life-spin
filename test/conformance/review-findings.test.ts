@@ -105,16 +105,13 @@ describe("2. write lifecycle and concurrency", () => {
 });
 
 describe("3. apple bridge authority", () => {
-  test("a reminder created but never bound is cleaned up, not left orphaned", async () => {
-    // create() succeeding and the binding write then failing leaves a reminder
-    // over there with nothing pointing at it — invisible, and duplicated on the
-    // next attempt. The same compensation attachPageToTask uses: create the
-    // fallible thing last, and undo it if what follows fails.
+  test("a stale reminder source is refused before creation", async () => {
     const { bindReminder } = await import("@lifeloop/apple-bridge");
     const vault = MemoryVault.of({ "W.md": "* [ ] a task\n" });
+    const created: string[] = [];
     const deleted: string[] = [];
     const bridge = {
-      async create() { return "R-created"; },
+      async create() { created.push("R-created"); return "R-created"; },
       async remove(id: string) { deleted.push(id); return true; },
     };
 
@@ -122,13 +119,14 @@ describe("3. apple bridge authority", () => {
     const result = await bindReminder(vault, stale as any, "a task", "", "", bridge as any);
 
     expect(result.ok).toBe(false);
-    expect(deleted, "the orphaned reminder was not cleaned up").toEqual(["R-created"]);
+    expect(created).toEqual([]);
+    expect(deleted).toEqual([]);
   });
 
   test("an uncertain reminder binding reports and retains the created id", async () => {
     const { bindReminder } = await import("@lifeloop/apple-bridge");
     class ThrowingVault extends MemoryVault {
-      override async write(): Promise<void> { throw new Error("editor refused write"); }
+      override async writeIfUnchanged(): Promise<boolean> { throw new Error("editor refused write"); }
     }
     const vault = new ThrowingVault(new Map([["W.md", "* [ ] a task\n"]]));
     const deleted: string[] = [];
@@ -445,9 +443,9 @@ describe("the implementation contradicts its claims", () => {
     // first written — the claim and the code disagree.
     const { changeSet, apply } = await import("@lifeloop/semantic-core");
     class HalfFailing extends MemoryVault {
-      override async write(path: string, content: string): Promise<void> {
+      override async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
         if (path === "B.md") throw new Error("disk full");
-        return super.write(path, content);
+        return super.writeIfUnchanged(path, before, after);
       }
     }
     const vault = new HalfFailing(new Map([["A.md", "before\n"]]));
@@ -464,12 +462,12 @@ describe("the implementation contradicts its claims", () => {
   test("rollback preserves a concurrent edit instead of overwriting it", async () => {
     const { changeSet, apply } = await import("@lifeloop/semantic-core");
     class ConcurrentFailure extends MemoryVault {
-      override async write(path: string, content: string): Promise<void> {
+      override async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
         if (path === "B.md") {
           await super.write("A.md", "user edit\n");
           throw new Error("disk full");
         }
-        return super.write(path, content);
+        return super.writeIfUnchanged(path, before, after);
       }
     }
     const vault = new ConcurrentFailure(new Map([["A.md", "before\n"]]));

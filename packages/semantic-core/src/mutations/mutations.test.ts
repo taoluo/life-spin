@@ -345,11 +345,11 @@ describe("a write that fails is not a success", () => {
     constructor(files: Record<string, string>, private readonly failOn: string) {
       super(new Map(Object.entries(files)));
     }
-    override async write(path: string, content: string): Promise<void> {
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
       if (path === this.failOn) {
         throw new Error(`the editor refused the edit to ${path}`);
       }
-      return super.write(path, content);
+      return super.writeIfUnchanged(path, before, after);
     }
   }
 
@@ -366,9 +366,9 @@ describe("a write that fails is not a success", () => {
     // second write fails, the caller must hear about it — silently succeeding here
     // would leave a page nobody asked for and a task that never gained its link.
     const vault = new RefusingVault({ "Notes.md": "* [ ] write the spec\n" }, "Notes.md");
-    await expect(
-      attachPageToTask(vault, { ref: "Notes@0" }, "Specs/Draft"),
-    ).rejects.toThrow(/refused the edit/);
+    const result = await attachPageToTask(vault, { ref: "Notes@0" }, "Specs/Draft");
+    expect(result).toMatchObject({ ok: false, reason: "unknown" });
+    expect(result.ok ? "" : result.message).toMatch(/refused the edit/);
     expect(vault.read("Notes.md")).toBe("* [ ] write the spec\n");
     // The compensating delete removed the page it had just created.
     expect(vault.exists("Specs/Draft.md")).toBe(false);

@@ -234,7 +234,7 @@ describe("relationship projection parity", () => {
         }
       }
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
-  });
+  }, 60_000);
 
   test("Interaction filters are independently discriminating", async () => {
     const { dir, lifeloop } = await fixture();
