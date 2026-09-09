@@ -3,9 +3,10 @@ import {
   today, upcoming, projectSignals, day, tasks, originalSourceOffset, TASK_MARKER,
   pending, openMentions, mentions, byPage,
   birthdaySignals, reconnectSignals, personContext, people,
-  type LifeloopObject, type GuardedSourceHandle,
+  type LifeloopObject,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
+import { taskSourceRef, type TaskCommandHandle } from "./task-target.ts";
 
 /**
  * The views, and the invariant they exist to keep (I4).
@@ -22,7 +23,7 @@ export class Node extends vscode.TreeItem {
     label: string,
     collapsible: vscode.TreeItemCollapsibleState,
     readonly children?: Node[],
-    readonly handle?: GuardedSourceHandle,
+    readonly handle?: TaskCommandHandle,
     readonly page?: string,
     readonly offset?: number,
   ) {
@@ -60,8 +61,7 @@ function taskNode(
 
   // Keep upstream index refs unchanged; mutation receipts address original text.
   const indexedRef = String(task.ref);
-  const numeric = /^(.*)@(\d+)$/.exec(indexedRef);
-  const ref = numeric ? `${numeric[1]}@${originalSourceOffset(text, Number(numeric[2]))}` : indexedRef;
+  const ref = taskSourceRef(text, page, task);
   const state = row ? TASK_MARKER.exec(line)?.[2] : undefined;
   const node = new Node(
     String(task.name ?? "").trim() || "(empty task)",

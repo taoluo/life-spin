@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { setTaskAttribute, TASK_MARKER, type GuardedSourceHandle } from "@lifeloop/semantic-core";
+import { setTaskAttribute, TASK_MARKER } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { taskTarget, type TaskTargetInput } from "./task-target.ts";
+import { taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
 
 export type BindingKind = "reminder" | "event";
 export type Binding = {
@@ -31,7 +31,7 @@ type BindingAction = TaskTargetInput & { kind: BindingKind; id: string };
 
 const actionFor = (lifeloop: LifeLoop, document: vscode.TextDocument, binding: Binding): BindingAction => {
   const state = TASK_MARKER.exec(binding.line)![2];
-  const handle: GuardedSourceHandle = {
+  const handle: TaskCommandHandle = {
     ref: `${lifeloop.pageNameOfUri(document.uri)}@${binding.lineStart}`,
     expectedText: binding.line,
     expectedState: state,

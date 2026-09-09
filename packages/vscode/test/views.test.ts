@@ -8,6 +8,7 @@ import { publishDiagnostics, resolveTarget } from "../src/retrieval.ts";
 import { setTaskState, day, shift, Store, extractObjects, pageMetaFor } from "@lifeloop/semantic-core";
 import * as vscode from "./vscode-mock.ts";
 import { renderPreMeetingBrief } from "../src/apple.ts";
+import { taskTarget } from "../src/task-target.ts";
 
 async function workspaceWith(files: Record<string, string>): Promise<{ lifeloop: LifeLoop; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "lifeloop-vscode-"));
@@ -173,6 +174,79 @@ describe("acting on a view node", () => {
     expect(lifeloop.vault.read("Work.md")).toBe(before);
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("task command admission", () => {
+  test("re-resolves a guarded handle and ignores stale presentation coordinates", async () => {
+    const line = "* [ ] source task";
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+    try {
+      expect(taskTarget(lifeloop, {
+        handle: { ref: "Work@0", expectedText: line, expectedState: " " },
+        page: "Stale/Projection",
+        offset: 99,
+      })).toMatchObject({ page: "Work", offset: 0, line, name: "source task" });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("requires all three handle receipts at runtime", async () => {
+    const line = "* [ ] guarded";
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+    try {
+      for (const handle of [
+        { ref: "Work@0", expectedText: line },
+        { ref: "Work@0", expectedState: " " },
+        { ref: "Work@0", expectedText: 7, expectedState: " " },
+      ]) expect(() => taskTarget(lifeloop, { handle } as any)).not.toThrow();
+      for (const handle of [
+        { ref: "Work@0", expectedText: line },
+        { ref: "Work@0", expectedState: " " },
+        { ref: "Work@0", expectedText: 7, expectedState: " " },
+      ]) expect(taskTarget(lifeloop, { handle } as any)).toBeNull();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("refuses a numeric ref that now lands inside the same unchanged task", async () => {
+    const line = "* [ ] unchanged";
+    const original = `prefixxxxx\n${line}\n`;
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": original });
+    try {
+      const handle = {
+        ref: `Work@${original.indexOf(line)}`,
+        expectedText: line,
+        expectedState: " ",
+      };
+      await lifeloop.vault.write("Work.md", `prefix\n${line}\n`);
+      await lifeloop.reindex();
+      expect(taskTarget(lifeloop, { handle })).toBeNull();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("accepts live CRLF numeric refs without translating them twice", async () => {
+    const text = "intro\r\n* [ ] crlf task\r\n";
+    const line = "* [ ] crlf task";
+    const offset = text.indexOf(line);
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": text });
+    try {
+      expect(taskTarget(lifeloop, { handle: {
+        ref: `Work@${offset}`, expectedText: line, expectedState: " ",
+      } })).toMatchObject({ page: "Work", offset, line });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("allows a unique anchored task to relocate in CRLF text", async () => {
+    const line = '* [ ] anchored $task [deadline: "2020-01-01"]';
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\r\n` });
+    try {
+      const handle = flatten(new TodayView(lifeloop).getChildren()).find((node) => node.handle).handle;
+      expect(handle.ref).toBe("Work@task");
+      await lifeloop.vault.write("Work.md", `intro\r\n${line}\r\n`);
+      await lifeloop.reindex();
+      expect(taskTarget(lifeloop, { handle })).toMatchObject({
+        page: "Work", offset: "intro\r\n".length, line,
+      });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
