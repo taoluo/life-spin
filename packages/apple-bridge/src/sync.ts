@@ -116,10 +116,15 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     observedOn: options.observedOn ?? new Date().toISOString().slice(0, 10),
   });
   const synchronizedNames = new Map<string, string>();
+  const unsettled = new Set<string>();
 
-  const note = (result: { ok: true } | Refusal, ref: string, onOk: () => void) => {
+  const refuseDecision = (ref: string, reminderId: string, message: string) => {
+    unsettled.add(reminderId);
+    report.refused.push({ ref, message });
+  };
+  const note = (result: { ok: true } | Refusal, ref: string, reminderId: string, onOk: () => void) => {
     if (result.ok) onOk();
-    else report.refused.push({ ref, message: result.message });
+    else refuseDecision(ref, reminderId, result.message);
   };
 
   for (const decision of decisions) {
@@ -142,7 +147,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
 
     if ((decision.action === "complete" || decision.action === "reopen") &&
         options.isTaskPolicyCurrent && !(await options.isTaskPolicyCurrent())) {
-      report.refused.push({ ref: decision.ref, message: "task-state policy changed during sync" });
+      refuseDecision(decision.ref, decision.reminderId, "task-state policy changed during sync");
       continue;
     }
     if (writes) {
@@ -150,7 +155,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         options.vault, pageOfRef(decision.ref), "reminder", task.reminderId,
       );
       if (!found.ok) {
-        report.refused.push({ ref: decision.ref, message: found.message });
+        refuseDecision(decision.ref, decision.reminderId, found.message);
         continue;
       }
       handle = found.handle;
@@ -158,24 +163,24 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
 
     switch (decision.action) {
       case "complete":
-        note(await stampCompletion(options.vault, handle!, decision.date, options.taskStates), decision.ref,
+        note(await stampCompletion(options.vault, handle!, decision.date, options.taskStates), decision.ref, decision.reminderId,
              () => report.completed.push(decision.ref));
         break;
 
       case "reopen":
-        note(await setTaskState(options.vault, handle!, false, new Date(), options.taskStates), decision.ref,
+        note(await setTaskState(options.vault, handle!, false, new Date(), options.taskStates), decision.ref, decision.reminderId,
              () => report.reopened.push(decision.ref));
         break;
 
       case "clear-mark":
-        note(await setTaskAttribute(options.vault, handle!, "reminder", null), decision.ref,
-             () => report.marksCleared.push(decision.ref));
-        options.observations.delete(decision.reminderId);
+        note(await setTaskAttribute(options.vault, handle!, "reminder", null), decision.ref, decision.reminderId,
+             () => { report.marksCleared.push(decision.ref); options.observations.delete(decision.reminderId); });
         break;
 
       case "push": {
         const ok = await bridge.update(decision.reminderId, decision.name, decision.body);
         if (ok) { report.pushed.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); }
+        else unsettled.add(decision.reminderId);
         // A push that finds nothing is the deleted case; the next pass clears it.
         break;
       }
@@ -191,7 +196,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         break;
 
       case "pull-name":
-        note(await setTaskName(options.vault, handle!, decision.name), decision.ref,
+        note(await setTaskName(options.vault, handle!, decision.name), decision.ref, decision.reminderId,
           () => { report.pulled.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); });
         break;
 
@@ -207,6 +212,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     decisions.filter((d) => d.action === "flag-recurring").map((d) => (d as any).reminderId),
   );
   for (const [id, reminder] of current) {
+    if (unsettled.has(id)) continue;
     const previous = options.observations.get(id);
     options.observations.set(id, {
       completed: reminder.completed,

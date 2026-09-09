@@ -104,6 +104,7 @@ describe("the reverse flow, end to end", () => {
     expect(report.completed).toHaveLength(0);
     expect(report.refused[0].message).toContain("policy changed");
     expect(vault.read("Work.md")).toBe(markdown);
+    expect(observations.get("R1")?.modificationDate).toBe("2026-09-08T09:00:00Z");
     cleanup();
   });
 
@@ -212,6 +213,30 @@ describe("the reverse flow, end to end", () => {
 
     expect(report.refused).toHaveLength(1);
     expect(vault.snapshot()).toEqual(before);
+    cleanup();
+  });
+
+  test("a refused pull retains its baseline and cannot authorize a reverse push", async () => {
+    const markdown = '* [ ] Old [reminder: "R1"]\n';
+    const { store, cleanup } = await setup(markdown);
+    class RefusingVault extends MemoryVault {
+      override async write(): Promise<void> { throw new Error("save failed"); }
+      override async writeIfUnchanged(): Promise<boolean> { throw new Error("save failed"); }
+    }
+    const vault = new RefusingVault(new Map([["Work.md", markdown]]));
+    const observations = new MemoryObservations();
+    observations.set("R1", {
+      completed: false, modificationDate: "2026-09-08T09:00:00Z", name: "Old",
+    });
+    const bridge = new FakeReminders([reminder({ name: "Remote" })]);
+
+    const first = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    const second = await syncReminders({ store, vault, observations, reminders: bridge as any });
+
+    expect(first.refused).toHaveLength(1);
+    expect(second.pushed).toHaveLength(0);
+    expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")?.name).toBe("Old");
     cleanup();
   });
 });
