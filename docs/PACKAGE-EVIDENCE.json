@@ -2,12 +2,12 @@
   "status": "QUALIFIED_NOT_INSTALLED",
   "version": "0.1.0",
   "artifact": "dist/lifeloop-vscode-0.1.0.vsix",
-  "sha256": "f8b5d9f05229e0fc62b1d58e01529e861b491e904aa03cd5efce6ac207bf9393",
-  "bytes": 450399,
+  "sha256": "b62368182f3623433b4c1075d0ae65b768e7e4bbe49508b9b1977ef9856432b2",
+  "bytes": 450277,
   "sourceSnapshot": {
-    "commit": "7fc937e7c510cdadf8b5ab0c0d56ed32db24ab4b",
-    "tree": "de1ca1651f8c38b320a7aa3283c17986dcc03171",
-    "recoveryRef": "refs/codex/recovery/relationship-language-final-20260909"
+    "commit": "04aefb44cd3c05fb113a0a1745ac01f700489ff9",
+    "tree": "223d6a1b313eaef32a99539de97625be77cb4829",
+    "recoveryRef": "refs/codex/recovery/lifeloop-integration-final-20260909"
   },
   "files": [
     "extension.vsixmanifest",
@@ -26,20 +26,26 @@
     "central sync and conflict-resolution commands declared",
     "required resources",
     "no hard Foam dependency",
+    "read-only trial and official SilverBullet sample inventories",
     "packaged task-only and Foam 0.44.6 host gates"
   ],
   "runtime": {
     "vscode": "1.136.1",
     "fullSuite": { "passed": 856, "liveSbSkipped": 3 },
-    "taskOnly": { "passed": 22, "foamOnlySkipped": 8 },
-    "foam0446": { "passed": 29, "knownFolderRenameSkipped": 1 },
+    "taskOnly": { "developmentPassed": 22, "packagedPassed": 22, "foamOnlySkipped": 8 },
+    "foam0446": { "developmentPassed": 29, "packagedPassed": 29, "knownFolderRenameSkipped": 1 },
+    "representativeVaults": {
+      "trial": { "pages": 29, "tasks": 11, "spaceLuaBlocks": 38 },
+      "officialDocs": { "pages": 241, "tasks": 36, "spaceLuaBlocks": 21 },
+      "officialLibraries": { "pages": 55, "tasks": 0, "spaceLuaBlocks": 47 }
+    },
     "liveSilverBullet2100": { "status": "SKIP", "reason": "no RuntimeAPI client answered" },
-    "appleApps": { "status": "SKIP", "reason": "AppleEvent calls timed out on this host; fake-backed contracts passed" },
-    "entrySha256": "55c5a63ec19af0ced93dce1f142f333b17a018f85abb861383556b5a5b815eb7"
+    "appleApps": { "status": "SKIP", "reason": "qualification did not access personal Apple data; fake-backed contracts passed" },
+    "entrySha256": "ac9b4b27dc0c80e8802b3872764604f50ff0b5689eb40abdc0b61248b145e860"
   },
   "limitations": [
     "released Foam 0.44.6 folder rename is unqualified",
     "re-running the 3 live SilverBullet checks requires an available RuntimeAPI client",
-    "real Notes, Reminders and Calendar writes require a responsive local AppleEvent host"
+    "real Notes, Reminders and Calendar writes were not exercised during this qualification"
   ]
 }
