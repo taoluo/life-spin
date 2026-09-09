@@ -37,6 +37,9 @@ export async function bindReminder(
     };
   }
   if (bound.ok) return { ...bound, value: { id } };
+  if (bound.reason === "unknown") {
+    return { ...bound, message: `${bound.message}. Reminder ${id} was retained because binding outcome is unknown.`, orphaned: id };
+  }
 
   let removed = false;
   try {
@@ -77,6 +80,9 @@ export async function bindCalendar(
     return { ok: false, reason: "unknown", message: `${(error as Error).message}. Calendar event ${id} was retained because binding outcome is unknown.`, orphaned: id };
   }
   if (bound.ok) return { ...bound, value: { id } };
+  if (bound.reason === "unknown") {
+    return { ...bound, message: `${bound.message}. Calendar event ${id} was retained because binding outcome is unknown.`, orphaned: id };
+  }
   let removed = false;
   try { removed = await bridge.remove(id, calendarName); } catch { /* report orphan below */ }
   return removed ? bound : { ...bound, message: `${bound.message}. Calendar event ${id} could not be removed.`, orphaned: id };
