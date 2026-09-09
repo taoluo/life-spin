@@ -10,6 +10,7 @@ import { findLocatedQueryFences, queryBodyContains, type QueryToken } from "./qu
 import { taskTargetAt } from "./task-target.ts";
 import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
 import { collectNodesOfType, findNodeOfType, type ParseTree } from "../../../vendor/silverbullet/plug-api/lib/tree.ts";
+import { collectAttributes } from "../../../vendor/silverbullet/plugs/index/attribute.ts";
 
 // Only LifeLoop semantic diagnostics and SB special refs live here. Foam owns generic PKM.
 
@@ -33,10 +34,8 @@ const positionAt = (text: string, offset: number): vscode.Position => {
 };
 
 const exactPageExists = (lifeloop: LifeLoop, page: string): boolean => {
-  try {
-    if (!validPageName(page)) return false;
-    return lifeloop.vault.exists(pathOf(page));
-  } catch { return false; }
+  if (!validPageName(page)) return false;
+  return lifeloop.vault.exists(pathOf(page));
 };
 
 const exactPerson = (lifeloop: LifeLoop, person: string): boolean => {
@@ -62,6 +61,20 @@ const deepNodesOfType = (tree: ParseTree, type: string): ParseTree[] => [
   ...(tree.children?.flatMap((child) => deepNodesOfType(child, type)) ?? []),
 ];
 
+const directAttributes = (item: ParseTree): ParseTree[] => {
+  const found: ParseTree[] = [];
+  const visit = (node: ParseTree, root = false) => {
+    if (!root && node.type === "ListItem") return;
+    if (node.type === "Attribute") {
+      found.push(node);
+      return;
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(item, true);
+  return found;
+};
+
 /** One live classifier shared by diagnostics, hover, and symbols. */
 function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): LocatedInteraction[] {
   let date: string | null = null;
@@ -76,9 +89,8 @@ function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): L
     if (item.tag !== "item" || item.inComment === true || typeof interaction !== "string") continue;
     const [parsedFrom, parsedTo] = (item.range as [number, number] | undefined) ?? [0, 0];
     const node = itemNodes.find((candidate) => candidate.from === parsedFrom && candidate.to === parsedTo);
-    const owner = node?.children?.find((child) => child.type === "Paragraph" || child.type === "Task");
-    const attribute = owner && collectNodesOfType(owner, "Attribute").filter((candidate) =>
-      findNodeOfType(candidate, "AttributeName")?.children?.[0].text === "interaction").at(-1);
+    const attribute = node && directAttributes(node).filter((candidate) =>
+      collectAttributes(candidate).interaction === interaction).at(-1);
     const value = attribute && findNodeOfType(attribute, "AttributeValue");
     if (attribute?.from === undefined || attribute.to === undefined || value?.from === undefined || value.to === undefined) continue;
     const attributeFrom = originalSourceOffset(text, attribute.from);

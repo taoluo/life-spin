@@ -198,6 +198,26 @@ describe("narrow definitions", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("does not reinterpret a literal @ filename when its existence is unknown", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "Target.md": "* anchored $task\n",
+      "Source.md": "[[Target@task]]\n",
+    });
+    const document = documentOf("[[Target@task]]\n", join(dir, "Source.md"));
+    const provider = definitions(lifeloop) as any;
+    const exists = vi.spyOn(lifeloop.vault, "exists").mockImplementation((path: string) => {
+      if (path === "Target@task.md") throw new Error("existence unknown");
+      return path === "Target.md";
+    });
+    try {
+      expect(provider.provideDefinition(document, { line: 0, character: 5 })).toBeUndefined();
+    } finally {
+      exists.mockRestore();
+      lifeloop.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("special-ref definitions fail closed when the target cannot be inspected", async () => {
     const { lifeloop, dir } = await workspaceWith({
       "Target.md": "* anchored $task\n",
@@ -612,6 +632,47 @@ test("live Interaction ranges come from direct non-task parsed attributes", asyn
     expect(task.contents.value).toContain("Task relationships");
     expect(task.contents.value).not.toContain("counts as an Interaction");
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+const interactionRangeCases = ["\n", "\r\n"].flatMap((newline) => [
+  ["later paragraph", newline,
+    ["* [[People/Alice]] first", "", "  continued [interaction: later]", ""].join(newline),
+    "later", "[interaction: later]"],
+  ["later duplicate", newline,
+    ["* [[People/Alice]] [interaction: early]", "", "  continued [interaction: later]", ""].join(newline),
+    "later", "[interaction: later]"],
+  ["malformed trailing duplicate", newline,
+    `* [[People/Alice]] [interaction: kept] [interaction: {broken]${newline}`,
+    "kept", "[interaction: kept]"],
+] as const);
+
+test.each(interactionRangeCases)("live Interaction range follows the %s with %j", async (_name, _newline, text, kind, selected) => {
+  const parseError = text.includes("{broken")
+    ? vi.spyOn(console, "error").mockImplementation(() => {})
+    : undefined;
+  const { lifeloop, dir } = await workspaceWith({
+    "People/Alice.md": "---\ntags: person\n---\n",
+    "Journal/2026-09-09.md": text,
+  });
+  const document = documentOf(text, join(dir, "Journal/2026-09-09.md"));
+  try {
+    expect(interactions(lifeloop.store).map((row) => row.kind)).toEqual([kind]);
+    const symbols = await (documentSymbols(lifeloop) as any).provideDocumentSymbols(document);
+    expect(symbols).toHaveLength(1);
+    expect(text.slice(
+      document.offsetAt(symbols[0].selectionRange.start),
+      document.offsetAt(symbols[0].selectionRange.end),
+    )).toBe(selected);
+    const hover = await (relationshipHovers(lifeloop) as any).provideHover(
+      document,
+      document.positionAt(text.indexOf(selected) + 2),
+    );
+    expect(hover.contents.value).toContain("counts as an Interaction");
+  } finally {
+    parseError?.mockRestore();
+    lifeloop.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Journal symbols include counted and excluded Interactions at live ranges", async () => {

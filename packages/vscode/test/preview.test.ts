@@ -261,6 +261,7 @@ describe("the same query on three surfaces", () => {
       expect(labels("```query\npeople\nkind: \n```", 2, 6)).toEqual([]);
       expect(labels("```query\nreconnect\nperson: \n```", 2, 8)).toEqual([]);
       expect(labels("> ```query\n> interactions\n> person: \n> ```", 2, 10)).toEqual(["People/Alice"]);
+      expect(labels("~~~query\n", 1, 0)).toEqual(expect.arrayContaining(["people", "interactions"]));
       expect(labels("* ```query\n  interactions\nafter\n", 2, 0)).toEqual([]);
       expect(labels("```query\ninteractions\n```", 2, 0)).toEqual([]);
       expect(labels("~~~query\ninteractions\n~~~", 2, 0)).toEqual([]);
@@ -271,6 +272,18 @@ describe("the same query on three surfaces", () => {
       expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
         expect.arrayContaining(["call", "meeting"]),
       );
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["opening info at EOF", "~~~query", 0, 8],
+    ["blockquote prefix", "> ~~~query\n> ", 1, 0],
+  ])("completion excludes %s", async (_name, text, line, character) => {
+    const { queryCompletions } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({ "W.md": "" });
+    try {
+      expect((queryCompletions(() => lifeloop) as any)
+        .provideCompletionItems(documentOf(text), { line, character })).toEqual([]);
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -285,6 +298,18 @@ describe("the same query on three surfaces", () => {
         .toBeUndefined();
       expect(provider.provideHover(documentOf("* ```query\n  people\nafter\n"), { line: 2, character: 0 }))
         .toBeUndefined();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["opening info at EOF", "~~~query", 0, 8],
+    ["blockquote prefix", "> ~~~query\n> people", 1, 0],
+  ])("query hover excludes %s", async (_name, text, line, character) => {
+    const { hovers } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({ "W.md": "" });
+    try {
+      expect((hovers(() => lifeloop) as any)
+        .provideHover(documentOf(text), { line, character })).toBeUndefined();
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 

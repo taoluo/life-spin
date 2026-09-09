@@ -16,6 +16,7 @@ export type LocatedQueryFence = {
   source: string;
   bodyFrom: number;
   bodyTo: number;
+  bodyLines: { from: number; to: number }[];
   openLine: number;
   closeLine: number;
   closeLength: number;
@@ -87,7 +88,7 @@ export function parseLocatedQuery(source: string, base = 0): LocatedQuery {
 
 /** Body ownership shared by completion, definitions, hover, and actions. */
 export const queryBodyContains = (fence: LocatedQueryFence, offset: number): boolean =>
-  offset >= fence.bodyFrom && (fence.closed ? offset < fence.bodyTo : offset <= fence.bodyTo);
+  fence.bodyLines.some((line) => offset >= line.from && offset <= line.to);
 
 /** Recognized query fences, including an unfinished final block for completion. */
 export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
@@ -128,6 +129,13 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
     })));
     const bodyFrom = codeLines[0]?.from ?? open.next;
     const bodyTo = closing ? close.from : endOffset;
+    const hasOpeningNewline = open.next > open.to;
+    const bodyLines = hasOpeningNewline
+      ? codeLines.map(({ from, to }) => ({ from, to }))
+      : [];
+    if (!closing && hasOpeningNewline && !bodyLines.some((line) => line.to === bodyTo)) {
+      bodyLines.push({ from: bodyTo, to: bodyTo });
+    }
     const body = code.map((part) => part.text).join("").replace(/\n$/, "");
     found.push({
       language,
@@ -136,6 +144,7 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
       source: body,
       bodyFrom,
       bodyTo,
+      bodyLines,
       openLine: open.line,
       closeLine: close.line,
       closeLength: closing ? close.text.length : endOffset - close.from,
