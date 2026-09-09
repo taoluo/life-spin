@@ -1,11 +1,13 @@
 import type { PageMeta } from "../../../vendor/silverbullet/plug-api/types/index.ts";
 import { indexMarkdown } from "../../../vendor/silverbullet/plugs/index/indexer.ts";
 import { extractFrontMatter } from "../../../vendor/silverbullet/plugs/index/frontmatter.ts";
-import { updateITags } from "../../../vendor/silverbullet/plugs/index/tags.ts";
+import { commentedRange, updateITags } from "../../../vendor/silverbullet/plugs/index/tags.ts";
+import { extractItemFromNode } from "../../../vendor/silverbullet/plugs/index/item.ts";
 import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
+import { traverseTree } from "../../../vendor/silverbullet/plug-api/lib/tree.ts";
 import { installSyscalls, setPathLookup, withExtractionConfig, type PathLookup } from "./compat/syscalls.ts";
 
-import { validateTaskStates, type CycleStates } from "./mutations/tasks.ts";
+import { DEFAULT_CYCLE, validateTaskStates, type CycleStates } from "./mutations/tasks.ts";
 
 export type LifeloopObject = {
   ref: string;
@@ -67,6 +69,29 @@ export function pageObject(text: string, meta: PageMeta): LifeloopObject {
   if (combined.aliases && !Array.isArray(combined.aliases)) combined.aliases = [];
   updateITags(combined, frontmatter);
   return combined as LifeloopObject;
+}
+
+/** Parse current editor text into SilverBullet item/task objects without indexing it. */
+export function extractLiveItems(
+  text: string,
+  meta: PageMeta,
+  taskStates: CycleStates = DEFAULT_CYCLE,
+): LifeloopObject[] {
+  validateTaskStates(taskStates);
+  const tree = parseMarkdownSync(text);
+  const frontmatter = extractFrontMatter(tree);
+  const complete = ["x", "X", ...taskStates.filter((state) => state.done).map((state) => state.state)];
+  const cache = new Map<number, ReturnType<typeof extractItemFromNode>>();
+  const items: LifeloopObject[] = [];
+  traverseTree(tree, (node) => {
+    if (node.type !== "ListItem") return false;
+    const item = extractItemFromNode(
+      meta.name, node, frontmatter, true, complete, cache, meta.lastModified,
+    ) as unknown as LifeloopObject;
+    items.push(commentedRange(node) ? { ...item, inComment: true } : item);
+    return false;
+  }, true);
+  return items;
 }
 
 // `parseMarkdown` is async in the syscall surface but synchronous underneath.

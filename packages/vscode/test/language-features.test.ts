@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { interactions } from "@lifeloop/semantic-core";
 import {
   applyDiagnosticFix, codeActions, definitions, documentSymbols, relationshipDiagnostics,
   relationshipHovers,
@@ -260,6 +261,71 @@ describe("relationship hover", () => {
       expect(cadence).toContain("due");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
+
+  test("uses parsed frontmatter values while retaining their source ranges", async () => {
+    const person = [
+      "---",
+      "tags: person",
+      'birthday: "02-29" # leap day',
+      'contact-every: "30d" # monthly',
+      "---",
+      "",
+    ].join("\n");
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": person,
+      "Journal/2026-08-01.md": "* Call [[People/Alice]] [interaction: call]\n",
+    });
+    const document = documentOf(person, join(dir, "People/Alice.md"));
+    const provider = relationshipHovers(lifeloop) as any;
+    const selected = (hover: any) => person.slice(
+      document.offsetAt(hover.range.start), document.offsetAt(hover.range.end),
+    );
+    try {
+      const birthday = await provider.provideHover(document, document.positionAt(person.indexOf("02-29")));
+      expect(birthday.contents.value).toContain("2028-02-29");
+      expect(selected(birthday)).toBe('"02-29"');
+      const cadence = await provider.provideHover(document, document.positionAt(person.indexOf("30d")));
+      expect(cadence.contents.value).toContain("30 days");
+      expect(selected(cadence)).toBe('"30d"');
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+test("live Interaction features follow parser and core item semantics", async () => {
+  const text = [
+    "* [interaction: coffee]",
+    "  [[People/Alice]]",
+    "* `example [interaction: code]`",
+    "* \\[interaction: escaped]",
+    "* [interaction: 42]",
+    "<!--",
+    "* [[People/Alice]] [interaction: hidden]",
+    "-->",
+    "~~~text",
+    "* [[People/Alice]] [interaction: fenced]",
+    "~~~",
+    '* [[People/Alice]] [interaction: ""]',
+    "",
+  ].join("\r\n");
+  const { lifeloop, dir } = await workspaceWith({
+    "People/Alice.md": "---\ntags: person\n---\n",
+    "Journal/2026-09-09.md": text,
+  });
+  const document = documentOf(text, join(dir, "Journal/2026-09-09.md"));
+  const provider = relationshipHovers(lifeloop) as any;
+  try {
+    expect(interactions(lifeloop.store).map((entry) => entry.kind)).toEqual(["coffee"]);
+    const symbols = await (documentSymbols(lifeloop) as any).provideDocumentSymbols(document);
+    expect(symbols.map((symbol: any) => symbol.name)).toEqual(["coffee", "(empty Interaction)"]);
+    expect((await provider.provideHover(document, document.positionAt(text.indexOf("interaction: coffee"))))
+      .contents.value).toContain("counts as an Interaction");
+    for (const value of ["code", "escaped", "42", "hidden", "fenced"]) {
+      expect(await provider.provideHover(document, document.positionAt(text.indexOf(`interaction: ${value}`))))
+        .toBeUndefined();
+    }
+    expect(relationshipDiagnostics(lifeloop, text, "Journal/2026-09-09", true)
+      .map((entry: any) => entry.message)).toEqual(["empty Interaction kind is excluded"]);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("Journal symbols include counted and excluded Interactions at live ranges", async () => {
@@ -278,5 +344,20 @@ test("Journal symbols include counted and excluded Interactions at live ranges",
     expect(symbols.map((symbol: any) => text.slice(
       document.offsetAt(symbol.selectionRange.start), document.offsetAt(symbol.selectionRange.end),
     ))).toEqual(["[interaction: coffee]", '[interaction: ""]']);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("task symbols use live names and CRLF ranges", async () => {
+  const indexed = "* [ ] old name\r\n";
+  const live = "😀\r\n\r\n* [ ] live name\r\n";
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": indexed });
+  const document = documentOf(live, join(dir, "Work.md"));
+  try {
+    const symbols = await (documentSymbols(lifeloop) as any).provideDocumentSymbols(document);
+    expect(symbols.map((symbol: any) => symbol.name)).toEqual(["live name"]);
+    expect(live.slice(
+      document.offsetAt(symbols[0].selectionRange.start),
+      document.offsetAt(symbols[0].selectionRange.end),
+    )).toBe("* [ ] live name");
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });

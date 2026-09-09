@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import {
-  birthday, cadence, day, directPersonLinks, nextBirthday, pageDate, pageMetaFor, pageObject,
-  pathOf, people, personContext, projectionNames, projections, relationshipDate,
+  birthday, cadence, day, directPersonLinks, extractLiveItems, nextBirthday, originalSourceOffset,
+  pageDate, pageMetaFor, pageObject, pathOf, people, personContext, projectionNames, projections, relationshipDate,
   relationshipProjectionNames, resolveRef, TASK_MARKER,
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
@@ -54,28 +54,35 @@ function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): L
   if (page) {
     try { date = pageDate(pageObject(text, pageMetaFor(page))); } catch { /* invalid page metadata */ }
   }
-  const queryBodies = findLocatedQueryFences(text).map((fence) => [fence.bodyFrom, fence.bodyTo] as const);
   const found: LocatedInteraction[] = [];
-  for (const match of text.matchAll(/\[interaction:\s*(?:"([^"\r\n]*)"|([^\]\r\n]*))\]/g)) {
-    if (queryBodies.some(([from, to]) => match.index! >= from && match.index! < to)) continue;
-    const lineFrom = text.lastIndexOf("\n", Math.max(0, match.index! - 1)) + 1;
-    const newline = text.indexOf("\n", match.index!);
+  const items = extractLiveItems(text, pageMetaFor(page ?? ""), lifeloop.taskStates);
+  for (const item of items) {
+    const interaction = item.interaction;
+    if (item.inComment === true || typeof interaction !== "string") continue;
+    const [parsedFrom, parsedTo] = (item.range as [number, number] | undefined) ?? [0, 0];
+    const itemFrom = originalSourceOffset(text, parsedFrom);
+    const itemTo = originalSourceOffset(text, parsedTo);
+    const matches = [...text.slice(itemFrom, itemTo)
+      .matchAll(/\[interaction:\s*(?:"([^"\r\n]*)"|([^\]\r\n]*))\]/g)];
+    const match = matches.filter((candidate) =>
+      (candidate[1] ?? candidate[2] ?? "").trim() === interaction.trim()).at(-1);
+    if (!match) continue;
+    const attributeFrom = itemFrom + match.index!;
+    const lineFrom = text.lastIndexOf("\n", Math.max(0, attributeFrom - 1)) + 1;
+    const newline = text.indexOf("\n", attributeFrom);
     const lineTo = newline < 0 ? text.length : newline - (text[newline - 1] === "\r" ? 1 : 0);
-    const line = text.slice(lineFrom, lineTo);
-    if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) continue;
     const raw = match[1] ?? match[2] ?? "";
-    const valueFrom = match.index! + (match[1] !== undefined
+    const valueFrom = attributeFrom + (match[1] !== undefined
       ? match[0].indexOf('"') + 1
       : match[0].indexOf(":") + 1 + (match[0].slice(match[0].indexOf(":") + 1).match(/^\s*/)?.[0].length ?? 0));
-    const people = [...line.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)]
-      .map((link) => link[1].trim()).filter((person) => exactPerson(lifeloop, person));
+    const linked = ((item.links as string[] | undefined) ?? []).filter((person) => exactPerson(lifeloop, person));
     const reasons = [
       ...(!raw.trim() ? ["empty Interaction kind is excluded"] : []),
       ...(!date ? ["Interaction is excluded because the page has no trustworthy Journal date"] : []),
-      ...(!people.length ? ["Interaction is excluded because it has no direct Person link"] : []),
+      ...(!linked.length ? ["Interaction is excluded because it has no direct Person link"] : []),
     ];
     found.push({
-      attribute: { text: match[0], from: match.index!, to: match.index! + match[0].length },
+      attribute: { text: match[0], from: attributeFrom, to: attributeFrom + match[0].length },
       value: { text: raw, from: valueFrom, to: valueFrom + raw.length },
       kind: raw.trim(), lineFrom, lineTo, reasons,
     });
@@ -217,10 +224,11 @@ export function relationshipDiagnostics(
 const frontmatterValue = (text: string, field: string): QueryToken | undefined => {
   const frontmatter = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0];
   if (!frontmatter) return undefined;
-  const match = new RegExp(`^${field}:\\s*(.*?)\\s*$`, "m").exec(frontmatter);
+  const match = new RegExp(`^${field}:[ \\t]*(.*?)[ \\t]*$`, "m").exec(frontmatter);
   if (!match) return undefined;
+  const value = /^(.*?)[ \\t]+#.*$/.exec(match[1])?.[1].trimEnd() ?? match[1];
   const from = match.index + match[0].indexOf(match[1]);
-  return { text: match[1], from, to: from + match[1].length };
+  return { text: value, from, to: from + value.length };
 };
 
 const markdown = (value: string, range: vscode.Range): vscode.Hover => {
@@ -261,7 +269,7 @@ export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
         if (livePage && (livePage.itags as string[] | undefined)?.includes("person")) {
           const born = frontmatterValue(text, "birthday");
           if (born && offset >= born.from && offset <= born.to) {
-            const value = birthday(born.text);
+            const value = birthday(livePage.birthday);
             const next = value ? nextBirthday(value, day()) : undefined;
             if (next) {
               return markdown(`**Birthday:** ${escaped(value!)} · next ${next}`,
@@ -270,7 +278,7 @@ export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
           }
           const cadenceToken = frontmatterValue(text, "contact-every");
           if (cadenceToken && offset >= cadenceToken.from && offset <= cadenceToken.to && lifeloop.indexIsSettled()) {
-            const days = cadence(cadenceToken.text);
+            const days = cadence(livePage["contact-every"]);
             const context = days ? personContext(lifeloop.store, page) : null;
             if (context && context.cadenceDays === days) {
               const last = context.lastInteraction?.date ?? "none recorded";
@@ -702,13 +710,12 @@ export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvid
     provideDocumentSymbols(document) {
       const page = lifeloop.pageNameOfUri(document.uri);
       const text = document.getText();
-      const tasks = lifeloop.store
-        .objects("task")
-        .filter((t) => t.page === page && t.inComment !== true);
+      const items = extractLiveItems(text, pageMetaFor(page), lifeloop.taskStates);
+      const tasks = items.filter((item) => item.tag === "task" && item.inComment !== true);
 
       const taskSymbols = tasks.map((task) => {
         const [from] = (task.range as [number, number] | undefined) ?? [0, 0];
-        const start = document.positionAt(Math.min(from, text.length));
+        const start = document.positionAt(originalSourceOffset(text, from));
         const range = document.lineAt(start.line).range;
         const symbol = new vscode.DocumentSymbol(
           String(task.name ?? "").trim() || "(empty task)",
