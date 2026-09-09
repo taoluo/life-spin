@@ -38,6 +38,17 @@ describe("what a script can read", () => {
     host.cleanup();
   });
 
+  test("projection arrays stay arrays when empty", async () => {
+    const host = await hostFor({ "Alice.md": "---\ntags: person\n---\n" });
+    expect(await runLua("lifeloop.people({limit = 0})", host))
+      .toEqual({ ok: true, value: [] });
+    expect(await runLua("lifeloop.people()[1].groups", host))
+      .toEqual({ ok: true, value: [] });
+    expect(await runLua("query[[ from p = lifeloop.people() limit 0 ]]", host))
+      .toEqual({ ok: true, value: [] });
+    host.cleanup();
+  });
+
   test("space.readPage reads a page, and a missing one is an error not a crash", async () => {
     const host = await hostFor({ "W.md": "hello\n" });
     expect(await runLua("space.readPage('W')", host)).toMatchObject({
