@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { LifeLoop } from "../src/workspace.ts";
 import { TodayView, ProjectsView, InboxView, LinkedTasksView, PersonContextView } from "../src/views.ts";
 import { publishDiagnostics, resolveTarget } from "../src/retrieval.ts";
-import { setTaskState, day, shift, Store, extractObjects, pageMetaFor } from "@lifeloop/semantic-core";
+import { apply, changeSet, setTaskState, day, shift, Store, extractObjects, pageMetaFor } from "@lifeloop/semantic-core";
 import * as vscode from "./vscode-mock.ts";
 import { renderPreMeetingBrief } from "../src/apple.ts";
 import { taskTarget } from "../src/task-target.ts";
@@ -571,6 +571,35 @@ test("a dirty excluded page inside the vault still uses the editor buffer", asyn
     await lifeloop.vault.write("tmp/Inbox.md", "changed\n");
     expect(edit).toHaveBeenCalledOnce();
     expect(readFileSync(join(dir, "tmp/Inbox.md"), "utf8")).toBe("disk\n");
+  } finally {
+    edit.mockRestore();
+    vscode.workspace.textDocuments = [];
+    lifeloop.dispose(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed editor save cannot be reconciled from the dirty buffer", async () => {
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": "before" });
+  let text = "before";
+  const document: any = {
+    uri: vscode.Uri.file(join(dir, "Work.md")), languageId: "markdown",
+    isDirty: false, isClosed: false, getText: () => text,
+    positionAt: (offset: number) => ({ line: 0, character: offset }),
+    save: async () => false,
+  };
+  vscode.workspace.textDocuments = [document];
+  const edit = vi.spyOn(vscode.workspace, "applyEdit").mockImplementation(async (change: any) => {
+    text = change.edits[0].content;
+    document.isDirty = true;
+    return true;
+  });
+  try {
+    const cs = changeSet("failed editor save");
+    cs.expected.set("Work.md", "before");
+    cs.writes.set("Work.md", "after");
+    expect(await apply(lifeloop.vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+    expect(document.isDirty).toBe(true);
+    expect(readFileSync(join(dir, "Work.md"), "utf8")).toBe("before");
   } finally {
     edit.mockRestore();
     vscode.workspace.textDocuments = [];

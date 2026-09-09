@@ -150,22 +150,30 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
         return { ...step, current: undefined };
       }
     });
+    const durablyEquals = (step: typeof effects[number], content: string | null) => {
+      try { return vault.durableEquals?.(step.path, content) === true; } catch { return false; }
+    };
     const observed = read();
-    if (observed.every((step) => step.current === step.after)) {
+    if (observed.every((step) => step.current === step.after) &&
+        effects.every((step) => durablyEquals(step, step.after))) {
       return { ok: true, changed: effects.map((step) => step.path), value: undefined };
     }
-    if (observed.every((step) => step.current === step.before)) {
+    if (observed.every((step) => step.current === step.before) &&
+        effects.every((step) => durablyEquals(step, step.before))) {
       return refuse("unknown", `${(error as Error).message}; authoritative reread found no applied changes`);
     }
     if (observed.every((step) => step.current === step.before || step.current === step.after)) {
       for (const step of [...observed].reverse()) {
-        if (step.current !== step.after) continue;
+        let current: string | null | undefined;
+        try { current = vault.exists(step.path) ? vault.read(step.path) : null; } catch { continue; }
+        if (current !== step.after) continue;
         try {
           if (step.before === null) await vault.remove(step.path);
           else await vault.write(step.path, step.before);
         } catch { /* reconciled below */ }
       }
-      if (read().every((step) => step.current === step.before)) {
+      if (read().every((step) => step.current === step.before) &&
+          effects.every((step) => durablyEquals(step, step.before))) {
         return refuse("unknown", `${(error as Error).message}; verified rollback restored the prior contents`);
       }
     }

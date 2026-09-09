@@ -39,6 +39,10 @@ export class WorkspaceVault implements Vault {
     return open ? open.getText() : this.disk.read(path);
   }
 
+  durableEquals(path: string, content: string | null): boolean | undefined {
+    try { return this.disk.durableEquals(path, content); } catch { return undefined; }
+  }
+
   isDirty(path: string): boolean {
     return this.openDocument(path)?.isDirty === true;
   }

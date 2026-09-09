@@ -14,6 +14,8 @@ export interface Vault {
   readonly root: string;
   exists(path: string): boolean;
   read(path: string): string;
+  /** Confirm persisted contents after a write response is lost. */
+  durableEquals?(path: string, content: string | null): boolean | undefined;
   /**
    * Async, because one implementation cannot be otherwise.
    *
@@ -46,6 +48,11 @@ export class NodeVault implements Vault {
 
   read(path: string): string {
     return readFileSync(this.abs(path), "utf8");
+  }
+
+  durableEquals(path: string, content: string | null): boolean {
+    const exists = this.exists(path);
+    return content === null ? !exists : exists && this.read(path) === content;
   }
 
   /**
@@ -86,6 +93,10 @@ export class MemoryVault implements Vault {
     const text = this.files.get(path);
     if (text === undefined) throw new Error(`no such page: ${path}`);
     return text;
+  }
+  durableEquals(path: string, content: string | null): boolean {
+    const exists = this.exists(path);
+    return content === null ? !exists : exists && this.read(path) === content;
   }
   async write(path: string, content: string): Promise<void> { this.files.set(path, content); }
   async remove(path: string): Promise<void> { this.files.delete(path); }
