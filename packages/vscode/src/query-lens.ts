@@ -5,7 +5,7 @@ import {
 } from "@lifeloop/semantic-core";
 import { runQueryBlock, toMarkdown, toNavigableMarkdown, parseQueryBlock } from "./preview.ts";
 import type { LifeLoop } from "./workspace.ts";
-import { findLocatedQueryFences } from "./query-language.ts";
+import { findLocatedQueryFences, queryBodyContains } from "./query-language.ts";
 
 /**
  * The same query, in the editor, on two surfaces that are good at different things.
@@ -49,7 +49,7 @@ export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.C
       const text = document.getText();
       const offset = document.offsetAt(position);
       const fence = findLocatedQueryFences(text).find((candidate) =>
-        offset >= candidate.bodyFrom && offset <= candidate.bodyTo);
+        queryBodyContains(candidate, offset));
       if (!fence) return [];
 
       const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
@@ -68,7 +68,9 @@ export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.C
           .map((key) => completion(String(key), vscode.CompletionItemKind.Keyword, `${String(key)}: `));
       }
 
-      const key = /^\s*([A-Za-z]+)\s*:/.exec(before)?.[1] as keyof ProjectionArgs | "fields" | "limit" | undefined;
+      const option = fence.query.options.find((candidate) =>
+        candidate.key.from >= lineStart && candidate.key.from <= offset);
+      const key = option?.key.text as keyof ProjectionArgs | "fields" | "limit" | undefined;
       if (!key) return [];
       const allowed = projections[name].allowedArgs ?? [];
       if (key === "kind" && allowed.includes("kind")) {
@@ -79,8 +81,6 @@ export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.C
           .map((field) => completion(field, vscode.CompletionItemKind.Keyword));
       }
       if (key === "person" && allowed.includes("person") && instance.indexIsSettled()) {
-        const option = fence.query.options.find((candidate) =>
-          candidate.key.text === "person" && candidate.key.from >= lineStart && candidate.key.from <= offset);
         const range = option && new vscode.Range(
           document.positionAt(option.value.from), document.positionAt(option.value.to),
         );
@@ -139,9 +139,13 @@ export function hovers(lifeloop: () => LifeLoop | undefined): vscode.HoverProvid
     provideHover(document, position) {
       const instance = lifeloop();
       if (!instance) return undefined;
-      const fence = findQueryFences(document).find((f) =>
-        position.line >= f.range.start.line && position.line <= f.range.end.line,
-      );
+      const text = document.getText();
+      const offset = document.offsetAt(position);
+      const located = findLocatedQueryFences(text).find((fence) => queryBodyContains(fence, offset));
+      const fence = located && {
+        range: new vscode.Range(located.openLine, 0, located.closeLine, located.closeLength),
+        source: located.source,
+      };
       if (!fence) return undefined;
 
       const outcome = runQueryBlock(instance, fence.source);

@@ -19,6 +19,7 @@ export type LocatedQueryFence = {
   openLine: number;
   closeLine: number;
   closeLength: number;
+  closed: boolean;
   query: LocatedQuery;
 };
 
@@ -43,9 +44,8 @@ function lines(source: string, base = 0): Line[] {
 
 const token = (text: string, from: number): QueryToken => ({ text, from, to: from + text.length });
 
-/** Parse the tiny query-block syntax while retaining exact UTF-16 offsets. */
-export function parseLocatedQuery(source: string, base = 0): LocatedQuery {
-  const meaningful = lines(source, base).filter((line) => line.text.trim().length > 0);
+function parseQueryLines(input: Line[]): LocatedQuery {
+  const meaningful = input.filter((line) => line.text.trim().length > 0);
   if (!meaningful.length) return { options: [], malformed: [] };
 
   const head = meaningful[0];
@@ -80,6 +80,15 @@ export function parseLocatedQuery(source: string, base = 0): LocatedQuery {
   return { projection, options, malformed };
 }
 
+/** Parse the tiny query-block syntax while retaining exact UTF-16 offsets. */
+export function parseLocatedQuery(source: string, base = 0): LocatedQuery {
+  return parseQueryLines(lines(source, base));
+}
+
+/** Body ownership shared by completion, definitions, hover, and actions. */
+export const queryBodyContains = (fence: LocatedQueryFence, offset: number): boolean =>
+  offset >= fence.bodyFrom && (fence.closed ? offset < fence.bodyTo : offset <= fence.bodyTo);
+
 /** Recognized query fences, including an unfinished final block for completion. */
 export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
   const sourceLines = lines(source);
@@ -97,12 +106,29 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
     const open = sourceLines.find((line) => openOffset >= line.from && openOffset <= line.to)!;
     const closing = marks[1];
     const closeOffset = closing ? originalSourceOffset(source, closing.from ?? source.length) : source.length;
-    const close = closing
-      ? sourceLines.find((line) => closeOffset >= line.from && closeOffset <= line.to)!
-      : sourceLines.at(-1)!;
-    const bodyFrom = open.next;
-    const bodyTo = closing ? close.from : source.length;
-    const body = source.slice(bodyFrom, bodyTo).replace(/\r?\n$/, "");
+    const endOffset = closing
+      ? closeOffset
+      : originalSourceOffset(source, fence.to ?? source.length);
+    const close = sourceLines.find((line) => endOffset >= line.from && endOffset <= line.to) ?? sourceLines.at(-1)!;
+    const code = collectNodesOfType(fence, "CodeText").map((node) => {
+      const parsedFrom = node.from ?? 0;
+      const from = originalSourceOffset(source, parsedFrom);
+      const to = originalSourceOffset(source, node.to ?? parsedFrom);
+      return {
+        text: source.slice(from, to).replace(/\r$/, ""),
+        parsedText: node.children?.[0].text ?? "",
+        parsedFrom,
+      };
+    });
+    const codeLines = code.flatMap((part) => lines(part.parsedText).map((line) => ({
+      ...line,
+      from: originalSourceOffset(source, part.parsedFrom + line.from),
+      to: originalSourceOffset(source, part.parsedFrom + line.to),
+      next: originalSourceOffset(source, part.parsedFrom + line.next),
+    })));
+    const bodyFrom = codeLines[0]?.from ?? open.next;
+    const bodyTo = closing ? close.from : endOffset;
+    const body = code.map((part) => part.text).join("").replace(/\n$/, "");
     found.push({
       language,
       marker,
@@ -112,8 +138,9 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
       bodyTo,
       openLine: open.line,
       closeLine: close.line,
-      closeLength: close.text.length,
-      query: parseLocatedQuery(body, bodyFrom),
+      closeLength: closing ? close.text.length : endOffset - close.from,
+      closed: closing !== undefined,
+      query: parseQueryLines(codeLines),
     });
   }
   return found;

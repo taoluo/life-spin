@@ -220,6 +220,20 @@ describe("the same query on three surfaces", () => {
     });
   });
 
+  test("container query bodies use parsed code text and stop at the container boundary", () => {
+    const quoted = "> ```query\n> interactions\n> person: People/Alice\n> ```\n";
+    const fence = findLocatedQueryFences(quoted)[0];
+    expect(fence.source).toBe("interactions\nperson: People/Alice");
+    expect(quoted.slice(fence.query.projection!.from, fence.query.projection!.to)).toBe("interactions");
+    expect(quoted.slice(fence.query.options[0].value.from, fence.query.options[0].value.to))
+      .toBe("People/Alice");
+
+    const unclosed = "* ```query\n  interactions\nafter\n";
+    const openFence = findLocatedQueryFences(unclosed)[0];
+    expect(openFence.source).toBe("interactions");
+    expect(openFence.bodyTo).toBeLessThan(unclosed.indexOf("after"));
+  });
+
   test("completion stays inside query bodies and legal value positions", async () => {
     const { queryCompletions } = await import("../src/query-lens.ts");
     const { lifeloop, dir } = await workspaceWith({
@@ -246,12 +260,31 @@ describe("the same query on three surfaces", () => {
       expect(labels("```query\ninteractions\nfrom: \n```", 2, 6)).toEqual([]);
       expect(labels("```query\npeople\nkind: \n```", 2, 6)).toEqual([]);
       expect(labels("```query\nreconnect\nperson: \n```", 2, 8)).toEqual([]);
+      expect(labels("> ```query\n> interactions\n> person: \n> ```", 2, 10)).toEqual(["People/Alice"]);
+      expect(labels("* ```query\n  interactions\nafter\n", 2, 0)).toEqual([]);
+      expect(labels("```query\ninteractions\n```", 2, 0)).toEqual([]);
+      expect(labels("~~~query\ninteractions\n~~~", 2, 0)).toEqual([]);
+      expect(labels("> ```query\n> interactions\n> ```", 2, 0)).toEqual([]);
 
       lifeloop.noteSourceChange();
       expect(labels("```query\ninteractions\nperson: \n```", 2, 8)).toEqual([]);
       expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
         expect.arrayContaining(["call", "meeting"]),
       );
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("query hover excludes closing delimiters and text beyond unclosed containers", async () => {
+    const { hovers } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({ "W.md": "" });
+    const provider = hovers(() => lifeloop) as any;
+    try {
+      expect(provider.provideHover(documentOf("```query\npeople\n```"), { line: 2, character: 0 }))
+        .toBeUndefined();
+      expect(provider.provideHover(documentOf("> ```query\n> people\n> ```"), { line: 2, character: 0 }))
+        .toBeUndefined();
+      expect(provider.provideHover(documentOf("* ```query\n  people\nafter\n"), { line: 2, character: 0 }))
+        .toBeUndefined();
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -292,7 +325,7 @@ describe("the same query on three surfaces", () => {
       "W.md": page.replace("a target", "<img src=x> | piped"),
     });
     const hover: any = (hovers(() => lifeloop) as any)
-      .provideHover(documentOf(page), { line: 3 });
+      .provideHover(documentOf(page), { line: 3, character: 0 });
 
     const value = hover.contents.value;
     expect(value).toContain("| name |");
