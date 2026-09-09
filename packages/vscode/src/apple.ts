@@ -13,6 +13,7 @@ import {
 } from "@lifeloop/apple-bridge";
 import type { LifeLoop } from "./workspace.ts";
 import { taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
+import { personLink, sourceLink } from "./temporary-navigation.ts";
 
 type SyncConflict =
   | { kind: "calendar"; id: string; ref: string; local: string; remote: string; reason: string }
@@ -25,7 +26,16 @@ const markdownText = (value: unknown): string => String(value ?? "")
   .trim();
 
 /** A temporary, read-only projection of authoritative Calendar and Markdown facts. */
-export function renderPreMeetingBrief(event: CalendarEvent, contexts: PersonContext[]): string {
+type BriefLinks = {
+  person: (person: string, label: string) => string;
+  source: (ref: string) => string;
+};
+
+export function renderPreMeetingBrief(
+  event: CalendarEvent,
+  contexts: PersonContext[],
+  links?: BriefLinks,
+): string {
   const when = [event.start && markdownText(event.start), event.end && markdownText(event.end)]
     .filter(Boolean).join("–");
   const where = markdownText(event.location);
@@ -36,19 +46,24 @@ export function renderPreMeetingBrief(event: CalendarEvent, contexts: PersonCont
     [when, where].filter(Boolean).join(" · "),
   ];
   for (const context of contexts) {
-    const name = String(context.person.ref).split("/").at(-1) ?? String(context.person.ref);
+    const person = String(context.person.ref);
+    const name = person.split("/").at(-1) ?? person;
     const last = context.lastInteraction;
+    const followups = links && context.openFollowups.length
+      ? ` · ${context.openFollowups.map((task) => links.source(String(task.ref))).join(", ")}`
+      : "";
     lines.push(
       "",
-      `## ${markdownText(name)}`,
+      `## ${links ? links.person(person, name) : markdownText(name)}`,
       "",
       `- Last interaction: ${last ? `${last.date} · ${markdownText(last.kind)}` : "none recorded"}`,
-      `- Open follow-ups: ${context.openFollowups.length}`,
+      `- Open follow-ups: ${context.openFollowups.length}${followups}`,
     );
     if (context.interactions.length) {
       lines.push("- Recent context:");
       for (const entry of context.interactions.slice(0, 5)) {
-        lines.push(`  - ${entry.date} · ${markdownText(entry.kind)} · ${markdownText(entry.text)}`);
+        lines.push(`  - ${entry.date} · ${markdownText(entry.kind)} · ${markdownText(entry.text)}` +
+          (links ? ` · ${links.source(entry.ref)}` : ""));
       }
     }
   }
@@ -182,7 +197,10 @@ export async function openPreMeetingBrief(
     warn("a linked Person changed while preparing the brief");
     return;
   }
-  const markdown = renderPreMeetingBrief(result.event, contexts as PersonContext[]);
+  const markdown = renderPreMeetingBrief(result.event, contexts as PersonContext[], {
+    person: (person, label) => personLink(lifeloop, person, label),
+    source: (ref) => sourceLink(lifeloop, ref),
+  });
   const open = options.open ?? (async (content: string) => {
     const document = await vscode.workspace.openTextDocument({ content, language: "markdown" });
     await vscode.window.showTextDocument(document, { preview: true });

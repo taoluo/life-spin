@@ -3,7 +3,7 @@ import {
   INTERACTION_KINDS, people, projectionNames, projections, relationshipProjectionNames,
   type ProjectionArgs, type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
-import { runQueryBlock, toMarkdown, parseQueryBlock } from "./preview.ts";
+import { runQueryBlock, toMarkdown, toNavigableMarkdown, parseQueryBlock } from "./preview.ts";
 import type { LifeLoop } from "./workspace.ts";
 import { findLocatedQueryFences } from "./query-language.ts";
 
@@ -161,7 +161,9 @@ export function registerQueryCommands(
       // A virtual document, not a webview: it is Markdown, so the preview, search
       // and copy all work, and nothing is written to the vault.
       const document = await vscode.workspace.openTextDocument({
-        content: `# ${heading}\n\n${toMarkdown(outcome)}\n`,
+        content: `# ${heading}\n\n${"error" in parsed
+          ? toMarkdown(outcome)
+          : toNavigableMarkdown(instance, outcome, parsed.projection)}\n`,
         language: "markdown",
       });
       await vscode.window.showTextDocument(document, { preview: true });

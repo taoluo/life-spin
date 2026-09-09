@@ -4,6 +4,7 @@ import {
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import { parseLocatedQuery } from "./query-language.ts";
+import { personLink, sourceLink } from "./temporary-navigation.ts";
 
 /**
  * Queries that render in the Markdown preview.
@@ -186,7 +187,11 @@ const cell = (row: Record<string, unknown>, column: string): string => {
  * table cannot go there. A hover takes a full `MarkdownString`, which is why the
  * two surfaces show different things rather than the same thing twice.
  */
-export function toMarkdown(outcome: QueryOutcome, heading?: string): string {
+function markdownTable(
+  outcome: QueryOutcome,
+  heading?: string,
+  value: (row: Record<string, unknown>, column: string) => string = cell,
+): string {
   if (!outcome.ok) return `**LifeLoop query**: ${outcome.error}`;
   if (outcome.rows.length === 0) return `_Nothing to show._`;
 
@@ -194,10 +199,35 @@ export function toMarkdown(outcome: QueryOutcome, heading?: string): string {
   const head = `| ${outcome.columns.map(pipe).join(" | ")} |`;
   const rule = `| ${outcome.columns.map(() => "---").join(" | ")} |`;
   const body = outcome.rows
-    .map((row) => `| ${outcome.columns.map((c) => pipe(cell(row, c))).join(" | ")} |`)
+    .map((row) => `| ${outcome.columns.map((c) => pipe(value(row, c))).join(" | ")} |`)
     .join("\n");
 
   return [heading ? `**${heading}**\n` : "", head, rule, body].filter(Boolean).join("\n");
+}
+
+export function toMarkdown(outcome: QueryOutcome, heading?: string): string {
+  return markdownTable(outcome, heading);
+}
+
+/** Navigation exists only in the throwaway full-result document. */
+export function toNavigableMarkdown(
+  lifeloop: LifeLoop,
+  outcome: QueryOutcome,
+  projection: ProjectionName,
+): string {
+  if (!(relationshipProjectionNames as readonly string[]).includes(projection)) return toMarkdown(outcome);
+  return markdownTable(outcome, undefined, (row, column) => {
+    const value = row[column];
+    if (column === "person" && typeof value === "string") return personLink(lifeloop, value);
+    if (column === "people" && Array.isArray(value)) {
+      return value.map((person) => personLink(lifeloop, String(person))).join(", ");
+    }
+    if (column === "ref" && typeof value === "string") return sourceLink(lifeloop, value);
+    if (column === "openFollowupRefs" && Array.isArray(value)) {
+      return value.map((ref) => sourceLink(lifeloop, String(ref))).join(", ");
+    }
+    return cell(row, column);
+  });
 }
 
 /**

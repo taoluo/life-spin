@@ -125,7 +125,11 @@ describe("restricted Pre-meeting Brief", () => {
 
   test("requests one sealed UID and opens one complete brief", async () => {
     vscode.workspace.settings["lifeloop.calendarName"] = "Personal";
-    const { lifeloop, dir } = await workspaceWith(files());
+    const interaction = "intro\r\n* Called [[People/Alice]] [interaction: call]\r\n";
+    const { lifeloop, dir } = await workspaceWith({
+      ...files(),
+      "Journal/2026-09-01.md": interaction,
+    });
     const source = taskTarget(lifeloop, {
       handle: { ref: "Work@0", expectedText: line, expectedState: " " },
     })!;
@@ -136,6 +140,10 @@ describe("restricted Pre-meeting Brief", () => {
       expect(readExact).toHaveBeenCalledWith("E1", "Personal");
       expect(open).toHaveBeenCalledOnce();
       expect(open.mock.calls[0][0]).toContain("# Pre-meeting Brief");
+      expect(open.mock.calls[0][0]).toContain(`file://${join(dir, "People/Alice.md")}`);
+      expect(open.mock.calls[0][0]).toContain(
+        `[[Journal/2026-09-01@${interaction.indexOf("* Called")}]]`,
+      );
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

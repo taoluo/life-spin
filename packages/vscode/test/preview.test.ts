@@ -270,6 +270,24 @@ describe("the same query on three surfaces", () => {
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("adds Person and CRLF source links only to the full-result renderer", async () => {
+    const { runQueryBlock, toMarkdown, toNavigableMarkdown } = await import("../src/preview.ts");
+    const sourceText = "intro\r\n* Coffee [[People/Alice]] [interaction: coffee]\r\n";
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Journal/2026-09-09.md": sourceText,
+    });
+    try {
+      const outcome = runQueryBlock(lifeloop, "interactions\nfields: ref, people");
+      const raw = toMarkdown(outcome);
+      const full = toNavigableMarkdown(lifeloop, outcome, "interactions");
+      expect(raw).not.toContain("file://");
+      expect(raw).not.toContain("[[Journal/");
+      expect(full).toContain(`file://${join(dir, "People/Alice.md")}`);
+      expect(full).toContain(`[[Journal/2026-09-09@${sourceText.indexOf("* Coffee")}]]`);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 describe("blocks LifeLoop does not execute", () => {
