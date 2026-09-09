@@ -75,3 +75,133 @@ test("serial rollback rechecks ownership before each compensating write", async 
   expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
   expect(vault.read("A.md")).toBe("A-third");
 });
+
+test("a third-party edit survives while rollback is suspended", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const suspended = new Promise<void>((resolve) => { entered = resolve; });
+  const resumed = new Promise<void>((resolve) => { resume = resolve; });
+  class BarrierVault implements Vault {
+    readonly root = "/memory";
+    readonly files = new Map([
+      ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+    ]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) { return this.files.get(path)!; }
+    durableEquals(path: string, content: string | null) { return this.files.get(path) === content; }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "C.md") throw new Error("disk full");
+      if (path === "B.md" && content === "B-before") { entered(); await resumed; }
+      this.files.set(path, content);
+    }
+  }
+  const vault = new BarrierVault();
+  const cs = changeSet("barrier rollback");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+  const result = apply(vault, cs);
+  await suspended;
+  vault.files.set("A.md", "A-third");
+  resume();
+  expect(await result).toMatchObject({ ok: false, reason: "unknown" });
+  expect(Object.fromEntries(vault.files)).toEqual({
+    "A.md": "A-third", "B.md": "B-before", "C.md": "C-before",
+  });
+});
+
+test("an unreadable partial state is preserved for reconciliation", async () => {
+  class UnreadableVault implements Vault {
+    readonly root = "/memory";
+    private unreadable = false;
+    private files = new Map([
+      ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+    ]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) {
+      if (this.unreadable && path === "B.md") throw new Error("unreadable");
+      return this.files.get(path)!;
+    }
+    durableEquals(path: string, content: string | null) {
+      return this.unreadable && path === "B.md" ? undefined : this.files.get(path) === content;
+    }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "C.md") { this.unreadable = true; throw new Error("disk full"); }
+      this.files.set(path, content);
+    }
+    value(path: string) { return this.files.get(path); }
+  }
+  const vault = new UnreadableVault();
+  const cs = changeSet("unreadable rollback");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect([vault.value("A.md"), vault.value("B.md"), vault.value("C.md")])
+    .toEqual(["A-after", "B-after", "C-before"]);
+});
+
+test.each(["before", "after"] as const)("reconciles rollback response loss %s its effect", async (when) => {
+  class RollbackVault implements Vault {
+    readonly root = "/memory";
+    private files = new Map([
+      ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+    ]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) { return this.files.get(path)!; }
+    durableEquals(path: string, content: string | null) { return this.files.get(path) === content; }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "C.md") throw new Error("disk full");
+      if (path === "B.md" && content === "B-before") {
+        if (when === "after") this.files.set(path, content);
+        throw new Error("rollback response lost");
+      }
+      this.files.set(path, content);
+    }
+    value(path: string) { return this.files.get(path); }
+  }
+  const vault = new RollbackVault();
+  const cs = changeSet("rollback response loss");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.value("A.md")).toBe("A-before");
+  expect(vault.value("B.md")).toBe(when === "after" ? "B-before" : "B-after");
+});
+
+test("safe rollback removes a file created before a later failure", async () => {
+  class CreateVault implements Vault {
+    readonly root = "/memory";
+    private files = new Map([["C.md", "C-before"]]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) { return this.files.get(path)!; }
+    durableEquals(path: string, content: string | null) {
+      return content === null ? !this.files.has(path) : this.files.get(path) === content;
+    }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "C.md") throw new Error("disk full");
+      this.files.set(path, content);
+    }
+  }
+  const vault = new CreateVault();
+  const cs = changeSet("create then fail");
+  cs.expected.set("New.md", null);
+  cs.expected.set("C.md", "C-before");
+  cs.writes.set("New.md", "new");
+  cs.writes.set("C.md", "C-after");
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.exists("New.md")).toBe(false);
+  expect(vault.read("C.md")).toBe("C-before");
+});
