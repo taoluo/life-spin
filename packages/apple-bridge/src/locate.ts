@@ -1,4 +1,6 @@
-import { TASK_MARKER, type Vault, type GuardedSourceHandle } from "@lifeloop/semantic-core";
+import {
+  TASK_MARKER, extractLiveItems, pageMetaFor, type Vault, type GuardedSourceHandle,
+} from "@lifeloop/semantic-core";
 
 /**
  * Find the task a binding actually names, right now.
@@ -21,6 +23,10 @@ import { TASK_MARKER, type Vault, type GuardedSourceHandle } from "@lifeloop/sem
 export type Located =
   | { ok: true; handle: GuardedSourceHandle; line: string }
   | { ok: false; reason: "missing" | "ambiguous"; message: string };
+
+export type LocatedReminder =
+  | { ok: true; handle: GuardedSourceHandle; line: string; name: string }
+  | { ok: false; reason: "missing" | "ambiguous" | "unknown"; message: string };
 
 const TASK_LINE = TASK_MARKER;
 
@@ -80,6 +86,46 @@ export function locateByBinding(
       capturedAt: new Date().toISOString(),
     },
   };
+}
+
+/** Require one live Reminder binding across the current Markdown inventory. */
+export function locateReminderByBinding(vault: Vault, page: string, id: string): LocatedReminder {
+  const intendedPath = `${page}.md`;
+  let listed: string[];
+  try { listed = vault.list(); } catch (error) {
+    return { ok: false, reason: "unknown", message: `could not inventory Reminder ${id}: ${(error as Error).message}` };
+  }
+  if (!vault.exists(intendedPath)) {
+    return { ok: false, reason: "missing", message: `page ${page} no longer exists` };
+  }
+
+  const found: { path: string; located: Extract<Located, { ok: true }> }[] = [];
+  for (const path of new Set([...listed.filter((candidate) => candidate.endsWith(".md")), intendedPath])) {
+    try {
+      if (!vault.exists(path)) {
+        return { ok: false, reason: "unknown", message: `vault changed while locating Reminder ${id}` };
+      }
+      const located = locateByBinding(vault, path.slice(0, -3), "reminder", id);
+      if (located.ok) found.push({ path, located });
+      else if (located.reason === "ambiguous") return located;
+    } catch (error) {
+      return { ok: false, reason: "unknown", message: `could not read ${path}: ${(error as Error).message}` };
+    }
+  }
+  if (found.length !== 1) {
+    return found.length
+      ? { ok: false, reason: "ambiguous", message: `Reminder ${id} is bound to multiple tasks; refusing to guess` }
+      : { ok: false, reason: "missing", message: `no task carries reminder ${id} any more` };
+  }
+  const only = found[0];
+  if (only.path !== intendedPath) {
+    return { ok: false, reason: "missing", message: `Reminder ${id} moved away from ${page}` };
+  }
+  const item = extractLiveItems(`${only.located.line}\n`, pageMetaFor(page))[0];
+  if (item?.tag !== "task" || typeof item.name !== "string") {
+    return { ok: false, reason: "unknown", message: `could not parse the live task for Reminder ${id}` };
+  }
+  return { ...only.located, name: item.name.trim() };
 }
 
 /** The page half of a `Page@pos` ref. */

@@ -1,11 +1,11 @@
 import {
-  setTaskState, stampCompletion, setTaskAttribute, setTaskName, taskNameFromLine, tasks as taskQueries,
+  setTaskState, stampCompletion, setTaskAttribute, setTaskName, tasks as taskQueries,
   type Vault, type Store, type LifeloopObject, type Refusal, type CycleStates,
   type GuardedSourceHandle, type MutationResult,
 } from "@lifeloop/semantic-core";
 import { Reminders, type Reminder } from "./reminders.ts";
 import { reconcile, type BoundTask, type Decision, type Observation } from "./reconcile.ts";
-import { locateByBinding, pageOfRef } from "./locate.ts";
+import { locateReminderByBinding, pageOfRef } from "./locate.ts";
 
 /**
  * The sync pass: decide, then act — and act only through named mutations.
@@ -140,7 +140,10 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     report.refused.push({ ref, message });
   };
   const note = (result: { ok: true } | Refusal, ref: string, reminderId: string, onOk: () => void) => {
-    if (result.ok) onOk();
+    if (result.ok) {
+      const current = locateReminderByBinding(options.vault, pageOfRef(ref), reminderId);
+      if (current.ok) onOk(); else refuseDecision(ref, reminderId, current.message);
+    }
     else refuseDecision(ref, reminderId, result.message);
   };
 
@@ -155,8 +158,8 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
      * every later offset on that page. Carrying only the position let reminder R1's
      * completion check off the task bound to R2 — reproduced, then fixed here.
      *
-     * Only the three actions that write need this; `push` talks to Reminders and
-     * `flag-recurring` writes nothing.
+     * Every decision needs the same unique live binding before effects or
+     * observation advancement.
      */
     const writes = decision.action === "complete" || decision.action === "reopen" || decision.action === "pull-name" ||
       decision.action === "clear-mark";
@@ -167,16 +170,12 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
       refuseDecision(decision.ref, decision.reminderId, "task-state policy changed during sync");
       continue;
     }
-    if (writes) {
-      const found = locateByBinding(
-        options.vault, pageOfRef(decision.ref), "reminder", task.reminderId,
-      );
-      if (!found.ok) {
-        refuseDecision(decision.ref, decision.reminderId, found.message);
-        continue;
-      }
-      handle = found.handle;
+    const found = locateReminderByBinding(options.vault, pageOfRef(decision.ref), task.reminderId);
+    if (!found.ok) {
+      refuseDecision(decision.ref, task.reminderId, found.message);
+      continue;
     }
+    if (writes) handle = found.handle;
 
     switch (decision.action) {
       case "complete":
@@ -190,20 +189,21 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         break;
 
       case "clear-mark":
-        note(await setTaskAttribute(options.vault, handle!, "reminder", null), decision.ref, decision.reminderId,
-             () => { report.marksCleared.push(decision.ref); options.observations.delete(decision.reminderId); });
+      {
+        const result = await setTaskAttribute(options.vault, handle!, "reminder", null);
+        if (result.ok) {
+          report.marksCleared.push(decision.ref);
+          options.observations.delete(decision.reminderId);
+        } else refuseDecision(decision.ref, decision.reminderId, result.message);
         break;
+      }
 
       case "push": {
-        const found = locateByBinding(
-          options.vault, pageOfRef(decision.ref), "reminder", decision.reminderId,
-        );
-        const liveName = found.ok ? taskNameFromLine(found.line) : null;
-        if (!found.ok || liveName !== decision.name) {
+        if (found.name !== decision.name) {
           refuseDecision(
             decision.ref,
             decision.reminderId,
-            found.ok ? "Markdown changed during sync" : found.message,
+            "Markdown changed during sync",
           );
           break;
         }
@@ -211,8 +211,14 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
           decision.reminderId, decision.expectedName, decision.name,
         );
         if (outcome === "ok") {
-          report.pushed.push(decision.ref);
-          synchronizedNames.set(decision.reminderId, decision.name);
+          const current = locateReminderByBinding(options.vault, pageOfRef(decision.ref), decision.reminderId);
+          if (current.ok && current.name === decision.name) {
+            report.pushed.push(decision.ref);
+            synchronizedNames.set(decision.reminderId, decision.name);
+          } else {
+            refuseDecision(decision.ref, decision.reminderId,
+              current.ok ? "Markdown changed during sync" : current.message);
+          }
         } else {
           refuseDecision(
             decision.ref,
@@ -275,10 +281,9 @@ export async function resolveReminderConflict(options: {
   observations: ObservationStore;
   reminders?: Pick<Reminders, "read" | "update">;
 }): Promise<MutationResult<unknown>> {
-  const located = locateByBinding(options.vault, options.page, "reminder", options.reminderId);
+  const located = locateReminderByBinding(options.vault, options.page, options.reminderId);
   if (!located.ok) return { ok: false, reason: located.reason, message: located.message };
-  const local = taskNameFromLine(located.line);
-  if (local === null) return { ok: false, reason: "stale", message: "bound source is no longer a task" };
+  const local = located.name;
   if (local !== options.expectedLocal) return { ok: false, reason: "stale", message: "Markdown changed after the conflict was shown" };
   if (options.choice === "detach") {
     const result = await setTaskAttribute(options.vault, located.handle, "reminder", null);
@@ -289,19 +294,31 @@ export async function resolveReminderConflict(options: {
   const remote = (await bridge.read([options.reminderId])).get(options.reminderId);
   if (!remote) return { ok: false, reason: "missing", message: "Reminder is missing; Detach keeps the Markdown task" };
   if (remote.name !== options.expectedRemote) return { ok: false, reason: "stale", message: "Reminder changed after the conflict was shown" };
-  if (options.choice === "reminders") {
-    const result = await setTaskName(options.vault, located.handle, remote.name);
-    if (result.ok) options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: remote.modificationDate, name: remote.name });
-    return result;
-  }
-  const currentLocal = locateByBinding(options.vault, options.page, "reminder", options.reminderId);
+  const currentLocal = locateReminderByBinding(options.vault, options.page, options.reminderId);
   if (!currentLocal.ok) return { ok: false, reason: currentLocal.reason, message: currentLocal.message };
-  if (taskNameFromLine(currentLocal.line) !== options.expectedLocal) {
+  if (currentLocal.name !== options.expectedLocal) {
     return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
+  }
+  if (options.choice === "reminders") {
+    const result = await setTaskName(options.vault, currentLocal.handle, remote.name);
+    if (result.ok) {
+      const current = locateReminderByBinding(options.vault, options.page, options.reminderId);
+      if (!current.ok) return { ok: false, reason: current.reason, message: current.message };
+      if (current.name !== remote.name) {
+        return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
+      }
+      options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: remote.modificationDate, name: remote.name });
+    }
+    return result;
   }
   const outcome = await bridge.update(options.reminderId, options.expectedRemote, local);
   if (outcome === "gone") return { ok: false, reason: "missing", message: "Reminder disappeared during resolution" };
   if (outcome === "conflict") return { ok: false, reason: "stale", message: "Reminder changed during conflict resolution" };
+  const confirmed = locateReminderByBinding(options.vault, options.page, options.reminderId);
+  if (!confirmed.ok) return { ok: false, reason: confirmed.reason, message: confirmed.message };
+  if (confirmed.name !== local) {
+    return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
+  }
   options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: null, name: local });
   return { ok: true, changed: [], value: undefined };
 }

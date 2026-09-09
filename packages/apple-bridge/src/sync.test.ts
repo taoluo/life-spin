@@ -54,6 +54,7 @@ test("Reminder title updates compare the observed name and never rewrite the bod
   expect(await reminders.update("R1", "Remote", "Local")).toBe("conflict");
   expect(invocation?.args).toEqual(["R1", "Remote", "Local"]);
   expect(invocation?.script).toContain("is not expectedName");
+  expect(invocation?.script).toContain("considering case");
   expect(invocation?.script).not.toContain("set body of r");
 });
 
@@ -233,6 +234,55 @@ describe("the reverse flow, end to end", () => {
     cleanup();
   });
 
+  test("a duplicate added on another page after indexing refuses every effect", async () => {
+    const { store, vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    await vault.write("Other.md", '* [ ] Duplicate [reminder: "R1"]\n');
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Local" });
+    const report = await syncReminders({
+      store, vault, observations,
+      reminders: new FakeReminders([
+        reminder({ name: "Local", completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      ]) as any,
+    });
+    expect(report.completed).toEqual([]);
+    expect(report.refused).toHaveLength(1);
+    expect(vault.read("Work.md")).not.toContain("[completed:");
+    expect(observations.get("R1")?.completed).toBe(false);
+    cleanup();
+  });
+
+  test.each([
+    '* [ ] #work Local [reminder: "R1"]\n',
+    '* [ ] Local [deadline: tomorrow] [reminder: "R1"]\n',
+  ])("a stable live task name uses upstream Markdown semantics: %s", async (markdown) => {
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Old" });
+    const bridge = new FakeReminders([reminder({ name: "Old" })]);
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.pushed).toHaveLength(1);
+    expect(report.refused).toEqual([]);
+    expect(bridge.updates).toEqual([{ id: "R1", expectedName: "Old", name: "Local" }]);
+    cleanup();
+  });
+
+  test("conflict resolution refuses a duplicate binding outside the indexed page", async () => {
+    const vault = MemoryVault.of({
+      "Work.md": '* [ ] Local [reminder: "R1"]\n',
+      "Other.md": '* [ ] Duplicate [reminder: "R1"]\n',
+    });
+    const observations = new MemoryObservations();
+    const bridge = new FakeReminders([reminder({ name: "Remote" })]);
+    const result = await resolveReminderConflict({
+      vault, page: "Work", reminderId: "R1", choice: "markdown",
+      expectedLocal: "Local", expectedRemote: "Remote", observations, reminders: bridge as any,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "ambiguous" });
+    expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")).toBeUndefined();
+  });
+
   test("a push rechecks its live Markdown binding after the Reminder read", async () => {
     const markdown = '* [ ] Local [reminder: "R1"]\n';
     const { store, vault, cleanup } = await setup(markdown);
@@ -275,6 +325,38 @@ describe("the reverse flow, end to end", () => {
     });
     expect(result).toMatchObject({ ok: false, reason: "stale" });
     expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")).toBeUndefined();
+    cleanup();
+  });
+
+  test("Use Reminders rechecks global binding authority after its remote read", async () => {
+    const markdown = '* [ ] Local [reminder: "R1"]\n';
+    const { vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    const bridge = new FakeReminders([reminder({ name: "Remote" })], {
+      afterRead: () => vault.write("Other.md", '* [ ] Duplicate [reminder: "R1"]\n'),
+    });
+    const result = await resolveReminderConflict({
+      vault, page: "Work", reminderId: "R1", choice: "reminders",
+      expectedLocal: "Local", expectedRemote: "Remote", observations, reminders: bridge as any,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "ambiguous" });
+    expect(vault.read("Work.md")).toBe(markdown);
+    expect(observations.get("R1")).toBeUndefined();
+    cleanup();
+  });
+
+  test("Use Markdown does not advance its baseline after a concurrent local edit", async () => {
+    const { vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    const observations = new MemoryObservations();
+    const bridge = new FakeReminders([reminder({ name: "Remote" })], {
+      beforeUpdate: () => vault.write("Work.md", '* [ ] Changed [reminder: "R1"]\n'),
+    });
+    const result = await resolveReminderConflict({
+      vault, page: "Work", reminderId: "R1", choice: "markdown",
+      expectedLocal: "Local", expectedRemote: "Remote", observations, reminders: bridge as any,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "stale" });
     expect(observations.get("R1")).toBeUndefined();
     cleanup();
   });

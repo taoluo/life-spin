@@ -115,7 +115,9 @@ on run argv
     set matches to (every reminder whose id is theId)
     if (count of matches) is 0 then return "gone"
     set r to item 1 of matches
-    if (name of r as string) is not expectedName then return "conflict"
+    considering case
+      if (name of r as string) is not expectedName then return "conflict"
+    end considering
     set name of r to theName
     return "ok"
   end tell

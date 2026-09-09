@@ -40,7 +40,14 @@ export async function bindReminder(
     reason: bindings.length > 1 ? "ambiguous" : "invalid",
     message: "task already has a Reminder binding",
   };
-  const id = await bridge.create(title, body, list);
+  let id: string;
+  try { id = await bridge.create(title, body, list); } catch (error) {
+    return {
+      ok: false,
+      reason: "unknown",
+      message: `${(error as Error).message}. The Reminder may have been created; check Reminders before retrying.`,
+    };
+  }
 
   let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
   try {
@@ -91,7 +98,14 @@ export async function bindCalendar(
   if ("ok" in source) return source;
   const bindings = source.line.match(/\[event:\s*"[^"]*"\]/g) ?? [];
   if (bindings.length) return { ok: false, reason: bindings.length > 1 ? "ambiguous" : "invalid", message: "task already has a Calendar binding" };
-  const id = await bridge.create(title, start, end, calendarName);
+  let id: string;
+  try { id = await bridge.create(title, start, end, calendarName); } catch (error) {
+    return {
+      ok: false,
+      reason: "unknown",
+      message: `${(error as Error).message}. The Calendar event may have been created; check Calendar before retrying.`,
+    };
+  }
   let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
   try {
     const current = strictTaskSource(vault, handle);

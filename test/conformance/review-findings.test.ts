@@ -507,7 +507,7 @@ describe("two actions overlap", () => {
         }]));
       },
       async create() { return "NEW"; },
-      async update() { return true; },
+      async update() { return "ok" as const; },
       async remove() { return true; },
     };
 

@@ -149,3 +149,45 @@ test("an uncertain Calendar binding retains the event for reconciliation", async
   expect(result).toMatchObject({ ok: false, reason: "unknown", orphaned: "E2" });
   expect(removed).toBe(false);
 });
+
+test.each(["before", "after"] as const)("Reminder creation response loss %s its effect is UNKNOWN", async (when) => {
+  const vault = MemoryVault.of({ "Work.md": "* [ ] Old\n" });
+  const created: string[] = [];
+  let removed = 0;
+  const result = await bindReminder(
+    vault, { ref: "Work@0", expectedText: "* [ ] Old", expectedState: " " },
+    "Old", "", "", {
+      create: async () => {
+        if (when === "after") created.push("R2");
+        throw new Error("response lost");
+      },
+      remove: async () => { removed++; return true; },
+    },
+  );
+  expect(result).toMatchObject({ ok: false, reason: "unknown" });
+  expect(result.ok ? "" : result.message).toMatch(/check.*before retry/i);
+  expect(created).toEqual(when === "after" ? ["R2"] : []);
+  expect(removed).toBe(0);
+  expect(vault.read("Work.md")).toBe("* [ ] Old\n");
+});
+
+test.each(["before", "after"] as const)("Calendar creation response loss %s its effect is UNKNOWN", async (when) => {
+  const vault = MemoryVault.of({ "Work.md": "* [ ] Old\n" });
+  const created: string[] = [];
+  let removed = 0;
+  const result = await bindCalendar(
+    vault, { ref: "Work@0", expectedText: "* [ ] Old", expectedState: " " },
+    "Old", "start", "end", "Calendar", {
+      create: async () => {
+        if (when === "after") created.push("E2");
+        throw new Error("response lost");
+      },
+      remove: async () => { removed++; return true; },
+    },
+  );
+  expect(result).toMatchObject({ ok: false, reason: "unknown" });
+  expect(result.ok ? "" : result.message).toMatch(/check.*before retry/i);
+  expect(created).toEqual(when === "after" ? ["E2"] : []);
+  expect(removed).toBe(0);
+  expect(vault.read("Work.md")).toBe("* [ ] Old\n");
+});

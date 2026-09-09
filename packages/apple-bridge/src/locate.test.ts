@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { MemoryVault, Store, indexVault } from "@lifeloop/semantic-core";
-import { locateByBinding, pageOfRef } from "./locate.ts";
+import { locateByBinding, locateReminderByBinding, pageOfRef } from "./locate.ts";
 import { syncReminders, MemoryObservations } from "./sync.ts";
 import type { Reminder } from "./reminders.ts";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -49,6 +49,29 @@ describe("locating a task by its binding", () => {
     });
     expect(locateByBinding(vault, "W", "reminder", "R1")).toMatchObject({
       ok: false, reason: "ambiguous",
+    });
+  });
+
+  test("refuses when another page carries the same binding", () => {
+    const vault = MemoryVault.of({
+      "A.md": '* [ ] a [reminder: "R1"]\n',
+      "B.md": '* [ ] b [reminder: "R1"]\n',
+    });
+    expect(locateReminderByBinding(vault, "A", "R1")).toMatchObject({
+      ok: false, reason: "ambiguous",
+    });
+  });
+
+  test("fails closed when the current vault inventory is unavailable", () => {
+    const inner = MemoryVault.of({ "A.md": '* [ ] a [reminder: "R1"]\n' });
+    const vault = { ...inner, root: inner.root,
+      exists: (path: string) => inner.exists(path), read: (path: string) => inner.read(path),
+      write: (path: string, text: string) => inner.write(path, text),
+      remove: (path: string) => inner.remove(path),
+      list: () => { throw new Error("inventory unavailable"); },
+    };
+    expect(locateReminderByBinding(vault, "A", "R1")).toMatchObject({
+      ok: false, reason: "unknown",
     });
   });
 
