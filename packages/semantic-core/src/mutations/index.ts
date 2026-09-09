@@ -6,3 +6,4 @@ export * from "./outline.ts";
 export * from "./templates.ts";
 export * from "./bake.ts";
 export * from "./sign.ts";
+export * from "./relationships.ts";

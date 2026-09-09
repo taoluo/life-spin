@@ -1,5 +1,6 @@
-import { setTaskAttribute, type Vault, type SourceHandle, type MutationResult } from "@lifeloop/semantic-core";
+import { resolveHandle, setTaskAttribute, type Vault, type GuardedSourceHandle, type MutationResult } from "@lifeloop/semantic-core";
 import type { Reminders } from "./reminders.ts";
+import type { Calendar } from "./calendar.ts";
 
 /**
  * Create a reminder and bind it to a task, or leave nothing behind.
@@ -16,7 +17,7 @@ import type { Reminders } from "./reminders.ts";
  */
 export async function bindReminder(
   vault: Vault,
-  handle: SourceHandle,
+  handle: GuardedSourceHandle,
   title: string,
   body: string,
   list: string,
@@ -24,7 +25,17 @@ export async function bindReminder(
 ): Promise<MutationResult<{ id: string }> & { orphaned?: string }> {
   const id = await bridge.create(title, body, list);
 
-  const bound = await setTaskAttribute(vault, handle, "reminder", id);
+  let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
+  try {
+    bound = await setTaskAttribute(vault, handle, "reminder", id);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "unknown",
+      message: `${(error as Error).message}. Reminder ${id} was created; its binding outcome is unknown, so it was retained.`,
+      orphaned: id,
+    };
+  }
   if (bound.ok) return { ...bound, value: { id } };
 
   let removed = false;
@@ -43,4 +54,30 @@ export async function bindReminder(
           `delete "${title}" in Reminders by hand.`,
         orphaned: id,
       };
+}
+
+export async function bindCalendar(
+  vault: Vault,
+  handle: GuardedSourceHandle,
+  title: string,
+  start: string,
+  end: string,
+  calendarName: string,
+  bridge: Pick<Calendar, "create" | "remove">,
+): Promise<MutationResult<{ id: string }> & { orphaned?: string }> {
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  const bindings = source.line.match(/\[event:\s*"[^"]*"\]/g) ?? [];
+  if (bindings.length) return { ok: false, reason: bindings.length > 1 ? "ambiguous" : "invalid", message: "task already has a Calendar binding" };
+  const id = await bridge.create(title, start, end, calendarName);
+  let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
+  try {
+    bound = await setTaskAttribute(vault, handle, "event", id);
+  } catch (error) {
+    return { ok: false, reason: "unknown", message: `${(error as Error).message}. Calendar event ${id} was retained because binding outcome is unknown.`, orphaned: id };
+  }
+  if (bound.ok) return { ...bound, value: { id } };
+  let removed = false;
+  try { removed = await bridge.remove(id, calendarName); } catch { /* report orphan below */ }
+  return removed ? bound : { ...bound, message: `${bound.message}. Calendar event ${id} could not be removed.`, orphaned: id };
 }

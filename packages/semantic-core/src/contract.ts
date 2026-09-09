@@ -2,6 +2,7 @@ import type { Store } from "./store.ts";
 import type { LifeloopObject } from "./extract.ts";
 import { query, tasks, backlinks, brokenLinks, type QueryRequest, type QueryResult } from "./query.ts";
 import { today, upcoming, review, projectSignals, day } from "./projections.ts";
+import { interactionRows, people as personPages, personContextRows, personRows, reconnectRows } from "./relationships.ts";
 
 /**
  * The public query contract (Phase 3).
@@ -15,7 +16,7 @@ import { today, upcoming, review, projectSignals, day } from "./projections.ts";
  * change has to say so rather than being discovered.
  */
 
-export const CONTRACT_VERSION = "1.0.0";
+export const CONTRACT_VERSION = "1.1.0";
 
 /**
  * Compatibility rule, stated rather than assumed:
@@ -30,13 +31,18 @@ export const CONTRACT_VERSION = "1.0.0";
 export type ProjectionName =
   | "today" | "upcoming" | "review" | "signals"
   | "open" | "actionable" | "parked" | "universe"
-  | "backlinks" | "broken";
+  | "backlinks" | "broken"
+  | "people" | "interactions" | "reconnect" | "person-context";
 
 export type ProjectionArgs = {
   date?: string;
   days?: number;
   project?: string;
   page?: string;
+  person?: string;
+  from?: string;
+  to?: string;
+  kind?: string;
 };
 
 export type Projection = {
@@ -104,6 +110,32 @@ export const projections: Record<ProjectionName, Projection> = {
     describes: "links that resolve to nothing",
     run: (store) => brokenLinks(store),
   },
+  people: {
+    name: "people",
+    describes: "Person pages with derived relationship facts",
+    run: (store) => personRows(store),
+  },
+  interactions: {
+    name: "interactions",
+    describes: "explicit dated interactions, optionally filtered by Person, date or kind",
+    run: (store, a) => interactionRows(store, a),
+  },
+  reconnect: {
+    name: "reconnect",
+    describes: "People whose explicit contact cadence is due",
+    run: (store, a) => reconnectRows(store, a.date ?? day()),
+  },
+  "person-context": {
+    name: "person-context",
+    describes: "derived relationship context for one exact Person page",
+    run: (store, a) => {
+      if (!a.person) throw new Error("person-context requires person: Page/Name");
+      if (!personPages(store).some((page) => page.ref === a.person)) {
+        throw new Error(`no such Person page: ${a.person}`);
+      }
+      return personContextRows(store, a.person);
+    },
+  },
 };
 
 export const projectionNames = Object.keys(projections) as ProjectionName[];
@@ -121,23 +153,4 @@ export function runProjection(
 /** The raw query escape hatch, for a source with no named projection yet. */
 export function runQuery(store: Store, request: QueryRequest): QueryResult<LifeloopObject> {
   return query(store, request);
-}
-
-/** A saved definition, in §30's shape. Describes a view; may never hold results. */
-export type ViewDefinition = {
-  source: ProjectionName | { tag: string };
-  filter?: QueryRequest["where"];
-  sort?: QueryRequest["order"];
-  group?: string;
-  fields?: string[];
-  renderer?: string;
-};
-
-export function runView(store: Store, view: ViewDefinition, args: ProjectionArgs = {}): unknown {
-  if (typeof view.source === "string") return runProjection(store, view.source, args);
-  return runQuery(store, {
-    source: view.source.tag,
-    where: view.filter,
-    order: view.sort,
-  });
 }

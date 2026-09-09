@@ -1,0 +1,10 @@
+{
+  "status": "EXPERIMENT_ONLY_NOT_RELEASE_QUALIFICATION",
+  "result": "17 passing; includes formerly failing folder rename",
+  "sha256": {
+    "original_bundle": "50d177ed677056f165d9a14591559889224e14f5a565b7b7bdb3c33adf6135e8",
+    "patched_bundle": "1e14ca361dbd6b7a2c57ca95baf5d9eb8b426ebe1914fa40041eefb2f5480e18",
+    "log": "4bf7e0580e75a6182682c426d5f22a57a35e525b46563571629a83bb3730daed",
+    "script": "5ee20646f39b6ede9bcf84a08f7a3cb276e617da703931656fa86ae4814d9fa2"
+  }
+}

@@ -1,7 +1,7 @@
 import { expect, test, describe } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -44,7 +44,10 @@ describe("the contract", () => {
     const store = new Store(":memory:");
     await indexVault(FIXTURES, store);
     for (const name of projectionNames) {
-      expect(() => runProjection(store, name, { date: DATE, project: "Projects/RS Recovery", page: "Projects/Reed Solomon" }))
+      expect(() => runProjection(store, name, {
+        date: DATE, project: "Projects/RS Recovery", page: "Projects/Reed Solomon",
+        person: "People/Jiulong",
+      }))
         .not.toThrow();
     }
     store.close();
@@ -52,6 +55,20 @@ describe("the contract", () => {
 });
 
 describe("two clients, one answer", () => {
+  test("the CLI indexes with the same multi-character state policy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lifeloop-cli-states-"));
+    const db = join(dir, "index.sqlite");
+    try {
+      writeFileSync(join(dir, "W.md"), "* [DONE] cli task\n");
+      execFileSync("npx", ["tsx", CLI, "index", dir, "--db", db,
+        "--task-states", '[{"state":"DONE","done":true}]'], {
+        cwd: resolve(import.meta.dirname, "../.."), stdio: "ignore",
+      });
+      const rows = cli(["query", dir, "task", "--db", db]) as any[];
+      expect(rows[0]).toMatchObject({ state: "DONE", done: true });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("the CLI and the core agree on Today", async () => {
     const db = join(mkdtempSync(join(tmpdir(), "lifeloop-cli-")), "index.sqlite");
     // Index through the CLI, query through the CLI: the whole path a second

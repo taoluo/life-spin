@@ -61,3 +61,26 @@ test("a wikilink resolves against the vault, and an unresolved one is aspiring",
   const aspiring = on(objects, "aspiring-page").map((a) => a.name ?? a.to);
   expect(aspiring).toEqual(["Nowhere"]);
 });
+
+
+test("concurrent extraction keeps each task-state policy isolated and preserves x/X", async () => {
+  const text = "* [d] custom\n* [x] lower\n* [X] upper\n";
+  const results = await Promise.all([
+    extractObjects(text, pageMetaFor("DoneVault"), undefined, [{ state: "d", done: true }]),
+    extractObjects(text, pageMetaFor("OpenVault"), undefined, [{ state: "d", done: false }]),
+  ]);
+  expect(on(results[0], "task").map(t => t.done)).toEqual([true, true, true]);
+  expect(on(results[1], "task").map(t => t.done)).toEqual([false, true, true]);
+  expect(on(await extractObjects(text, pageMetaFor("DefaultVault")), "task")[0].done).toBe(false);
+});
+
+
+test("ambiguous task-state policy is refused by extraction and mutation", async () => {
+  const { MemoryVault, setTaskState } = await import("./index.ts");
+  const states = [{ state: "d", done: true }, { state: "d", done: false }];
+  const text = "* [d] task\n";
+  await expect(extractObjects(text, pageMetaFor("W"), undefined, states)).rejects.toThrow("duplicate task state");
+  const vault = MemoryVault.of({ "W.md": text });
+  await expect(setTaskState(vault, { ref: "W@0" }, false, new Date(), states)).rejects.toThrow("duplicate task state");
+  expect(vault.read("W.md")).toBe(text);
+});

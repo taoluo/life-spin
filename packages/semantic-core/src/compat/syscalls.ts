@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { parseMarkdown } from "../../../../vendor/silverbullet/client/markdown_parser/parser.ts";
 
 /**
@@ -97,6 +98,12 @@ function lookupPaths(paths: string[]): Record<string, { exact: boolean; candidat
  * Defaults are SilverBullet's own, taken from the call sites rather than guessed.
  */
 const config = new Map<string, unknown>();
+const extractionConfig = new AsyncLocalStorage<Map<string, unknown>>();
+
+/** Upstream syscalls keep their API; concurrent extractions receive distinct config snapshots. */
+export function withExtractionConfig<T>(values: Record<string, unknown>, run: () => T): T {
+  return extractionConfig.run(new Map([...config, ...Object.entries(values)]), run);
+}
 
 export function setConfig(values: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(values)) config.set(key, value);
@@ -108,7 +115,8 @@ export function resetConfig(): void {
 
 function configGet(key: string | string[], defaultValue: unknown): unknown {
   const flat = Array.isArray(key) ? key.join(".") : key;
-  return config.has(flat) ? config.get(flat) : defaultValue;
+  const current = extractionConfig.getStore() ?? config;
+  return current.has(flat) ? current.get(flat) : defaultValue;
 }
 
 const handlers: Record<string, (...args: any[]) => any> = {

@@ -26,12 +26,15 @@ export type Decision =
   | { action: "reopen"; ref: string; reminderId: string }
   | { action: "clear-mark"; ref: string; reminderId: string; why: string }
   | { action: "flag-recurring"; ref: string; reminderId: string }
+  | { action: "conflict"; ref: string; reminderId: string; local: string; remote: string; why: string }
+  | { action: "pull-name"; ref: string; reminderId: string; name: string }
   | { action: "none"; ref: string; why: string };
 
 /** What we saw last time, so a *transition* can be told from a *state*. */
 export type Observation = {
   completed: boolean;
   modificationDate: string | null;
+  name?: string;
   /**
    * Set once a binding has been seen to un-complete itself. Over AppleScript that
    * is the *only* evidence of recurrence available, and it is one-way: a binding
@@ -175,24 +178,21 @@ export function reconcile(input: ReconcileInput): Decision[] {
      * and if a timestamp were ever allowed to decide the *value*, the field would
      * quietly have become last-write-wins.
      */
-    const theirs = asTime(reminder.modificationDate);
-    const ours = asTime(task.pageModified);
-    if (theirs !== null && ours !== null && theirs > ours) {
-      decisions.push({
-        action: "none",
-        ref: task.ref,
-        why: "edited in Reminders since the note changed; not overwriting",
-      });
+    if (seen?.name === undefined) {
+      decisions.push({ action: "conflict", ref: task.ref, reminderId: task.reminderId,
+        local: task.name, remote: reminder.name, why: "sync baseline is unavailable" });
       continue;
     }
-
-    decisions.push({
-      action: "push",
-      ref: task.ref,
-      reminderId: task.reminderId,
-      name: task.name,
-      body: reminder.body,
-    });
+    const localChanged = task.name !== seen.name;
+    const remoteChanged = reminder.name !== seen.name;
+    if (localChanged && remoteChanged) {
+      decisions.push({ action: "conflict", ref: task.ref, reminderId: task.reminderId,
+        local: task.name, remote: reminder.name, why: "both Reminders and Markdown changed" });
+    } else if (remoteChanged) {
+      decisions.push({ action: "pull-name", ref: task.ref, reminderId: task.reminderId, name: reminder.name });
+    } else {
+      decisions.push({ action: "push", ref: task.ref, reminderId: task.reminderId, name: task.name, body: reminder.body });
+    }
   }
 
   return decisions;

@@ -1,0 +1,43 @@
+{
+  "status": "READ_ONLY_INVENTORY_NOT_SCRIPT_EXECUTION",
+  "indexed": {
+    "indexed": 29,
+    "skipped": 0,
+    "removed": 0,
+    "ms": 218
+  },
+  "taskCount": 11,
+  "states": {
+    " ": 9,
+    "x": 2
+  },
+  "scriptBlocks": 38,
+  "dependencies": {
+    "command.define": [
+      "Library/LifeLoop/Attach",
+      "Library/LifeLoop/Audit",
+      "Library/LifeLoop/Capture",
+      "Library/LifeLoop/Core",
+      "Library/LifeLoop/External",
+      "Library/LifeLoop/Inbox",
+      "Library/LifeLoop/Lifecycle",
+      "Library/LifeLoop/Review",
+      "Library/LifeLoop/Tasks"
+    ],
+    "event.listen": [
+      "Library/LifeLoop/Completion",
+      "Library/LifeLoop/External",
+      "Library/LifeLoop/Journal"
+    ],
+    "actionButton.define": [
+      "Library/LifeLoop/Core"
+    ],
+    "mq.awaitEmptyQueue": [
+      "Library/LifeLoop/Inbox"
+    ],
+    "widget.new": [
+      "Library/LifeLoop/Journal"
+    ]
+  },
+  "source_manifest": "/Users/tao/.codex/recovery/lifeloop/trial-20260908T173403Z/manifest.json"
+}

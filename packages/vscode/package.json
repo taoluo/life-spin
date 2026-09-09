@@ -1,7 +1,7 @@
 {
   "name": "lifeloop-vscode",
   "displayName": "LifeLoop",
-  "description": "Capture without stopping. Keep tasks with the work they belong to. See what matters today.",
+  "description": "Task workflows for Markdown: Today, Review and Apple interoperability. Pair with Foam for notes.",
   "version": "0.1.0",
   "publisher": "lifeloop",
   "private": false,
@@ -25,6 +25,10 @@
         "icon": "$(add)"
       },
       {
+        "command": "lifeloop.captureHere",
+        "title": "LifeLoop: Capture Here"
+      },
+      {
         "command": "lifeloop.openInbox",
         "title": "LifeLoop: Open Inbox"
       },
@@ -38,10 +42,6 @@
         "icon": "$(calendar)"
       },
       {
-        "command": "lifeloop.openDaily",
-        "title": "LifeLoop: Open Daily Note"
-      },
-      {
         "command": "lifeloop.openReview",
         "title": "LifeLoop: Weekly Review"
       },
@@ -50,8 +50,8 @@
         "title": "LifeLoop: Freeze Review"
       },
       {
-        "command": "lifeloop.openPage",
-        "title": "LifeLoop: Open Page"
+        "command": "lifeloop.openSbRef",
+        "title": "LifeLoop: Open SB Reference at Cursor"
       },
       {
         "command": "lifeloop.reindex",
@@ -87,6 +87,19 @@
         "icon": "$(check)"
       },
       {
+        "command": "lifeloop.reopenTask",
+        "title": "Reopen"
+      },
+      {
+        "command": "lifeloop.taskActions",
+        "title": "LifeLoop: Task Actions",
+        "icon": "$(ellipsis)"
+      },
+      {
+        "command": "lifeloop.peekSource",
+        "title": "LifeLoop: Peek Source"
+      },
+      {
         "command": "lifeloop.revealTask",
         "title": "Go to source",
         "icon": "$(go-to-file)"
@@ -106,11 +119,27 @@
       },
       {
         "command": "lifeloop.syncProjected",
-        "title": "LifeLoop: Sync Projected"
+        "title": "LifeLoop: Sync Reminders and Calendar"
+      },
+      {
+        "command": "lifeloop.syncExternal",
+        "title": "LifeLoop: Sync External"
       },
       {
         "command": "lifeloop.importNotes",
-        "title": "LifeLoop: Import from Apple Notes"
+        "title": "LifeLoop: Sync Apple Notes"
+      },
+      {
+        "command": "lifeloop.resolveSyncConflict",
+        "title": "LifeLoop: Resolve External Sync Conflict"
+      },
+      {
+        "command": "lifeloop.showSyncReport",
+        "title": "LifeLoop: Show External Sync Report"
+      },
+      {
+        "command": "lifeloop.openExternalBinding",
+        "title": "LifeLoop: Open External App"
       },
       {
         "command": "lifeloop.openQueryResult",
@@ -123,6 +152,10 @@
       {
         "command": "lifeloop.evalLua",
         "title": "LifeLoop: Evaluate Space Lua"
+      },
+      {
+        "command": "lifeloop.runDeclaredCommand",
+        "title": "LifeLoop: Run Declared Command"
       },
       {
         "command": "lifeloop.runSpaceLua",
@@ -153,10 +186,6 @@
         "title": "LifeLoop: Outdent Item"
       },
       {
-        "command": "lifeloop.newFromTemplate",
-        "title": "LifeLoop: New Page from Template"
-      },
-      {
         "command": "lifeloop.bakeSection",
         "title": "LifeLoop: Bake Section at Cursor"
       },
@@ -167,10 +196,6 @@
       {
         "command": "lifeloop.updateBakedSections",
         "title": "LifeLoop: Update Baked Sections"
-      },
-      {
-        "command": "lifeloop.reprefixLine",
-        "title": "LifeLoop: Reshape Current Line"
       },
       {
         "command": "lifeloop.showMentions",
@@ -185,16 +210,20 @@
         "title": "LifeLoop: Toggle X-Ray"
       },
       {
-        "command": "lifeloop.tagPicker",
-        "title": "LifeLoop: Tag Picker"
+        "command": "lifeloop.detachBinding",
+        "title": "LifeLoop: Detach External Binding"
       },
       {
-        "command": "lifeloop.metaPicker",
-        "title": "LifeLoop: Meta Page Picker"
+        "command": "lifeloop.copyBindingId",
+        "title": "LifeLoop: Copy External Binding ID"
       },
       {
-        "command": "lifeloop.anythingPicker",
-        "title": "LifeLoop: Anything Picker"
+        "command": "lifeloop.logInteraction",
+        "title": "LifeLoop: Log Interaction"
+      },
+      {
+        "command": "lifeloop.createReconnectTask",
+        "title": "LifeLoop: Create Reconnect Task"
       }
     ],
     "views": {
@@ -212,8 +241,12 @@
           "name": "Inbox"
         },
         {
-          "id": "lifeloop.backlinks",
-          "name": "Backlinks"
+          "id": "lifeloop.linkedTasks",
+          "name": "Linked Tasks"
+        },
+        {
+          "id": "lifeloop.personContext",
+          "name": "Person Context"
         },
         {
           "id": "lifeloop.mentions",
@@ -245,21 +278,45 @@
       ],
       "view/item/context": [
         {
-          "command": "lifeloop.completeTask",
+          "command": "lifeloop.taskActions",
           "when": "viewItem == lifeloopTask",
           "group": "inline"
         },
         {
-          "command": "lifeloop.revealTask",
-          "when": "viewItem == lifeloopTask",
+          "command": "lifeloop.logInteraction",
+          "when": "viewItem == lifeloopPerson",
           "group": "inline"
+        },
+        {
+          "command": "lifeloop.createReconnectTask",
+          "when": "viewItem == lifeloopPerson",
+          "group": "lifeloop"
+        },
+        {
+          "command": "lifeloop.logInteraction",
+          "when": "viewItem == lifeloopPerson",
+          "group": "inline@1"
+        },
+        {
+          "command": "lifeloop.createReconnectTask",
+          "when": "viewItem == lifeloopPerson",
+          "group": "inline@2"
         }
       ],
       "commandPalette": [
-        {
-          "command": "lifeloop.reprefixLine",
-          "when": "false"
-        }
+        { "command": "lifeloop.syncProjected", "when": "false" },
+        { "command": "lifeloop.importNotes", "when": "false" },
+        { "command": "lifeloop.completeTask", "when": "false" },
+        { "command": "lifeloop.reopenTask", "when": "false" },
+        { "command": "lifeloop.revealTask", "when": "false" },
+        { "command": "lifeloop.peekSource", "when": "false" },
+        { "command": "lifeloop.toggleWaiting", "when": "false" },
+        { "command": "lifeloop.toggleSomeday", "when": "false" },
+        { "command": "lifeloop.setScheduled", "when": "false" },
+        { "command": "lifeloop.addReminder", "when": "false" },
+        { "command": "lifeloop.detachBinding", "when": "false" },
+        { "command": "lifeloop.copyBindingId", "when": "false" },
+        { "command": "lifeloop.openExternalBinding", "when": "false" }
       ]
     },
     "configuration": {
@@ -269,11 +326,6 @@
           "type": "string",
           "default": "Inbox",
           "description": "Page captures land on."
-        },
-        "lifeloop.journalFolder": {
-          "type": "string",
-          "default": "Journal",
-          "description": "Folder for daily notes."
         },
         "lifeloop.reviewFolder": {
           "type": "string",
@@ -313,7 +365,7 @@
         "lifeloop.autoSync": {
           "type": "boolean",
           "default": false,
-          "description": "Sync projected reminders on a timer. Off by default: nothing should touch your Reminders because an extension was installed."
+          "description": "Sync Reminders and Calendar on a timer. Off by default: installing the extension never changes external apps."
         },
         "lifeloop.syncMinutes": {
           "type": "number",
@@ -344,7 +396,8 @@
             "properties": {
               "state": {
                 "type": "string",
-                "maxLength": 1
+                "minLength": 1,
+                "pattern": "^[^\\[\\]\\r\\n]+$"
               },
               "done": {
                 "type": "boolean"
@@ -369,30 +422,6 @@
         "key": "ctrl+enter",
         "mac": "cmd+enter",
         "when": "editorTextFocus && editorLangId == markdown"
-      },
-      {
-        "command": "lifeloop.moveUp",
-        "key": "alt+up",
-        "mac": "alt+up",
-        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
-      },
-      {
-        "command": "lifeloop.moveDown",
-        "key": "alt+down",
-        "mac": "alt+down",
-        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
-      },
-      {
-        "command": "lifeloop.moveIndent",
-        "key": "alt+right",
-        "mac": "alt+right",
-        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
-      },
-      {
-        "command": "lifeloop.moveOutdent",
-        "key": "alt+left",
-        "mac": "alt+left",
-        "when": "editorTextFocus && editorLangId == markdown && !editorHasSelection"
       },
       {
         "command": "lifeloop.updateBakedSections",

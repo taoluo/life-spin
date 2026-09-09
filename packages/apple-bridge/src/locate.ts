@@ -1,4 +1,4 @@
-import type { Vault, SourceHandle } from "@lifeloop/semantic-core";
+import { TASK_MARKER, type Vault, type GuardedSourceHandle } from "@lifeloop/semantic-core";
 
 /**
  * Find the task a binding actually names, right now.
@@ -19,10 +19,10 @@ import type { Vault, SourceHandle } from "@lifeloop/semantic-core";
  * resolve, and picking one is how the wrong task gets completed.
  */
 export type Located =
-  | { ok: true; handle: SourceHandle; line: string }
+  | { ok: true; handle: GuardedSourceHandle; line: string }
   | { ok: false; reason: "missing" | "ambiguous"; message: string };
 
-const TASK_LINE = /^\s*(?:[-*+]|\d+[.)])\s+\[([^\]])\]/;
+const TASK_LINE = TASK_MARKER;
 
 export function locateByBinding(
   vault: Vault,
@@ -76,7 +76,7 @@ export function locateByBinding(
       // The receipt I4 requires, taken from the vault a moment before the write —
       // not from an index that may be minutes old.
       expectedText: only.line,
-      expectedState: TASK_LINE.exec(only.line)?.[1],
+      expectedState: TASK_LINE.exec(only.line)?.[2],
       capturedAt: new Date().toISOString(),
     },
   };

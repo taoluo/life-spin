@@ -1,0 +1,44 @@
+{
+  "status": "QUALIFIED_NOT_INSTALLED",
+  "version": "0.1.0",
+  "artifact": "dist/lifeloop-vscode-0.1.0.vsix",
+  "sha256": "26a74fd966661831ad3b93906451df87f14a9bb14a6b6a0b36551747180015b0",
+  "bytes": 434116,
+  "sourceSnapshot": {
+    "manifest": "/Users/tao/.codex/recovery/lifeloop/20260909T053853Z/manifest.json",
+    "sha256": "f4e0c3c025211c91da47520cc63395152e7fad05c9fd2327fe4700618c70f2d5"
+  },
+  "files": [
+    "extension.vsixmanifest",
+    "[Content_Types].xml",
+    "extension/package.json",
+    "extension/readme.md",
+    "extension/LICENSE.md",
+    "extension/resources/preview.css",
+    "extension/resources/loop.svg",
+    "extension/resources/icon.png",
+    "extension/dist/extension.js"
+  ],
+  "checks": [
+    "zip inventory",
+    "packaged entrypoint byte-equals the package-context source build",
+    "central sync and conflict-resolution commands declared",
+    "required resources",
+    "no hard Foam dependency",
+    "packaged task-only and Foam 0.44.6 host gates"
+  ],
+  "runtime": {
+    "vscode": "1.136.1",
+    "fullSuite": { "passed": 647, "liveSbSkipped": 3 },
+    "taskOnly": { "passed": 17, "foamOnlySkipped": 8 },
+    "foam0446": { "passed": 24, "knownFolderRenameSkipped": 1 },
+    "liveSilverBullet2100": { "status": "SKIP", "reason": "no RuntimeAPI client answered" },
+    "appleApps": { "status": "SKIP", "reason": "AppleEvent calls timed out on this host; fake-backed contracts passed" },
+    "extensionPath": "dist/qualified-extension-20260909T0537/extension"
+  },
+  "limitations": [
+    "released Foam 0.44.6 folder rename is unqualified",
+    "re-running the 3 live SilverBullet checks requires an available RuntimeAPI client",
+    "real Notes, Reminders and Calendar writes require a responsive local AppleEvent host"
+  ]
+}

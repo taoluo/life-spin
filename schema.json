@@ -4,6 +4,8 @@
     "completed",
     "deadline",
     "event",
+    "interaction",
+    "reconnect",
     "reminder",
     "scheduled",
     "source",
@@ -17,6 +19,7 @@
     "week"
   ],
   "$why": {
-    "source, source-id": "Added 2026-09-08 for Apple Notes import (2d), admitted deliberately. §34 asks: if someone never uses Notes import, does their Markdown need these? No — they appear only on lines that came from a note, exactly as [reminder:] appears only on a task projected outward. An ordinary capture written in the editor carries neither. Earned identity (I6), not a universal tax."
+    "source, source-id": "Added 2026-09-08 for Apple Notes import (2d), admitted deliberately. §34 asks: if someone never uses Notes import, does their Markdown need these? No — they appear only on lines that came from a note, exactly as [reminder:] appears only on a task projected outward. An ordinary capture written in the editor carries neither. Earned identity (I6), not a universal tax.",
+    "interaction, reconnect": "Added 2026-09-09 for the optional relationship loop. They appear only on an explicitly logged Journal interaction or a reconnect task; ordinary people pages, mentions and tasks carry neither. Last contact and reconnect timing remain derived rather than stored."
   }
 }

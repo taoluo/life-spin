@@ -45,40 +45,10 @@ export function at(objects: LifeloopObject[], offset: number): LifeloopObject[] 
     .reverse();
 }
 
-/**
- * An object's attributes as YAML.
- *
- * Written out rather than JSON-stringified because YAML is what upstream shows and
- * what a page's own frontmatter is written in — the same shape the user already
- * reads. Deliberately shallow-friendly: an object with a huge nested value is
- * summarised rather than filling the screen.
- */
-export function toYaml(value: unknown, indent = 0): string {
-  const pad = "  ".repeat(indent);
-  if (value === null || value === undefined) return "null";
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "[]";
-    return "\n" + value.map((item) => `${pad}  - ${toYaml(item, indent + 1).trimStart()}`).join("\n");
-  }
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>);
-    if (entries.length === 0) return "{}";
-    return "\n" + entries
-      .map(([key, item]) => `${pad}  ${key}: ${toYaml(item, indent + 1)}`)
-      .join("\n");
-  }
-  const text = String(value);
-  if (text.length > 200) return JSON.stringify(`${text.slice(0, 200)}…`);
-  // Quote anything YAML would otherwise read as something else.
-  return /^[\w./@ -]*$/.test(text) && text.trim() === text && text !== "" ? text : JSON.stringify(text);
-}
-
+/** Native serialization keeps the index values visible without another YAML dialect. */
 export function card(object: LifeloopObject): string {
   const { range, ...rest } = object as Record<string, unknown>;
-  const body = Object.entries(rest)
-    .map(([key, value]) => `${key}: ${toYaml(value)}`)
-    .join("\n");
-  return `\`\`\`yaml\n${body}\n\`\`\``;
+  return `\`\`\`json\n${JSON.stringify(rest, null, 2)}\n\`\`\``;
 }
 
 /**

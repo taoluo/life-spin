@@ -1,7 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Store, indexVault, tasks, backlinks } from "@lifeloop/semantic-core";
+import {
+  MemoryVault,
+  Store,
+  backlinks,
+  indexVault,
+  markdownFiles,
+  pageNameOf,
+  processItem,
+  tasks,
+} from "@lifeloop/semantic-core";
 
 /**
  * Conformance layers B and C, against a live SilverBullet.
@@ -35,9 +45,9 @@ function lua(script: string, seconds = 30): unknown | null {
   }
 }
 
-// A short probe, because `sb` will try to *start* a space that is not running and
-// spend a minute failing. Deciding "no client" must cost a second, not the suite.
-const available = lua("return 1", 2) !== null;
+// A short probe, because a registered space may have no live RuntimeAPI client.
+// Deciding "no client" stays bounded rather than delaying the whole test suite.
+const available = lua("return 1", 5) !== null;
 
 if (!available) {
   test("live SilverBullet conformance — SKIPPED", async () => {
@@ -64,14 +74,15 @@ describe.runIf(available)("layer B — index primitives", () => {
     const store = new Store(":memory:");
     await indexVault(FIXTURES, store);
     const ours = tasks.open(store).map((t) => String(t.name)).sort();
+    const pages = (await markdownFiles(FIXTURES)).map(pageNameOf);
+    const fixturePages = pages.map((page) => `t.page == ${JSON.stringify(page)}`).join(" or ");
 
     const theirs = lua(`
-      local out = {}
-      for _, t in ipairs(index.tasks()) do
-        if not t.done and not t.inComment then out[#out + 1] = t.name end
-      end
-      table.sort(out)
-      return out
+      return query[[
+        from t = tags.task
+        where not t.done and not t.inComment and (${fixturePages})
+        select t.name
+      ]]
     `) as string[] | null;
 
     expect(theirs, "SilverBullet returned nothing").not.toBeNull();
@@ -84,14 +95,15 @@ describe.runIf(available)("layer B — index primitives", () => {
     await indexVault(FIXTURES, store);
     const page = "Projects/Reed Solomon";
     const ours = [...new Set(backlinks(store, page).map((r) => String(r.page)))].sort();
+    const pages = (await markdownFiles(FIXTURES)).map(pageNameOf);
+    const fixturePages = pages.map((source) => `l.page == ${JSON.stringify(source)}`).join(" or ");
 
     const theirs = lua(`
-      local seen = {}
-      for _, l in ipairs(index.links("${page}")) do seen[l.page] = true end
-      local out = {}
-      for k in pairs(seen) do out[#out + 1] = k end
-      table.sort(out)
-      return out
+      return query[[
+        from l = tags.link
+        where l.toPage == ${JSON.stringify(page)} and (${fixturePages})
+        select l.page
+      ]]
     `) as string[] | null;
 
     expect(theirs).not.toBeNull();
@@ -104,7 +116,23 @@ describe.runIf(available)("layer C — mutation bytes", () => {
   test("a stale source is a byte-identical no-op on both sides", async () => {
     // The assertion that matters most, and the one a dump comparison cannot make:
     // both implementations must refuse, and refusing must write nothing.
-    const before = lua(`return space.readPage("Scratch/Conformance")`);
-    expect(before).not.toBeNull();
+    const theirs = lua(`
+      local before = space.readPage("Inbox")
+      local ok, err = lifeloop.inbox.applyToItem({
+        kind = "item",
+        page = "Inbox",
+        range = {0, 1},
+        raw = "definitely stale"
+      })
+      local after = space.readPage("Inbox")
+      return { refused = not ok, unchanged = before == after, error = tostring(err) }
+    `) as { refused: boolean; unchanged: boolean; error: string } | null;
+    expect(theirs).toMatchObject({ refused: true, unchanged: true });
+
+    const inbox = readFileSync(resolve(FIXTURES, "Inbox.md"), "utf8");
+    const vault = MemoryVault.of({ "Inbox.md": inbox });
+    const ours = await processItem(vault, { offset: 0, end: 1, text: "definitely stale" }, null);
+    expect(ours).toMatchObject({ ok: false, reason: "stale" });
+    expect(vault.read("Inbox.md")).toBe(inbox);
   });
 });

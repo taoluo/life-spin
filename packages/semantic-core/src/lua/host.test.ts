@@ -275,3 +275,19 @@ describe("commands and embeds a vault defines", () => {
     host.cleanup();
   });
 });
+
+
+test("SB task-state names remain complete rather than collapsing to their first letter", async () => {
+  const host = await hostFor({ "W.md": "# W\n" });
+  try {
+    const result = await collectDeclarations([
+      'taskState.define {name="TO DO", order=1}\ntaskState.define {name="IN PROGRESS", order=2}\ntaskState.define {name="DONE", done=true, order=3}',
+    ], host);
+    expect(result.errors).toEqual([]);
+    expect(result.declared.taskStates).toEqual([
+      { name: "TO DO", state: "TO DO", done: false, order: 1 },
+      { name: "IN PROGRESS", state: "IN PROGRESS", done: false, order: 2 },
+      { name: "DONE", state: "DONE", done: true, order: 3 },
+    ]);
+  } finally { host.cleanup(); }
+});

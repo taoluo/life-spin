@@ -1,8 +1,11 @@
-import { capture, processedOffset, type Vault } from "@lifeloop/semantic-core";
+import {
+  applied, captureItem, changeSet, pending, processedOffset, refuse,
+  type MutationResult, type Refusal, type Vault,
+} from "@lifeloop/semantic-core";
 import { osascriptRunner, parseRecords, type ScriptRunner } from "./osascript.ts";
 
 /**
- * Apple Notes into the Inbox — one way (2d).
+ * Apple Notes and the Inbox share one plain-text first line.
  *
  * The Inbox is the superset of every capture source; Notes is a mobile frontend,
  * not a second home for knowledge. While an item is pending the note is canonical
@@ -49,6 +52,22 @@ on run argv
     set matches to (every note whose id is theId)
     if (count of matches) is 0 then return "gone"
     move item 1 of matches to folder destination
+    return "ok"
+  end tell
+end run
+`;
+
+const UPDATE_SCRIPT = `
+on run argv
+  set theId to item 1 of argv
+  set expectedModified to item 2 of argv
+  set newBody to item 3 of argv
+  tell application "Notes"
+    set matches to (every note whose id is theId)
+    if (count of matches) is 0 then return "gone"
+    set n to item 1 of matches
+    if (modification date of n as string) is not expectedModified then return "conflict"
+    set body of n to newBody
     return "ok"
   end tell
 end run
@@ -112,6 +131,13 @@ export class Notes {
       return false;
     }
   }
+
+  async update(id: string, expectedModified: string, text: string): Promise<"ok" | "gone" | "conflict"> {
+    const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    const html = text.split("\n").map((line) => `<div>${escape(line) || "<br>"}</div>`).join("");
+    const result = await this.run(UPDATE_SCRIPT, [id, expectedModified, html]);
+    return result === "ok" || result === "gone" ? result : "conflict";
+  }
 }
 
 export type ImportState = {
@@ -121,26 +147,37 @@ export type ImportState = {
 
 export type ImportDecision =
   | { action: "create"; note: AppleNote; line: string }
-  | { action: "update"; note: AppleNote; line: string }
-  | { action: "went-native"; note: AppleNote; why: string }
+  | { action: "update"; note: AppleNote; line: string; expected: string }
+  | { action: "push"; note: AppleNote; line: string; expected: string; text: string }
+  | { action: "conflict"; note: AppleNote; why: string; expected: string }
+  | { action: "baseline"; note: AppleNote; line: string }
   | { action: "none"; note: AppleNote; why: string };
 
 const MARKER = (id: string) => `[source-id: "${id}"]`;
+const DETACHED_MARKER = (id: string) => `[source-id: "detached:${id}"]`;
+const lineText = (line: string) => line.endsWith("\r") ? line.slice(0, -1) : line;
+
+export function importedText(line: string): string {
+  const [first, ...rest] = line.replaceAll("\r\n", "\n").split("\n");
+  const title = first
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[^\]]+\]\s+)?/, "")
+    .replace(/\s+\[source:\s*apple-notes\]\s+\[source-id:\s*"[^"]+"\]\s*$/, "")
+    .trim();
+  return [title, ...rest.map((part) => part.replace(/^ {0,2}/, ""))].join("\n").trimEnd();
+}
 
 export function lineFor(note: AppleNote): string {
   const text = bodyToMarkdown(note.body) || note.name;
-  const first = text.split("\n")[0].trim();
-  return `* ${first} [source: apple-notes] ${MARKER(note.id)}`;
+  const [first, ...rest] = text.split("\n");
+  return `* ${first.trim()} [source: apple-notes] ${MARKER(note.id)}` +
+    rest.map((line) => `\n  ${line}`).join("");
 }
 
 /**
  * Decide what to do with each note, given what the Inbox currently says.
  *
- * The one rule that needs stating: **editing a mirrored item is an ownership
- * claim, not an error.** "The imported body is read-only" is unenforceable — the
- * Inbox is a Markdown file and VS Code has no honest way to make part of one
- * read-only — so rather than pretend, or silently overwrite what someone typed,
- * a local edit detaches the item. You edited it here, so it is yours now.
+ * A three-way baseline distinguishes a one-sided edit from a conflict. Conflicts
+ * detach: Markdown keeps its value and Notes keeps its value.
  */
 export function planImport(
   notes: AppleNote[],
@@ -152,36 +189,100 @@ export function planImport(
 
   return notes.map((note): ImportDecision => {
     const marker = MARKER(note.id);
+    if (inboxText.includes(DETACHED_MARKER(note.id))) {
+      return { action: "none", note, why: "detached — Markdown owns it now" };
+    }
 
     // Processed is a permanent handoff: Markdown owns it and syncing stops.
     if (processedRegion.includes(marker)) {
       return { action: "none", note, why: "processed — Markdown owns it now" };
     }
 
-    const existing = pendingRegion
-      .split("\n")
-      .find((line) => line.includes(marker));
+    const matches = pending(pendingRegion).filter((item) => item.text.includes(marker));
+    const existing = matches.length === 1 ? matches[0].text : undefined;
 
     if (!existing) return { action: "create", note, line: lineFor(note) };
 
     const remembered = state.lastImported.get(note.id);
-    if (remembered && existing.trim() !== remembered.text.trim()) {
-      return {
-        action: "went-native",
-        note,
-        why: "edited here since it was imported, so this item is now ours",
-      };
+    if (!remembered) {
+      return existing === lineFor(note)
+        ? { action: "baseline", note, line: existing }
+        : { action: "conflict", note, expected: existing, why: "sync baseline is unavailable" };
     }
-
-    if (remembered && remembered.modified === note.modified) {
+    const localChanged = lineText(existing) !== lineText(remembered.text);
+    const remoteChanged = remembered.modified !== note.modified;
+    if (localChanged && remoteChanged && existing === lineFor(note)) {
+      return { action: "baseline", note, line: existing };
+    }
+    if (localChanged && remoteChanged) {
+      return { action: "conflict", note, expected: existing, why: "both Notes and Markdown changed" };
+    }
+    if (localChanged) {
+      if (isRich(note)) {
+        return { action: "conflict", note, expected: existing, why: "rich Note cannot be safely overwritten" };
+      }
+      return { action: "push", note, line: existing, expected: existing, text: importedText(existing) };
+    }
+    if (!remoteChanged) {
       return { action: "none", note, why: "unchanged" };
     }
 
     // Rich content is pull-only in principle and unwritable in practice; we still
     // refresh the text we can read, because nothing is ever written back.
-    return { action: "update", note, line: lineFor(note) };
+    return { action: "update", note, line: lineFor(note), expected: existing };
   });
 }
+
+function pendingMatch(text: string, id: string, expected: string): { start: number; end: number } | null {
+  const marker = MARKER(id);
+  const matches = pending(text)
+    .filter((item) => item.text.includes(marker))
+    .map((item) => ({ start: item.offset, end: item.end, item: item.text }));
+  if (matches.length !== 1) return null;
+  const match = matches[0];
+  const same = (value: string) => value.replaceAll("\r\n", "\n");
+  return same(match.item) === same(expected)
+    ? { start: match.start, end: match.end }
+    : null;
+}
+
+/** Replace exactly the pending source line that an import decision observed. */
+export async function replacePendingImportedLine(
+  vault: Vault,
+  inboxPage: string,
+  id: string,
+  expected: string,
+  replacement: string,
+): Promise<MutationResult> {
+  const path = `${inboxPage}.md`;
+  if (!vault.exists(path)) return refuse("missing", `no ${inboxPage} page`);
+  const text = vault.read(path);
+  const match = pendingMatch(text, id, expected);
+  if (!match) {
+    return refuse("stale", `Apple Note ${id} no longer has the pending line that was planned`);
+  }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const rendered = replacement.replaceAll("\r\n", "\n").replaceAll("\n", eol);
+  const suffix = text.slice(match.end);
+  const boundaryCr = eol === "\r\n" && suffix.startsWith("\n") ? "\r" : "";
+  const next = text.slice(0, match.start) + rendered + boundaryCr + suffix;
+  if (next === text) return { ok: true, changed: [], value: undefined };
+  const cs = changeSet(`update imported Apple Note ${id}`);
+  cs.expected.set(path, text);
+  cs.writes.set(path, next);
+  return applied(vault, cs, undefined);
+}
+
+export type ImportRefusal = Refusal & { id: string; action: ImportDecision["action"] };
+export type ImportResult = {
+  created: number;
+  updated: number;
+  pushed: number;
+  detached: number;
+  conflicts: { id: string; local: string; remote: string; reason: string }[];
+  settled: string[];
+  refused: ImportRefusal[];
+};
 
 /** Apply an import plan, through the capture mutation for anything new. */
 export async function applyImport(
@@ -189,55 +290,114 @@ export async function applyImport(
   inboxPage: string,
   decisions: ImportDecision[],
   state: ImportState,
-): Promise<{ created: number; updated: number; detached: number }> {
-  let created = 0, updated = 0, detached = 0;
+  notes: Pick<Notes, "update"> = new Notes(),
+): Promise<ImportResult> {
+  let created = 0, updated = 0, pushed = 0, detached = 0;
+  const conflicts: ImportResult["conflicts"] = [];
+  const settled: string[] = [];
+  const refused: ImportRefusal[] = [];
+
+  const record = (decision: ImportDecision, result: MutationResult<unknown>): boolean => {
+    if (result.ok) return true;
+    refused.push({ ...result, id: decision.note.id, action: decision.action });
+    return false;
+  };
 
   for (const decision of decisions) {
     if (decision.action === "create") {
-      const result = await capture(vault, decision.line, inboxPage);
-      if (result.ok) {
+      const path = `${inboxPage}.md`;
+      const current = vault.exists(path) ? vault.read(path) : null;
+      if (current?.includes(MARKER(decision.note.id)) || current?.includes(DETACHED_MARKER(decision.note.id))) {
+        continue;
+      }
+      const result = await captureItem(vault, decision.line, inboxPage, current);
+      if (record(decision, result)) {
         created++;
+        settled.push(decision.note.id);
         state.lastImported.set(decision.note.id, {
           text: decision.line, modified: decision.note.modified,
         });
       }
     } else if (decision.action === "update") {
-      const path = `${inboxPage}.md`;
-      if (!vault.exists(path)) continue;
-      const text = vault.read(path);
-
-      /**
-       * Find the mirrored line by its marker, not by what we remember writing.
-       *
-       * `lastImported` is in-memory and empty after a restart, so requiring it
-       * meant a note edited on the phone never reached its mirror again — the
-       * import looked healthy and quietly stopped working. The `[source-id: …]`
-       * marker is in the file, which is the point of putting it there.
-       */
-      const remembered = state.lastImported.get(decision.note.id);
-      const marker = `[source-id: "${decision.note.id}"]`;
-      const lines = text.split("\n");
-      const at = remembered
-        ? lines.findIndex((l) => l.trim() === remembered.text.trim())
-        : lines.findIndex((l) => l.includes(marker));
-      if (at === -1) continue;
-
-      lines[at] = decision.line;
-      const next = lines.join("\n");
-      if (next !== text) {
-        await vault.write(path, next);
-        updated++;
+      const result = await replacePendingImportedLine(
+        vault, inboxPage, decision.note.id, decision.expected, decision.line,
+      );
+      if (record(decision, result)) {
+        if (result.ok && result.changed.length) updated++;
+        settled.push(decision.note.id);
         state.lastImported.set(decision.note.id, {
           text: decision.line, modified: decision.note.modified,
         });
       }
-    } else if (decision.action === "went-native") {
-      // Drop the binding, keep `[source:]` as provenance. Later note edits stop
-      // flowing in; the note itself is untouched.
-      state.lastImported.delete(decision.note.id);
-      detached++;
+    } else if (decision.action === "baseline") {
+      settled.push(decision.note.id);
+      state.lastImported.set(decision.note.id, {
+        text: decision.line, modified: decision.note.modified,
+      });
+    } else if (decision.action === "push") {
+      const current = vault.exists(`${inboxPage}.md`) ? vault.read(`${inboxPage}.md`) : "";
+      if (!pendingMatch(current, decision.note.id, decision.expected)) {
+        record(decision, refuse("stale", "Inbox changed before the Note update; nothing was pushed"));
+        continue;
+      }
+      const outcome = await notes.update(decision.note.id, decision.note.modified, decision.text);
+      if (outcome === "ok") {
+        pushed++;
+        settled.push(decision.note.id);
+        state.lastImported.set(decision.note.id, { text: decision.line, modified: "" });
+        continue;
+      }
+      conflicts.push({
+        id: decision.note.id, local: decision.text,
+        remote: bodyToMarkdown(decision.note.body),
+        reason: outcome === "gone" ? "Note is missing" : "Note changed during sync",
+      });
+    } else if (decision.action === "conflict") {
+      conflicts.push({
+        id: decision.note.id, local: importedText(decision.expected),
+        remote: bodyToMarkdown(decision.note.body), reason: decision.why,
+      });
+    } else if (decision.action === "none") {
+      settled.push(decision.note.id);
     }
   }
 
-  return { created, updated, detached };
+  return { created, updated, pushed, detached, conflicts, settled, refused };
+}
+
+export async function resolveNoteConflict(
+  vault: Vault,
+  inboxPage: string,
+  note: AppleNote,
+  choice: "notes" | "markdown" | "detach",
+  state: ImportState,
+  notes: Pick<Notes, "update"> = new Notes(),
+  expected?: { local: string; remote: string },
+): Promise<MutationResult> {
+  const path = `${inboxPage}.md`;
+  const text = vault.exists(path) ? vault.read(path) : "";
+  const matches = pending(text).filter((item) => item.text.includes(MARKER(note.id)));
+  if (matches.length !== 1) return refuse(matches.length ? "ambiguous" : "missing", `cannot uniquely locate Apple Note ${note.id}`);
+  const current = matches[0].text;
+  if (expected && importedText(current) !== expected.local) return refuse("stale", "Inbox changed after the conflict was shown");
+  if (expected && bodyToMarkdown(note.body) !== expected.remote) return refuse("stale", "Apple Note changed after the conflict was shown");
+  if (choice === "notes") {
+    const result = await replacePendingImportedLine(vault, inboxPage, note.id, current, lineFor(note));
+    if (result.ok) state.lastImported.set(note.id, { text: lineFor(note), modified: note.modified });
+    return result;
+  }
+  if (choice === "detach") {
+    const result = await replacePendingImportedLine(
+      vault, inboxPage, note.id, current,
+      current.replace(MARKER(note.id), DETACHED_MARKER(note.id)),
+    );
+    if (result.ok) state.lastImported.delete(note.id);
+    return result;
+  }
+  if (isRich(note)) return refuse("invalid", "a rich Note cannot be overwritten without losing content");
+  if (!pendingMatch(vault.read(path), note.id, current)) return refuse("stale", "Inbox changed before conflict resolution");
+  const outcome = await notes.update(note.id, note.modified, importedText(current));
+  if (outcome !== "ok") return refuse(outcome === "gone" ? "missing" : "stale", `Apple Note ${outcome}`);
+  state.lastImported.set(note.id, { text: current, modified: "" });
+  return { ok: true, changed: [], value: undefined };
 }

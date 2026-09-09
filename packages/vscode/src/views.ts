@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
 import {
-  today, upcoming, projectSignals, day, tasks, backlinks,
+  today, upcoming, projectSignals, day, tasks, originalSourceOffset, TASK_MARKER,
   pending, openMentions, mentions, byPage,
-  type LifeloopObject, type SourceHandle,
+  birthdaySignals, reconnectSignals, personContext, people,
+  type LifeloopObject, type GuardedSourceHandle,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 
@@ -21,7 +22,7 @@ export class Node extends vscode.TreeItem {
     label: string,
     collapsible: vscode.TreeItemCollapsibleState,
     readonly children?: Node[],
-    readonly handle?: SourceHandle,
+    readonly handle?: GuardedSourceHandle,
     readonly page?: string,
     readonly offset?: number,
   ) {
@@ -29,40 +30,61 @@ export class Node extends vscode.TreeItem {
   }
 }
 
-const TASK_MARKER = /^\s*(?:[-*+]|\d+[.)])\s+\[([^\]])\]/;
+
 
 /** Build a node from a task object, capturing the receipt I4 requires. */
-function taskNode(lifeloop: LifeLoop, task: LifeloopObject, showPage = true): Node {
+function taskNode(
+  lifeloop: LifeLoop,
+  task: LifeloopObject,
+  showPage = true,
+  reason?: string,
+): Node {
   const page = String(task.page ?? "");
-  const [from] = (task.range as [number, number] | undefined) ?? [0, 0];
+  const [indexedFrom] = (task.range as [number, number] | undefined) ?? [0, 0];
 
-  let line = "";
-  try {
-    const text = lifeloop.vault.read(`${page}.md`);
-    const start = text.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
-    const end = text.indexOf("\n", from);
-    line = text.slice(start, end === -1 ? text.length : end);
-  } catch { /* the page may have gone; the handle will refuse */ }
+  // The receipt and label must describe the same indexed object. A live read here
+  // could sign a replacement task before reindexing. The JSON guard also refuses
+  // if another connection (CLI) updated the shared index after the task query.
+  const row = lifeloop.store.db.prepare(`
+    SELECT body FROM fts JOIN pages ON pages.id = fts.rowid
+    WHERE pages.path = ? AND EXISTS (
+      SELECT 1 FROM objects WHERE objects.page = pages.name
+      AND objects.tag = 'task' AND objects.ref = ? AND objects.json = ?
+    )
+  `).get(`${page}.md`, task.ref, JSON.stringify(task)) as { body: string } | undefined;
+  const text = row?.body ?? "";
+  const from = originalSourceOffset(text, indexedFrom);
+  const start = text.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+  const end = text.indexOf("\n", from);
+  const line = text.slice(start, end === -1 ? text.length : end);
 
-  const state = TASK_MARKER.exec(line)?.[1];
+  // Keep upstream index refs unchanged; mutation receipts address original text.
+  const indexedRef = String(task.ref);
+  const numeric = /^(.*)@(\d+)$/.exec(indexedRef);
+  const ref = numeric ? `${numeric[1]}@${originalSourceOffset(text, Number(numeric[2]))}` : indexedRef;
+  const state = row ? TASK_MARKER.exec(line)?.[2] : undefined;
   const node = new Node(
     String(task.name ?? "").trim() || "(empty task)",
     vscode.TreeItemCollapsibleState.None,
     undefined,
-    { ref: String(task.ref), expectedState: state, expectedText: line, capturedAt: new Date().toISOString() },
+    state === undefined ? undefined :
+      { ref, expectedState: state, expectedText: line, capturedAt: new Date().toISOString() },
     page,
     from,
   );
-
-  node.contextValue = "lifeloopTask";
+  node.id = indexedRef;
+  if (node.handle) node.contextValue = "lifeloopTask";
   node.iconPath = new vscode.ThemeIcon(task.done ? "check" : "circle-large-outline");
   const bits: string[] = [];
   if (showPage) bits.push(page);
   if (typeof task.deadline === "string") bits.push(`due ${task.deadline}`);
   if (typeof task.scheduled === "string") bits.push(`for ${task.scheduled}`);
+  if (!node.handle) bits.push("source action unavailable; use source commands");
   node.description = bits.join("  ·  ");
-  node.tooltip = new vscode.MarkdownString(`\`${line.trim()}\`\n\n_${page}_`);
-  node.command = {
+  node.tooltip = new vscode.MarkdownString(node.handle
+    ? `\`${line.trim()}\`\n\n_${page}_${reason ? `\n\nWhy: ${reason}` : ""}`
+    : "Source action unavailable; open the source file and use cursor commands.");
+  if (node.handle) node.command = {
     command: "lifeloop.revealTask",
     title: "Go to source",
     arguments: [node],
@@ -78,6 +100,15 @@ function section(label: string, children: Node[], icon?: string): Node | null {
     children,
   );
   if (icon) node.iconPath = new vscode.ThemeIcon(icon);
+  return node;
+}
+
+function personNode(person: string, lifeloop: LifeLoop, detail?: string): Node {
+  const node = new Node(person.split("/").at(-1) ?? person, vscode.TreeItemCollapsibleState.None, undefined, undefined, person);
+  node.contextValue = "lifeloopPerson";
+  node.iconPath = new vscode.ThemeIcon("person");
+  node.description = detail;
+  node.command = { command: "vscode.open", title: "Open Person", arguments: [lifeloop.pageUri(person)] };
   return node;
 }
 
@@ -102,26 +133,88 @@ export class TodayView extends BaseProvider {
   protected roots(): Node[] {
     const t = today(this.lifeloop.store, day());
     const nodes = [
-      section("Overdue", t.overdue.map((x) => taskNode(this.lifeloop, x)), "flame"),
-      section("Due today", t.due.map((x) => taskNode(this.lifeloop, x)), "calendar"),
-      section("Scheduled", t.scheduled.map((x) => taskNode(this.lifeloop, x)), "clock"),
-      section("Waiting", t.waiting.map((x) => taskNode(this.lifeloop, x)), "watch"),
+      section("Overdue", t.overdue.map((x) => taskNode(this.lifeloop, x, true, `deadline ${x.deadline} is before today`)), "flame"),
+      section("Due today", t.due.map((x) => taskNode(this.lifeloop, x, true, "deadline is today")), "calendar"),
+      section("Scheduled", t.scheduled.map((x) => taskNode(this.lifeloop, x, true, "scheduled for today")), "clock"),
+      section("Waiting", t.waiting.map((x) => taskNode(this.lifeloop, x, true, "task or inherited context is tagged #waiting")), "watch"),
     ].filter((n): n is Node => n !== null);
 
+    const days = upcoming(this.lifeloop.store, day(), this.lifeloop.config("upcomingDays", 14));
+    const later = days.map((d) =>
+      section(d.date, d.tasks.map((x) => taskNode(
+        this.lifeloop,
+        x,
+        true,
+        `${x.deadline === d.date ? "deadline" : "scheduled date"} is ${d.date}`,
+      ))),
+    ).filter((n): n is Node => n !== null);
+    if (later.length) {
+      nodes.push(new Node("Upcoming", vscode.TreeItemCollapsibleState.Collapsed, later));
+    }
+    const relationshipFacts = new Map<string, string[]>();
+    for (const signal of birthdaySignals(
+      this.lifeloop.store, day(), this.lifeloop.config("upcomingDays", 14),
+    )) {
+      const detail = signal.daysUntil === 0 ? "birthday today"
+        : signal.daysUntil === 1 ? "birthday tomorrow" : `birthday ${signal.nextBirthday}`;
+      relationshipFacts.set(signal.person, [detail]);
+    }
+    for (const signal of reconnectSignals(this.lifeloop.store, day())) {
+      const detail = signal.kind === "never-contacted"
+        ? "never contacted"
+        : `last ${signal.lastInteraction?.date} · due ${signal.due}`;
+      relationshipFacts.set(signal.person, [...(relationshipFacts.get(signal.person) ?? []), detail]);
+    }
+    const relationship = [...relationshipFacts].map(([person, details]) =>
+      personNode(person, this.lifeloop, details.join(" · ")));
+    const peopleSection = section("People", relationship, "person");
+    if (peopleSection) {
+      peopleSection.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      nodes.push(peopleSection);
+    }
     if (nodes.length === 0) {
       const empty = new Node("Nothing due today", vscode.TreeItemCollapsibleState.None);
       empty.iconPath = new vscode.ThemeIcon("check-all");
       return [empty];
     }
 
-    const days = upcoming(this.lifeloop.store, day(), this.lifeloop.config("upcomingDays", 14));
-    const later = days.map((d) =>
-      section(d.date, d.tasks.map((x) => taskNode(this.lifeloop, x))),
-    ).filter((n): n is Node => n !== null);
-    if (later.length) {
-      nodes.push(new Node("Upcoming", vscode.TreeItemCollapsibleState.Collapsed, later));
-    }
     return nodes;
+  }
+}
+
+/** Derived relationship context for the active Person page. */
+export class PersonContextView extends BaseProvider {
+  protected roots(): Node[] {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "markdown") return [];
+    const person = this.lifeloop.pageNameOfUri(editor.document.uri);
+    if (!people(this.lifeloop.store).some((candidate) => candidate.ref === person)) return [];
+    const context = personContext(this.lifeloop.store, person);
+    if (!context) return [];
+
+    const roots: Node[] = [];
+    if (context.lastInteraction) {
+      const last = context.lastInteraction;
+      const node = new Node(`${last.kind} · ${last.date}`, vscode.TreeItemCollapsibleState.None, undefined, undefined, last.page, last.offset);
+      node.iconPath = new vscode.ThemeIcon("history");
+      node.description = last.text;
+      node.command = { command: "lifeloop.revealTask", title: "Open interaction", arguments: [node] };
+      roots.push(node);
+    } else {
+      roots.push(new Node("No recorded interactions", vscode.TreeItemCollapsibleState.None));
+    }
+
+    const followups = section("Open follow-ups", context.openFollowups.map((task) => taskNode(this.lifeloop, task, true)), "checklist");
+    if (followups) roots.push(followups);
+    const recent = context.interactions.slice(1, 11).map((entry) => {
+      const node = new Node(`${entry.date} · ${entry.kind}`, vscode.TreeItemCollapsibleState.None, undefined, undefined, entry.page, entry.offset);
+      node.description = entry.text;
+      node.command = { command: "lifeloop.revealTask", title: "Open interaction", arguments: [node] };
+      return node;
+    });
+    const history = section("Earlier interactions", recent, "history");
+    if (history) roots.push(history);
+    return roots;
   }
 }
 
@@ -205,39 +298,27 @@ export class InboxView extends BaseProvider {
   }
 }
 
-/** 1.4 — backlinks for whatever is open. */
-export class BacklinksView extends BaseProvider {
+/** Open tasks on other pages that inherit a link to the current page. */
+export class LinkedTasksView extends BaseProvider {
   constructor(lifeloop: LifeLoop) {
     super(lifeloop);
-    vscode.window.onDidChangeActiveTextEditor(() => this.refresh());
   }
 
   protected roots(): Node[] {
     const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.languageId !== "markdown") {
-      return [new Node("Open a Markdown page", vscode.TreeItemCollapsibleState.None)];
-    }
+    if (!editor || editor.document.languageId !== "markdown") return [];
     const page = this.lifeloop.pageNameOfUri(editor.document.uri);
-    const links = backlinks(this.lifeloop.store, page);
-    if (links.length === 0) {
-      return [new Node(`Nothing links to ${page}`, vscode.TreeItemCollapsibleState.None)];
-    }
-
-    return links
-      .sort((a, b) => String(b.page).localeCompare(String(a.page)))
-      .map((relation) => {
-        const from = String(relation.page);
-        const [offset] = (relation.range as [number, number] | undefined) ?? [0, 0];
-        const node = new Node(from, vscode.TreeItemCollapsibleState.None, undefined, undefined, from, offset);
-        node.description = String(relation.snippet ?? "").slice(0, 80).replace(/\n/g, " ");
-        node.iconPath = new vscode.ThemeIcon("references");
-        node.command = {
-          command: "lifeloop.revealTask",
-          title: "Open",
-          arguments: [node],
-        };
-        return node;
-      });
+    return tasks.universe(this.lifeloop.store)
+      .filter((task) => !task.done && task.page !== page &&
+        (task.ilinks as string[] | undefined)?.includes(page))
+      .map((task) => taskNode(
+        this.lifeloop,
+        task,
+        true,
+        (task.links as string[] | undefined)?.includes(page)
+          ? `task directly links to [[${page}]]`
+          : `task inherits a link to [[${page}]] from its containing context`,
+      ));
   }
 }
 

@@ -17,13 +17,16 @@ There are two implementations of the same idea. Both read the same vault.
 | [`LifeLoop/`](LifeLoop) | the original [SilverBullet](https://silverbullet.md) library — no plug, no database, no page format of its own |
 | [`packages/`](packages) | the VS Code implementation, on a standalone semantic core |
 
-The vault *is* the migration between them. Same frontmatter, same `[deadline:]`, same
-`## Processed`, same `#waiting`. That was not luck — it is what "Markdown owns durable knowledge"
-was for, and it is the first real test of it.
+The task Markdown remains shared: frontmatter, deadlines, completion stamps and Inbox sections.
+The VS Code client now delegates general note features to **Foam** (`foam.foam-vscode`).
+LifeLoop retains task semantics and verified actions, not a second complete PKM application.
+See [Foam setup and migration](docs/FOAM.md) and the [ownership decision](docs/plans/2026-09-08-foam-boundary.md).
 
-With one honest exception: **`space-lua` and `space-style` blocks are indexed and never executed.**
-A vault from SilverBullet keeps its notes and loses its scripts. Each block says so as a diagnostic,
-and `LifeLoop: Report Unsupported Blocks` counts them — see [`COMPATIBILITY.md`](COMPATIBILITY.md).
+The optional relationship loop keeps Person pages in Foam and adds only explicit Journal
+interactions, derived reconnect signals, Person context and ordinary follow-up tasks.
+
+Space Lua is an opt-in bounded subset; full SilverBullet UI, libraries and template compatibility
+are not promised. No personal notes or templates are converted automatically.
 
 ## The documents, and which answers what
 
@@ -44,7 +47,7 @@ scheduled** — the expected outcome is that most of them never ship, and that i
 ```
 packages/semantic-core   parse · index · query · mutate — no UI, no editor
 packages/vscode          the extension
-packages/cli             lifeloop index | query | dump | search
+packages/cli             lifeloop index | query | dump
 packages/apple-bridge    Reminders, Calendar, Notes — imports nothing from vscode
 vendor/silverbullet      SilverBullet's parser and indexers, pinned and unmodified
 ```
@@ -63,7 +66,7 @@ own assertions run against our copy** on every `npm test`.
 
 ```bash
 npm install
-npm run verify                      # typecheck, vendor integrity, schema pin, 625 tests
+npm run verify                      # typecheck, vendor integrity, schema pin, 647 tests (+ 3 live-SB skips)
 npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
@@ -80,8 +83,9 @@ development, open `packages/vscode` in VS Code and press F5.
 ### Testing
 
 ```bash
-npm test                  # 625 headless tests, ~16s
-npm run test:integration  # 9 tests inside a real VS Code (downloads it once)
+npm test                  # 647 headless tests (+ 3 live-SB skips)
+npm run test:integration  # 17 tests inside a real VS Code (downloads it once)
+npm run test:foam         # 24 tests with Foam 0.44.6; folder rename remains unqualified
 npm run verify            # everything above, plus typecheck and the two guards
 ```
 

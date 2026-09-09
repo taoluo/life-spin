@@ -120,3 +120,13 @@ describe("regression — completing the wrong task", () => {
     store.close();
   });
 });
+
+test("binding lookup preserves a multi-character state and excludes wiki-link list items", () => {
+  const vault = MemoryVault.of({ "W.md": '* [[Page]] [reminder: "R1"]\n* [IN PROGRESS] actual [reminder: "R1"]\n' });
+  const found = locateByBinding(vault, "W", "reminder", "R1");
+  expect(found.ok).toBe(true);
+  if (found.ok) {
+    expect(found.handle.expectedState).toBe("IN PROGRESS");
+    expect(found.line).toContain("actual");
+  }
+});

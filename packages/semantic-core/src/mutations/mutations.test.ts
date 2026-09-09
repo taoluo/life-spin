@@ -1,8 +1,8 @@
 import { expect, test, describe } from "vitest";
 import { MemoryVault } from "../vault.ts";
 import { setTaskState, stampCompletion, toggleParked, setTaskAttribute, cycleTaskState } from "./tasks.ts";
-import { capture, pending, processItem, linkToProject, makeTask } from "./inbox.ts";
-import { setProjectStatus, attachPageToTask, promotePage, patchFrontmatter } from "./pages.ts";
+import { capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask } from "./inbox.ts";
+import { setProjectStatus, attachPageToTask, patchFrontmatter } from "./pages.ts";
 
 /**
  * The suite spends as much effort on what must *not* happen as on what must.
@@ -146,6 +146,14 @@ describe("task attributes", () => {
     await setTaskAttribute(vault, { ref: "Notes@0" }, "deadline", null);
     expect(vault.read("Notes.md")).toBe("* [ ] Task\n");
   });
+
+  test("duplicate attributes are ambiguous and remain untouched", async () => {
+    const text = '* [ ] Task [reminder: "A"] [reminder: "B"]\n';
+    const vault = MemoryVault.of({ "Notes.md": text });
+    expect(await setTaskAttribute(vault, { ref: "Notes@0" }, "reminder", null))
+      .toMatchObject({ ok: false, reason: "ambiguous" });
+    expect(vault.read("Notes.md")).toBe(text);
+  });
 });
 
 describe("capture", () => {
@@ -170,6 +178,29 @@ describe("capture", () => {
     expect(vault.snapshot()).toEqual({});
     expect((await capture(vault, "first")).ok).toBe(true);
     expect(vault.read("Inbox.md")).toBe("* first\n");
+  });
+
+  test("does not overwrite an Inbox that appears during creation", async () => {
+    class AppearingVault extends MemoryVault {
+      private first = true;
+      override exists(path: string): boolean {
+        if (path === "Inbox.md" && this.first) { this.first = false; return false; }
+        return super.exists(path);
+      }
+    }
+    const vault = new AppearingVault(new Map([["Inbox.md", "created elsewhere\n"]]));
+    expect(await ensureInbox(vault)).toMatchObject({ ok: false, reason: "stale" });
+    expect(vault.read("Inbox.md")).toBe("created elsewhere\n");
+  });
+
+  test("Capture Here preserves CRLF and refuses a changed page", async () => {
+    const original = "# Work\r\ncontext\r\n";
+    const vault = MemoryVault.of({ "Work.md": original });
+    expect((await captureHere(vault, "Work", original.indexOf("context") + "context\r\n".length, "do it", original)).ok).toBe(true);
+    expect(vault.read("Work.md")).toBe("# Work\r\ncontext\r\n* [ ] do it\r\n");
+    const before = vault.read("Work.md");
+    expect(await captureHere(vault, "Work", 0, "stale", original)).toMatchObject({ ok: false, reason: "stale" });
+    expect(vault.read("Work.md")).toBe(before);
   });
 });
 
@@ -302,24 +333,6 @@ describe("attaching a page to a task", () => {
   });
 });
 
-describe("promoting a page", () => {
-  test("moves it and removes the original", async () => {
-    const vault = MemoryVault.of({ "Inbox/Idea.md": "thought\n" });
-    expect((await promotePage(vault, "Inbox/Idea", "Knowledge/Idea")).ok).toBe(true);
-    expect(vault.exists("Inbox/Idea.md")).toBe(false);
-    expect(vault.read("Knowledge/Idea.md")).toBe("thought\n");
-  });
-
-  test("a collision writes nothing", async () => {
-    const vault = MemoryVault.of({ "Inbox/Idea.md": "a\n", "Knowledge/Idea.md": "b\n" });
-    const before = vault.snapshot();
-    expect(await promotePage(vault, "Inbox/Idea", "Knowledge/Idea")).toMatchObject({
-      ok: false, reason: "collision",
-    });
-    unchanged(vault, before);
-  });
-});
-
 describe("a write that fails is not a success", () => {
   /**
    * Regression. `Vault.write` used to be synchronous, which forced the VS Code
@@ -358,6 +371,28 @@ describe("a write that fails is not a success", () => {
     // The compensating delete removed the page it had just created.
     expect(vault.exists("Specs/Draft.md")).toBe(false);
   });
+});
+
+test("completion uses SB open/custom-done semantics rather than non-space markers", async () => {
+  const waiting = MemoryVault.of({ "W.md": "* [w] waiting\n" });
+  expect((await setTaskState(waiting, { ref: "W@0" }, true)).ok).toBe(true);
+  expect(waiting.read("W.md")).toContain("* [x] waiting [completed:");
+  const custom = MemoryVault.of({ "W.md": '* [d] finished [completed: "2020-01-01"]\n' });
+  const states = [{ state: "d", done: true }];
+  const original = custom.read("W.md");
+  expect(await setTaskState(custom, { ref: "W@0" }, true, new Date(), states)).toMatchObject({ ok: false, reason: "stale" });
+  expect(custom.read("W.md")).toBe(original);
+  expect((await setTaskState(custom, { ref: "W@0" }, false, new Date(), states)).ok).toBe(true);
+  expect(custom.read("W.md")).toBe("* [ ] finished\n");
+});
+
+test.each(["x", "X"])("built-in done state %s needs no explicit done flag and cycles back to open", async state => {
+  const vault = MemoryVault.of({ "W.md": "* [ ] task\n" });
+  const states = [{ state: " " }, { state }];
+  await cycleTaskState(vault, { ref: "W@0" }, states);
+  expect(vault.read("W.md")).toContain(`* [${state}] task [completed:`);
+  await cycleTaskState(vault, { ref: "W@0" }, states);
+  expect(vault.read("W.md")).toBe("* [ ] task\n");
 });
 
 describe("cycling a task through custom states", () => {
@@ -419,4 +454,46 @@ describe("cycling a task through custom states", () => {
     expect(result).toMatchObject({ ok: false, reason: "stale" });
     expect(vault.snapshot()).toEqual(before);
   });
+});
+
+
+test("declared multi-character states preserve identity, children and completion history", async () => {
+  const states = [{ state: "TO DO" }, { state: "IN PROGRESS" }, { state: "DONE", done: true }];
+  const text = "* [TO DO] parent\r\n  * [ ] child\r\n";
+  const vault = MemoryVault.of({ "W.md": text });
+  expect((await cycleTaskState(vault, { ref: "W@0", expectedState: "TO DO", expectedText: "* [TO DO] parent" }, states)).ok).toBe(true);
+  expect(vault.read("W.md")).toBe(text.replace("TO DO", "IN PROGRESS"));
+  expect((await cycleTaskState(vault, { ref: "W@0", expectedState: "IN PROGRESS" }, states)).ok).toBe(true);
+  const completed = vault.read("W.md");
+  expect(completed).toContain("* [DONE] parent [completed:");
+  expect(completed).toContain("\r\n  * [ ] child\r\n");
+  expect(await setTaskState(vault, { ref: "W@0", expectedState: "DONE" }, true, new Date(), states)).toMatchObject({ ok: false });
+  expect(vault.read("W.md")).toBe(completed);
+  expect((await setTaskState(vault, { ref: "W@0", expectedState: "DONE" }, false, new Date(), states)).ok).toBe(true);
+  expect(vault.read("W.md")).toBe(text.replace("TO DO", " "));
+});
+
+test("undeclared multi-character state and invalid configured marker never write", async () => {
+  const text = "* [MYSTERY STATE] parent\n";
+  const vault = MemoryVault.of({ "W.md": text });
+  expect(await setTaskState(vault, { ref: "W@0" }, true)).toMatchObject({ ok: false, reason: "invalid" });
+  expect(await cycleTaskState(vault, { ref: "W@0" })).toMatchObject({ ok: false, reason: "invalid" });
+  await expect(cycleTaskState(vault, { ref: "W@0" }, [{ state: "BAD]\n* [x" }])).rejects.toThrow("invalid task state marker");
+  expect(vault.read("W.md")).toBe(text);
+});
+
+
+test("wiki-link list items cannot be mistaken for multi-character tasks", async () => {
+  const text = "* [[Page]]\n";
+  const vault = MemoryVault.of({ "W.md": text });
+  const handle = { ref: "W@0" };
+  for (const result of [
+    await stampCompletion(vault, handle, "2026-09-08"),
+    await toggleParked(vault, handle, "waiting"),
+    await setTaskAttribute(vault, handle, "deadline", "2026-09-08"),
+  ]) expect(result).toMatchObject({ ok: false });
+  expect(vault.read("W.md")).toBe(text);
+  const unknown = MemoryVault.of({ "W.md": "* [UNKNOWN STATE] task\n" });
+  expect(await stampCompletion(unknown, handle, "2026-09-08")).toMatchObject({ ok: false, reason: "invalid" });
+  expect(unknown.read("W.md")).toBe("* [UNKNOWN STATE] task\n");
 });

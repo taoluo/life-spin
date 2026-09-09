@@ -67,6 +67,36 @@ on run argv
 end run
 `;
 
+const UPDATE_SUMMARY_SCRIPT = `
+on run argv
+  set calName to item 1 of argv
+  set theUid to item 2 of argv
+  set expectedSummary to item 3 of argv
+  set newSummary to item 4 of argv
+  tell application "Calendar"
+    set matches to (every event of calendar calName whose uid is theUid)
+    if (count of matches) is 0 then return "gone"
+    set e to item 1 of matches
+    if (summary of e as string) is not expectedSummary then return "conflict"
+    set summary of e to newSummary
+    return "ok"
+  end tell
+end run
+`;
+
+const DELETE_SCRIPT = `
+on run argv
+  set calName to item 1 of argv
+  set theUid to item 2 of argv
+  tell application "Calendar"
+    set matches to (every event of calendar calName whose uid is theUid)
+    if (count of matches) is 0 then return "gone"
+    delete item 1 of matches
+    return "ok"
+  end tell
+end run
+`;
+
 const withSeparators = (script: string) =>
   script.replace(/\bRS\b/g, "(ASCII character 29)").replace(/\bFS\b/g, "(ASCII character 31)");
 
@@ -103,6 +133,20 @@ export class Calendar {
    */
   async create(summary: string, start: string, end: string, calendar: string): Promise<string> {
     return this.run(CREATE_SCRIPT, [summary, start, end, calendar]);
+  }
+
+  async updateSummary(
+    uid: string,
+    calendar: string,
+    expectedSummary: string,
+    summary: string,
+  ): Promise<"ok" | "gone" | "conflict"> {
+    const result = await this.run(UPDATE_SUMMARY_SCRIPT, [calendar, uid, expectedSummary, summary]);
+    return result === "ok" || result === "gone" ? result : "conflict";
+  }
+
+  async remove(uid: string, calendar: string): Promise<boolean> {
+    return (await this.run(DELETE_SCRIPT, [calendar, uid])) === "ok";
   }
 }
 

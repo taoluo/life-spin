@@ -30,21 +30,17 @@ instead.** That is the right instinct — plugin compatibility, dependency and a
 tax nobody should pay twice. But it only pays off if the host *has* an ecosystem, and this is where
 the two hosts are not comparable.
 
-Everything §16 asks for as first-class V1 retrieval already exists natively in VS Code, and none of
-it has to be built:
+The current [ownership decision](docs/plans/2026-09-08-foam-boundary.md) reuses the host and
+Foam rather than building a second general note platform:
 
-| what §16 requires | in VS Code | in SilverBullet |
-|---|---|---|
-| full-text search | ripgrep, built in | build it |
-| fuzzy open | quick open, built in | build it |
-| backlinks | `ReferenceProvider`, Shift+F12 | build it |
-| broken links | `DiagnosticCollection` | build it |
-| link navigation | `DocumentLinkProvider` | build it |
+| Need | Owner |
+|---|---|
+| Full-text search, fuzzy open, files and Git history | VS Code |
+| Backlinks, ordinary link navigation/diagnostics, graph and tags | Foam |
+| Task-level context, queries and source-verified actions | LifeLoop |
 
-Phase 1 spends its retrieval budget on *providers* — thin adapters over an index — rather than on
-search UI, ranking, and a picker. That is not a preference for VS Code's aesthetics. It is the
-difference between a fortnight and a year, for the capability the design doc calls its most
-important new idea.
+LifeLoop's maintenance budget goes to task semantics and the execution loop. General note
+navigation uses the existing ecosystem.
 
 The same holds for everything downstream: LSP, the extension API, MCP, editor-native AI tooling,
 and the enormous supply of extensions a user already has. LifeLoop does not want to build any of

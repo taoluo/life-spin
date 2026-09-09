@@ -3,7 +3,9 @@ import { indexMarkdown } from "../../../vendor/silverbullet/plugs/index/indexer.
 import { extractFrontMatter } from "../../../vendor/silverbullet/plugs/index/frontmatter.ts";
 import { updateITags } from "../../../vendor/silverbullet/plugs/index/tags.ts";
 import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
-import { installSyscalls, setPathLookup, type PathLookup } from "./compat/syscalls.ts";
+import { installSyscalls, setPathLookup, withExtractionConfig, type PathLookup } from "./compat/syscalls.ts";
+
+import { validateTaskStates, type CycleStates } from "./mutations/tasks.ts";
 
 export type LifeloopObject = {
   ref: string;
@@ -32,10 +34,15 @@ export async function extractObjects(
   text: string,
   meta: PageMeta,
   lookup?: PathLookup,
+  taskStates?: CycleStates,
 ): Promise<LifeloopObject[]> {
   installSyscalls();
   if (lookup) setPathLookup(lookup);
-  const objects = (await indexMarkdown(text, meta)) as unknown as LifeloopObject[];
+  if (taskStates) validateTaskStates(taskStates);
+  const configuration = taskStates === undefined ? {} : {
+    taskStates: Object.fromEntries(taskStates.map(s => [s.state, { name: s.state, done: s.done === true }])),
+  };
+  const objects = (await withExtractionConfig(configuration, () => indexMarkdown(text, meta))) as unknown as LifeloopObject[];
   return [pageObject(text, meta), ...objects];
 }
 

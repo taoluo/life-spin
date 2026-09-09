@@ -1,20 +1,10 @@
 import * as vscode from "vscode";
 import {
-  brokenLinks, backlinks, decorations, labelFor, visible, ordered,
+  resolveRef,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 
-/**
- * Retrieval (1.1–1.6), and the rule that shapes all of it: compose the VS Code
- * primitive where one exists (I7).
- *
- * Full-text search is ripgrep's and fuzzy file open is quick open's — neither is
- * rebuilt here. What the index adds is the part VS Code cannot know: that
- * `[[Reed Solomon]]` means a page, that a page has aliases, and which links
- * resolve to nothing.
- */
-
-const WIKILINK = /\[\[([^\]|#]+)(#[^\]|]+)?(\|[^\]]+)?\]\]/g;
+// Only LifeLoop semantic diagnostics and SB special refs live here. Foam owns generic PKM.
 
 /** Resolve a link target the way the index does — by basename, not by literal path. */
 export function resolveTarget(lifeloop: LifeLoop, target: string): string | null {
@@ -30,100 +20,34 @@ export function resolveTarget(lifeloop: LifeLoop, target: string): string | null
   return matches.length === 1 ? matches[0].replace(/\.md$/, "") : null;
 }
 
-/** 1.1 — ctrl-click a wikilink. */
-export function documentLinks(lifeloop: LifeLoop): vscode.DocumentLinkProvider {
-  return {
-    provideDocumentLinks(document) {
-      const text = document.getText();
-      const links: vscode.DocumentLink[] = [];
-      for (const match of text.matchAll(WIKILINK)) {
-        const target = match[1].trim();
-        const page = resolveTarget(lifeloop, target);
-        const start = document.positionAt(match.index! + 2);
-        const end = document.positionAt(match.index! + 2 + match[1].length);
-        const link = new vscode.DocumentLink(new vscode.Range(start, end));
-        link.target = lifeloop.pageUri(page ?? target);
-        link.tooltip = page ? `Open ${page}` : `Create ${target}`;
-        links.push(link);
-      }
-      return links;
-    },
-  };
-}
-
-/** 1.2 — wikilink and tag completion from the index. */
-export function completion(lifeloop: LifeLoop): vscode.CompletionItemProvider {
-  return {
-    provideCompletionItems(document, position) {
-      const line = document.lineAt(position).text.slice(0, position.character);
-
-      const wiki = /\[\[([^\]]*)$/.exec(line);
-      if (wiki) {
-        // Decorated: a page's prefix shows in the list, a hidden page stays out of
-        // it, and priority orders it — the surfaces we own honour `pageDecoration`
-        // even though VS Code's own Quick Open cannot be told about it.
-        const decorated = decorations(lifeloop.store);
-        const pages = lifeloop.vault.list().map((path) => path.replace(/\.md$/, ""));
-        return ordered(pages, decorated)
-          .filter((page) => visible(decorated.get(page), "picker"))
-          .map((page, index) => {
-            const item = new vscode.CompletionItem(
-              labelFor(page, decorated.get(page)),
-              vscode.CompletionItemKind.File,
-            );
-            // The label may carry a prefix; what gets written is the page name.
-            item.insertText = page;
-            item.filterText = page;
-            item.detail = "page";
-            item.sortText = String(index).padStart(5, "0");
-            return item;
-          });
-      }
-
-      const tag = /#([\w/-]*)$/.exec(line);
-      if (tag) {
-        const seen = new Set(lifeloop.store.objects("tag").map((t) => String(t.name ?? t.ref)));
-        return [...seen].sort().map((name) => {
-          const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Keyword);
-          item.detail = "tag";
-          return item;
-        });
-      }
-      return undefined;
-    },
-  };
-}
-
-/** 1.3 — Shift+F12 on a page gives its backlinks, in the editor's own UI. */
-export function references(lifeloop: LifeLoop): vscode.ReferenceProvider {
-  return {
-    provideReferences(document) {
-      const page = lifeloop.pageNameOfUri(document.uri);
-      return backlinks(lifeloop.store, page).map((relation) => {
-        const uri = lifeloop.pageUri(String(relation.page));
-        const [from] = (relation.range as [number, number] | undefined) ?? [0, 0];
-        return new vscode.Location(uri, new vscode.Position(lineOf(lifeloop, relation.page, from), 0));
-      });
-    },
-  };
-}
-
-function lineOf(lifeloop: LifeLoop, page: unknown, offset: number): number {
-  try {
-    const text = lifeloop.vault.read(`${String(page)}.md`);
-    return text.slice(0, offset).split("\n").length - 1;
-  } catch {
-    return 0;
+/** Explicit SB navigation: Foam's ordinary click can offer to create page@anchor. */
+export async function openSbRef(lifeloop: LifeLoop): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "markdown") return;
+  const line = editor.document.lineAt(editor.selection.active.line).text;
+  const column = editor.selection.active.character;
+  const match = [...line.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)]
+    .find(m => column >= m.index! && column < m.index! + m[0].length);
+  const ref = match?.[1].trim() ?? "";
+  const at = ref.lastIndexOf("@");
+  const page = at < 0 || resolveTarget(lifeloop, ref) ? null : resolveTarget(lifeloop, ref.slice(0, at));
+  if (!page) {
+    void vscode.window.showWarningMessage("LifeLoop: put the cursor in an unambiguous SB [[page@anchor]] or [[page@position]] reference.");
+    return;
   }
+  const source = resolveRef(lifeloop.vault, `${page}${ref.slice(at)}`);
+  if ("ok" in source) {
+    void vscode.window.showWarningMessage(`LifeLoop: ${source.message}`);
+    return;
+  }
+  const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(page));
+  const target = await vscode.window.showTextDocument(document);
+  const position = document.positionAt(source.offset);
+  target.selection = new vscode.Selection(position, position);
+  target.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
 }
 
-/**
- * 1.6 — broken-link diagnostics.
- *
- * Reports and never fixes. A link to a page that does not exist yet is not
- * necessarily a mistake — it is how a page gets created here — so this is an
- * Information, not a Warning, and it says only what it measured.
- */
+/** Task/project validation. Ordinary link diagnostics belong to Foam. */
 export function publishDiagnostics(
   lifeloop: LifeLoop,
   collection: vscode.DiagnosticCollection,
@@ -142,13 +66,6 @@ export function publishDiagnostics(
     list.push(new vscode.Diagnostic(range, message, severity));
     byPage.set(page, list);
   };
-
-  for (const link of brokenLinks(lifeloop.store)) {
-    const [from, to] = (link.range as [number, number] | undefined) ?? [0, 0];
-    add(String(link.page), from, Math.max(1, to - from),
-        `[[${link.name ?? link.ref}]] does not resolve to a page`,
-        vscode.DiagnosticSeverity.Information);
-  }
 
   // 1.14's checks: what LifeLoop itself promised, not whether the vault is tidy.
   const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -197,7 +114,7 @@ export function publishDiagnostics(
       : "custom CSS for SilverBullet's editor";
     add(
       page, from, Math.max(1, Math.min(to - from, 80)),
-      `${kind}: SilverBullet runs this block; LifeLoop indexes it but does not execute it. ${detail}`,
+      `${kind}: compatibility is limited; execution depends on settings and supported APIs. ${detail}`,
       vscode.DiagnosticSeverity.Information,
     );
   }
@@ -348,43 +265,4 @@ export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvid
       });
     },
   };
-}
-
-/** 1.5 — alias-aware open, over page names and headings. */
-export async function openPage(lifeloop: LifeLoop): Promise<void> {
-  type Item = vscode.QuickPickItem & { page: string; offset?: number };
-  const decorated = decorations(lifeloop.store);
-  const items: Item[] = ordered(
-    lifeloop.vault.list().map((path) => path.replace(/\.md$/, "")),
-    decorated,
-  )
-    .filter((page) => visible(decorated.get(page), "picker"))
-    .map((page) => ({
-      label: labelFor(page, decorated.get(page)),
-      description: "page",
-      page,
-    }));
-  for (const header of lifeloop.store.objects("header")) {
-    const [from] = (header.range as [number, number] | undefined) ?? [0, 0];
-    items.push({
-      label: String(header.name ?? ""),
-      description: `# in ${header.page}`,
-      page: String(header.page),
-      offset: from,
-    });
-  }
-
-  const picked = await vscode.window.showQuickPick(items, {
-    placeHolder: "Open a page or heading",
-    matchOnDescription: true,
-  });
-  if (!picked) return;
-
-  const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(picked.page));
-  const editor = await vscode.window.showTextDocument(document);
-  if (picked.offset !== undefined) {
-    const position = document.positionAt(picked.offset);
-    editor.selection = new vscode.Selection(position, position);
-    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
-  }
 }

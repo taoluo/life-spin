@@ -1,6 +1,7 @@
 import {
-  setTaskState, stampCompletion, setTaskAttribute, tasks as taskQueries,
-  type Vault, type Store, type LifeloopObject, type Refusal,
+  setTaskState, stampCompletion, setTaskAttribute, setTaskName, taskNameFromLine, tasks as taskQueries,
+  type Vault, type Store, type LifeloopObject, type Refusal, type CycleStates,
+  type GuardedSourceHandle, type MutationResult,
 } from "@lifeloop/semantic-core";
 import { Reminders, type Reminder } from "./reminders.ts";
 import { reconcile, type BoundTask, type Decision, type Observation } from "./reconcile.ts";
@@ -18,8 +19,10 @@ export type SyncReport = {
   completed: string[];
   reopened: string[];
   pushed: string[];
+  pulled: string[];
   marksCleared: string[];
   recurring: string[];
+  conflicts: { ref: string; reminderId: string; local: string; remote: string; reason: string }[];
   refused: { ref: string; message: string }[];
   skipped: number;
 };
@@ -60,6 +63,9 @@ export type SyncOptions = {
   reminders?: Reminders;
   observations: ObservationStore;
   observedOn?: string;
+  taskStates?: CycleStates;
+  /** Rechecked after external reads, immediately before a state-changing write. */
+  isTaskPolicyCurrent?: () => boolean | Promise<boolean>;
   /** Told about a recurring binding, so the mismatch is visible rather than silent. */
   onRecurring?: (task: BoundTask) => void;
 };
@@ -91,8 +97,8 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
   const bridge = options.reminders ?? new Reminders();
   const bound = boundTasks(options.store);
   const report: SyncReport = {
-    completed: [], reopened: [], pushed: [], marksCleared: [],
-    recurring: [], refused: [], skipped: 0,
+    completed: [], reopened: [], pushed: [], pulled: [], marksCleared: [],
+    recurring: [], conflicts: [], refused: [], skipped: 0,
   };
   if (bound.length === 0) return report;
 
@@ -109,6 +115,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     lastSeen,
     observedOn: options.observedOn ?? new Date().toISOString().slice(0, 10),
   });
+  const synchronizedNames = new Map<string, string>();
 
   const note = (result: { ok: true } | Refusal, ref: string, onOk: () => void) => {
     if (result.ok) onOk();
@@ -129,10 +136,15 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
      * Only the three actions that write need this; `push` talks to Reminders and
      * `flag-recurring` writes nothing.
      */
-    const writes = decision.action === "complete" || decision.action === "reopen" ||
+    const writes = decision.action === "complete" || decision.action === "reopen" || decision.action === "pull-name" ||
       decision.action === "clear-mark";
-    let handle: { ref: string; expectedText?: string; expectedState?: string; capturedAt: string } | null = null;
+    let handle: GuardedSourceHandle | null = null;
 
+    if ((decision.action === "complete" || decision.action === "reopen") &&
+        options.isTaskPolicyCurrent && !(await options.isTaskPolicyCurrent())) {
+      report.refused.push({ ref: decision.ref, message: "task-state policy changed during sync" });
+      continue;
+    }
     if (writes) {
       const found = locateByBinding(
         options.vault, pageOfRef(decision.ref), "reminder", task.reminderId,
@@ -141,17 +153,17 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         report.refused.push({ ref: decision.ref, message: found.message });
         continue;
       }
-      handle = found.handle as any;
+      handle = found.handle;
     }
 
     switch (decision.action) {
       case "complete":
-        note(await stampCompletion(options.vault, handle!, decision.date), decision.ref,
+        note(await stampCompletion(options.vault, handle!, decision.date, options.taskStates), decision.ref,
              () => report.completed.push(decision.ref));
         break;
 
       case "reopen":
-        note(await setTaskState(options.vault, handle!, false), decision.ref,
+        note(await setTaskState(options.vault, handle!, false, new Date(), options.taskStates), decision.ref,
              () => report.reopened.push(decision.ref));
         break;
 
@@ -163,7 +175,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
 
       case "push": {
         const ok = await bridge.update(decision.reminderId, decision.name, decision.body);
-        if (ok) report.pushed.push(decision.ref);
+        if (ok) { report.pushed.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); }
         // A push that finds nothing is the deleted case; the next pass clears it.
         break;
       }
@@ -171,6 +183,16 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
       case "flag-recurring":
         report.recurring.push(decision.ref);
         options.onRecurring?.(task);
+        break;
+
+      case "conflict":
+        report.conflicts.push({ ref: decision.ref, reminderId: decision.reminderId,
+          local: decision.local, remote: decision.remote, reason: decision.why });
+        break;
+
+      case "pull-name":
+        note(await setTaskName(options.vault, handle!, decision.name), decision.ref,
+          () => { report.pulled.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); });
         break;
 
       case "none":
@@ -189,10 +211,45 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     options.observations.set(id, {
       completed: reminder.completed,
       modificationDate: reminder.modificationDate,
+      name: synchronizedNames.get(id) ?? reminder.name,
       // One-way: a binding never becomes trustworthy again on its own.
       suspectedRecurring: previous?.suspectedRecurring || flagged.has(id),
     });
   }
 
   return report;
+}
+
+export async function resolveReminderConflict(options: {
+  vault: Vault;
+  page: string;
+  reminderId: string;
+  choice: "reminders" | "markdown" | "detach";
+  expectedLocal: string;
+  expectedRemote: string;
+  observations: ObservationStore;
+  reminders?: Pick<Reminders, "read" | "update">;
+}): Promise<MutationResult<unknown>> {
+  const located = locateByBinding(options.vault, options.page, "reminder", options.reminderId);
+  if (!located.ok) return { ok: false, reason: located.reason, message: located.message };
+  const local = taskNameFromLine(located.line);
+  if (local === null) return { ok: false, reason: "stale", message: "bound source is no longer a task" };
+  if (local !== options.expectedLocal) return { ok: false, reason: "stale", message: "Markdown changed after the conflict was shown" };
+  if (options.choice === "detach") {
+    const result = await setTaskAttribute(options.vault, located.handle, "reminder", null);
+    if (result.ok) options.observations.delete(options.reminderId);
+    return result;
+  }
+  const bridge = options.reminders ?? new Reminders();
+  const remote = (await bridge.read([options.reminderId])).get(options.reminderId);
+  if (!remote) return { ok: false, reason: "missing", message: "Reminder is missing; Detach keeps the Markdown task" };
+  if (remote.name !== options.expectedRemote) return { ok: false, reason: "stale", message: "Reminder changed after the conflict was shown" };
+  if (options.choice === "reminders") {
+    const result = await setTaskName(options.vault, located.handle, remote.name);
+    if (result.ok) options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: remote.modificationDate, name: remote.name });
+    return result;
+  }
+  if (!await bridge.update(options.reminderId, local, remote.body)) return { ok: false, reason: "missing", message: "Reminder disappeared during resolution" };
+  options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: null, name: local });
+  return { ok: true, changed: [], value: undefined };
 }

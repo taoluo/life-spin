@@ -1,16 +1,19 @@
 import * as vscode from "vscode";
 import {
-  capture, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked, moveItem,
-  setTaskAttribute, setProjectStatus, attachPageToTask, promotePage, freezeReview,
-  PROJECT_STATES, review, week, day, today, upcoming,
-  templates, readTemplate, builtinTemplate, createFromTemplate,
+  capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked, moveItem,
+  setTaskAttribute, setProjectStatus, attachPageToTask, freezeReview,
+  PROJECT_STATES, review, week, day,
+  readTemplate, builtinReviewTemplate, createFromTemplate,
   bakeAt, unbakeAt, updateBaked,
-  type InboxItem, type Refusal, type PageTemplate,
+  people, directPersonLinks, logInteraction, createReconnectTask, INTERACTION_KINDS, shift,
+  type InboxItem, type Refusal,
+  type InteractionKind,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import type { Node } from "./views.ts";
-import { openPage, scriptNamespaces } from "./retrieval.ts";
+import { openSbRef, scriptNamespaces } from "./retrieval.ts";
 import { evaluateToMarkdown } from "./lua.ts";
+import { taskTarget, type TaskTarget, type TaskTargetInput } from "./task-target.ts";
 
 /**
  * Every command goes through a named mutation (I5). None of them writes a file
@@ -29,30 +32,10 @@ function report(result: { ok: true } | Refusal, success: string): boolean {
     ambiguous: (m) => void vscode.window.showWarningMessage(`LifeLoop: ${m}`),
     collision: (m) => void vscode.window.showWarningMessage(`LifeLoop: ${m}`),
     invalid: (m) => void vscode.window.showErrorMessage(`LifeLoop: ${m}`),
+    unknown: (m) => void vscode.window.showErrorMessage(`LifeLoop: ${m}`),
   };
   messages[result.reason](result.message);
   return false;
-}
-
-const isTask = (line: string) => /^\s*(?:[-*+]|\d+[.)])\s+\[/.test(line);
-
-/** The task under the cursor, as a handle carrying its own receipt. */
-function taskAtCursor(lifeloop: LifeLoop) {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "markdown") return null;
-  const line = editor.document.lineAt(editor.selection.active.line);
-  if (!isTask(line.text)) return null;
-  const page = lifeloop.pageNameOfUri(editor.document.uri);
-  const offset = editor.document.offsetAt(line.range.start);
-  return {
-    handle: {
-      ref: `${page}@${offset}`,
-      expectedText: line.text,
-      expectedState: /\[([^\]])\]/.exec(line.text)?.[1],
-      capturedAt: new Date().toISOString(),
-    },
-    editor,
-  };
 }
 
 async function pickProject(lifeloop: LifeLoop): Promise<string | undefined> {
@@ -68,11 +51,64 @@ async function pickProject(lifeloop: LifeLoop): Promise<string | undefined> {
   return vscode.window.showQuickPick(projects, { placeHolder: "Which project?" });
 }
 
+async function openTaskProject(lifeloop: LifeLoop, target: TaskTarget): Promise<void> {
+  const linked = new Set((target.task?.ilinks as string[] | undefined) ?? []);
+  const projects = lifeloop.store.objects("page")
+    .filter((page) => (page.itags as string[] | undefined)?.includes("project"))
+    .map((page) => String(page.ref))
+    .filter((page) => page === target.page || linked.has(page))
+    .sort();
+  if (!projects.length) {
+    void vscode.window.showWarningMessage("LifeLoop: this task has no linked project");
+    return;
+  }
+  const page = projects.length === 1
+    ? projects[0]
+    : await vscode.window.showQuickPick(projects, { placeHolder: "Open which project?" });
+  if (page) await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
+}
+
+function activePerson(lifeloop: LifeLoop, input?: Pick<Node, "page">): string | null {
+  const page = input?.page ?? (vscode.window.activeTextEditor?.document.languageId === "markdown"
+    ? lifeloop.pageNameOfUri(vscode.window.activeTextEditor.document.uri) : undefined);
+  return page && people(lifeloop.store).some((candidate) => candidate.ref === page) ? page : null;
+}
+
 export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): void {
   const on = (name: string, handler: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(name, handler));
 
   const after = async () => { await lifeloop.reindex(); };
+
+  const recordInteraction = async (candidates: string[], defaultKind?: InteractionKind) => {
+    if (!candidates.length) return;
+    const selected = candidates.length === 1
+      ? candidates
+      : (await vscode.window.showQuickPick(
+        candidates.map((person) => ({
+          label: person.split("/").at(-1) ?? person,
+          description: person,
+          id: person,
+        })),
+        { placeHolder: "Who was involved?", canPickMany: true },
+      ))?.map((item) => item.id);
+    if (!selected?.length) return;
+    const kinds = defaultKind
+      ? [defaultKind, ...INTERACTION_KINDS.filter((kind) => kind !== defaultKind)]
+      : [...INTERACTION_KINDS];
+    const picked = await vscode.window.showQuickPick(
+      kinds.map((id) => ({ label: id, id })), { placeHolder: "Interaction type" },
+    );
+    if (!picked) return;
+    const note = await vscode.window.showInputBox({
+      prompt: `What happened with ${selected.map((person) => person.split("/").at(-1)).join(", ")}?`,
+      placeHolder: "optional note",
+    });
+    if (note === undefined) return;
+    if (report(await logInteraction(
+      lifeloop.vault, selected, day(), picked.id as InteractionKind, note,
+    ), "interaction logged")) await after();
+  };
 
   // 1.7 — Capture. Costs less than filing does: one box, no navigation.
   on("lifeloop.capture", async () => {
@@ -85,77 +121,152 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     if (report(await capture(lifeloop.vault, line, page), "captured")) await after();
   });
 
+  on("lifeloop.captureHere", async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "markdown") {
+      void vscode.window.showWarningMessage("LifeLoop: open a Markdown page first");
+      return;
+    }
+    const document = editor.document;
+    const expected = document.getText();
+    const currentLine = document.lineAt(editor.selection.active.line);
+    const offset = document.offsetAt(currentLine.rangeIncludingLineBreak.end);
+    const line = await vscode.window.showInputBox({
+      prompt: `Capture task here in ${lifeloop.pageNameOfUri(document.uri)}`,
+      placeHolder: "next action",
+    });
+    if (line === undefined) return;
+    const page = lifeloop.pageNameOfUri(document.uri);
+    if (report(await captureHere(lifeloop.vault, page, offset, line, expected), "captured here")) await after();
+  });
+
   on("lifeloop.openInbox", async () => {
     const page = lifeloop.config("inboxPage", "Inbox");
-    if (!lifeloop.vault.exists(`${page}.md`)) {
-      lifeloop.vault.write(`${page}.md`, "Captured items land here.\n\n");
-      await after();
-    }
+    const result = await ensureInbox(lifeloop.vault, page);
+    if (!report(result, result.ok && result.value.existed ? "inbox opened" : "inbox created")) return;
+    if (result.ok && !result.value.existed) await after();
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
+  });
+
+  on("lifeloop.logInteraction", async (input?: Pick<Node, "page">) => {
+    const person = activePerson(lifeloop, input);
+    if (!person) { void vscode.window.showWarningMessage("LifeLoop: open a page tagged `person`"); return; }
+    await recordInteraction([person]);
+  });
+
+  on("lifeloop.createReconnectTask", async (input?: Pick<Node, "page">) => {
+    const person = activePerson(lifeloop, input);
+    if (!person) { void vscode.window.showWarningMessage("LifeLoop: open a page tagged `person`"); return; }
+    const scheduled = await vscode.window.showInputBox({
+      prompt: `Reconnect with ${person} on (YYYY-MM-DD)`, value: shift(day(), 7),
+      validateInput: (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? null : "YYYY-MM-DD",
+    });
+    if (!scheduled) return;
+    const page = lifeloop.config("inboxPage", "Inbox");
+    if (report(await createReconnectTask(lifeloop.vault, person, scheduled, page), "follow-up created")) await after();
   });
 
   // 1.8 — Process Inbox. Link before Move: the captured wording stays where it happened.
   on("lifeloop.processInbox", async (preselected?: InboxItem) => {
     const page = lifeloop.config("inboxPage", "Inbox");
-    let text: string;
-    try { text = lifeloop.vault.read(`${page}.md`); } catch {
-      vscode.window.showWarningMessage(`LifeLoop: no ${page} page`);
-      return;
-    }
-
-    const items = pending(text);
-    if (items.length === 0) {
-      vscode.window.setStatusBarMessage("LifeLoop: inbox is empty", 3000);
-      return;
-    }
-
-    let item = preselected
-      ? items.find((i) => i.offset === preselected.offset) ?? items[0]
-      : undefined;
-    if (!item) {
-      const picked = await vscode.window.showQuickPick(
-        items.map((i) => ({ label: i.text.split("\n")[0], item: i })),
-        { placeHolder: `${items.length} pending` },
-      );
-      if (!picked) return;
-      item = picked.item;
-    }
-
-    const action = await vscode.window.showQuickPick(
-      [
-        { label: "$(link) Link project", detail: "append [[Project]], leave the wording where it is", id: "link" },
-        { label: "$(circle-outline) Make task", detail: "turn it into a checkbox", id: "task" },
-        { label: "$(check) Keep", detail: "stays pending — a first-class choice", id: "keep" },
-        { label: "$(archive) Archive", detail: "move it under Processed unchanged", id: "archive" },
-      ],
-      { placeHolder: item.text.split("\n")[0] },
-    );
-    if (!action) return;
-
-    switch (action.id) {
-      case "keep": return;
-      case "task":
-        if (report(await makeTask(lifeloop.vault, item, page), "made a task")) await after();
-        return;
-      case "archive":
-        if (report(await processItem(lifeloop.vault, item, null, page), "processed")) await after();
-        return;
-      case "link": {
-        const project = await pickProject(lifeloop);
-        if (!project) return;
-        if (report(await linkToProject(lifeloop.vault, item, project, page), `linked to ${project}`)) await after();
+    const continuous = preselected === undefined;
+    let selected = preselected;
+    for (;;) {
+      let text: string;
+      try { text = lifeloop.vault.read(`${page}.md`); } catch {
+        void vscode.window.showWarningMessage(`LifeLoop: no ${page} page`);
         return;
       }
+      const items = pending(text);
+      if (!items.length) {
+        vscode.window.setStatusBarMessage("LifeLoop: inbox is empty", 3000);
+        return;
+      }
+      const item = selected
+        ? items.find((candidate) => candidate.offset === selected!.offset && candidate.text === selected!.text)
+        : items[0];
+      if (!item) {
+        void vscode.window.showWarningMessage("LifeLoop: that Inbox item changed; nothing was moved");
+        return;
+      }
+      const action = await vscode.window.showQuickPick(
+        [
+          { label: "$(link) Link project", detail: "append [[Project]], leave the wording where it is", id: "link" },
+          { label: "$(circle-outline) Make task", detail: "turn it into a checkbox", id: "task" },
+          { label: "$(check) Keep", detail: "stays pending — stop processing", id: "keep" },
+          { label: "$(archive) Archive", detail: "move it under Processed unchanged", id: "archive" },
+        ],
+        { placeHolder: item.text.split("\n")[0] },
+      );
+      if (!action || action.id === "keep") return;
+
+      let ok = false;
+      if (action.id === "task") {
+        const projects = lifeloop.store.objects("page")
+          .filter((p) => (p.itags as string[] | undefined)?.includes("project"))
+          .map((p) => String(p.ref)).sort();
+        const project = await vscode.window.showQuickPick(
+          [{ label: "$(arrow-right) Skip project", id: "" }, ...projects.map((name) => ({ label: `$(project) ${name}`, id: name }))],
+          { placeHolder: "Project?" },
+        );
+        if (!project) return;
+        const when = await vscode.window.showQuickPick([
+          { label: "$(arrow-right) Skip timing", id: "skip" },
+          { label: "$(calendar) Today", id: "today" },
+          { label: "$(calendar) Pick date…", id: "date" },
+          { label: "$(watch) Waiting", id: "waiting" },
+        ], { placeHolder: "When?" });
+        if (!when) return;
+        let scheduled: string | undefined;
+        if (when.id === "today") scheduled = day();
+        if (when.id === "date") {
+          scheduled = await vscode.window.showInputBox({
+            prompt: "Scheduled date (YYYY-MM-DD)", value: day(),
+            validateInput: (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? null : "YYYY-MM-DD",
+          });
+          if (!scheduled) return;
+        }
+        ok = report(await makeTask(lifeloop.vault, item, page, {
+          project: project.id || undefined, scheduled, waiting: when.id === "waiting",
+        }), "made a task");
+      }
+      else if (action.id === "archive") ok = report(await processItem(lifeloop.vault, item, null, page), "processed");
+      else {
+        const project = await pickProject(lifeloop);
+        if (!project) return;
+        ok = report(await linkToProject(lifeloop.vault, item, project, page), `linked to ${project}`);
+      }
+      if (!ok) return;
+      await after();
+      if (!continuous) return;
+      selected = undefined;
     }
   });
 
   // 1.10 — ticking from a view, against the node's own handle.
-  on("lifeloop.completeTask", async (node: Node) => {
-    if (!node?.handle) return;
-    if (report(await setTaskState(lifeloop.vault, node.handle, true), "completed")) await after();
+  on("lifeloop.completeTask", async (input?: TaskTargetInput) => {
+    const target = taskTarget(lifeloop, input);
+    if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    try {
+      const states = await lifeloop.currentTaskStates();
+      if (report(await setTaskState(lifeloop.vault, target.handle, true, new Date(), states), "completed")) await after();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
   });
 
-  on("lifeloop.revealTask", async (node: Node) => {
+  on("lifeloop.reopenTask", async (input?: TaskTargetInput) => {
+    const target = taskTarget(lifeloop, input);
+    if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    try {
+      const states = await lifeloop.currentTaskStates();
+      if (report(await setTaskState(lifeloop.vault, target.handle, false, new Date(), states), "reopened")) await after();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
+  });
+
+  on("lifeloop.revealTask", async (node: Pick<Node, "page" | "offset">) => {
     if (!node?.page) return;
     const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(node.page));
     const editor = await vscode.window.showTextDocument(document);
@@ -164,17 +275,90 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
   });
 
+  on("lifeloop.peekSource", async (input?: TaskTargetInput) => {
+    const target = taskTarget(lifeloop, input);
+    if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    const source = await vscode.workspace.openTextDocument(lifeloop.pageUri(target.page));
+    const sourcePosition = source.positionAt(target.offset);
+    const origin = vscode.window.activeTextEditor;
+    await vscode.commands.executeCommand(
+      "editor.action.peekLocations",
+      origin?.document.uri ?? source.uri,
+      origin?.selection.active ?? sourcePosition,
+      [new vscode.Location(source.uri, source.lineAt(sourcePosition.line).range)],
+      "peek",
+    );
+  });
+
+  on("lifeloop.taskActions", async (input?: TaskTargetInput) => {
+    const target = taskTarget(lifeloop, input);
+    if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    const reminder = /\[reminder:\s*"([^"]+)"\]/.exec(target.line)?.[1];
+    const event = /\[event:\s*"([^"]+)"\]/.exec(target.line)?.[1];
+    const done = target.task?.done === true;
+    const linkedPeople = target.task ? directPersonLinks(lifeloop.store, target.task) : [];
+    const action = await vscode.window.showQuickPick([
+      { label: done ? "$(circle-outline) Reopen" : "$(check) Complete", id: done ? "reopen" : "complete" },
+      ...(linkedPeople.length ? [{ label: "$(comment-discussion) Log Interaction", id: "interaction" }] : []),
+      ...(reminder
+        ? [{ label: "$(sync) Sync Reminder", id: "sync" }, { label: "$(link-external) Open Reminders", id: "open-reminder" }, { label: "$(debug-disconnect) Detach Reminder", id: "detach-reminder" }]
+        : [{ label: "$(bell) Add Reminder", id: "reminder" }]),
+      ...(event
+        ? [
+          ...(linkedPeople.length ? [{ label: "$(preview) Pre-meeting Brief", id: "brief" }] : []),
+          { label: "$(sync) Sync Calendar", id: "sync" },
+          { label: "$(link-external) Open Calendar", id: "open-event" },
+          { label: "$(debug-disconnect) Detach Calendar", id: "detach-event" },
+        ]
+        : [{ label: "$(calendar) Add to Calendar", id: "calendar" }]),
+      { label: "$(calendar) Set Deadline", id: "deadline" },
+      { label: "$(calendar) Set Scheduled", id: "scheduled" },
+      { label: `${target.line.includes("#waiting") ? "$(close) Clear" : "$(watch) Mark"} Waiting`, id: "waiting" },
+      { label: `${target.line.includes("#someday") ? "$(close) Clear" : "$(archive) Mark"} Someday`, id: "someday" },
+      { label: "$(project) Open Project", id: "project" },
+      { label: "$(preview) Peek Source", id: "peek" },
+      { label: "$(go-to-file) Open Source", id: "source" },
+    ], { placeHolder: target.name || "Task actions" });
+    if (!action) return;
+    if (action.id === "interaction") return recordInteraction(linkedPeople, event ? "meeting" : undefined);
+    if (action.id === "brief") return vscode.commands.executeCommand("lifeloop.preMeetingBrief", target);
+    if (action.id === "project") return openTaskProject(lifeloop, target);
+    if (action.id === "sync") return vscode.commands.executeCommand("lifeloop.syncExternal");
+    if (action.id === "open-reminder" || action.id === "open-event") {
+      return vscode.commands.executeCommand("lifeloop.openExternalBinding", { kind: action.id === "open-reminder" ? "reminder" : "event" });
+    }
+    if (action.id === "detach-reminder" || action.id === "detach-event") {
+      const kind = action.id === "detach-reminder" ? "reminder" : "event";
+      return vscode.commands.executeCommand("lifeloop.detachBinding", {
+        ...target, kind, id: kind === "reminder" ? reminder : event,
+      });
+    }
+    const command: Record<string, string> = {
+      complete: "lifeloop.completeTask",
+      reopen: "lifeloop.reopenTask",
+      reminder: "lifeloop.addReminder",
+      calendar: "lifeloop.addToCalendar",
+      deadline: "lifeloop.setDeadline",
+      scheduled: "lifeloop.setScheduled",
+      waiting: "lifeloop.toggleWaiting",
+      someday: "lifeloop.toggleSomeday",
+      peek: "lifeloop.peekSource",
+      source: "lifeloop.revealTask",
+    };
+    await vscode.commands.executeCommand(command[action.id], target);
+  });
+
   for (const tag of ["waiting", "someday"] as const) {
-    on(`lifeloop.toggle${tag[0].toUpperCase()}${tag.slice(1)}`, async () => {
-      const at = taskAtCursor(lifeloop);
+    on(`lifeloop.toggle${tag[0].toUpperCase()}${tag.slice(1)}`, async (input?: TaskTargetInput) => {
+      const at = taskTarget(lifeloop, input);
       if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
       if (report(await toggleParked(lifeloop.vault, at.handle, tag), `toggled #${tag}`)) await after();
     });
   }
 
   for (const field of ["deadline", "scheduled"] as const) {
-    on(`lifeloop.set${field[0].toUpperCase()}${field.slice(1)}`, async () => {
-      const at = taskAtCursor(lifeloop);
+    on(`lifeloop.set${field[0].toUpperCase()}${field.slice(1)}`, async (input?: TaskTargetInput) => {
+      const at = taskTarget(lifeloop, input);
       if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
       const value = await vscode.window.showInputBox({
         prompt: `${field} (YYYY-MM-DD, empty to clear)`,
@@ -188,7 +372,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   }
 
   on("lifeloop.attachPage", async () => {
-    const at = taskAtCursor(lifeloop);
+    const at = taskTarget(lifeloop);
     if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     // The destination is the user's, never inferred from a folder convention.
     const destination = await vscode.window.showInputBox({ prompt: "New page for this task" });
@@ -212,22 +396,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
   });
 
-  /**
-   * Open a page a template describes, creating it if it is not there.
-   *
-   * A vault's own `Templates/Daily` wins over the built-in shape, which is the
-   * point: the thing people most want to change about a daily note is what is in
-   * it, and that should not require editing an extension.
-   */
-  const fromTemplate = async (
-    kind: "daily" | "review" | "project" | "page",
-    named: string,
-    suggested?: string,
-  ) => {
-    const vaultTemplate = readTemplate(lifeloop.vault, `Templates/${named}`);
-    const template = vaultTemplate ?? builtinTemplate(kind);
-    const name = suggested ?? template.suggestedName;
-    if (!name) return;
+  on("lifeloop.openReview", async () => {
+    const template = readTemplate(lifeloop.vault, "Templates/Review") ?? builtinReviewTemplate();
+    const name = `${lifeloop.config("reviewFolder", "Reviews")}/${week(day()).start}`;
 
     const result = await createFromTemplate(lifeloop.vault, template, name);
     if (!result.ok) {
@@ -244,93 +415,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       const at = document.positionAt(result.value.cursor);
       editor.selection = new vscode.Selection(at, at);
     }
-  };
-
-  // 1.11 — the daily note: a log and somewhere to think.
-  on("lifeloop.openDaily", () =>
-    fromTemplate("daily", "Daily", `${lifeloop.config("journalFolder", "Journal")}/${day()}`),
-  );
-
-  /**
-   * Any template the vault defines, offered by name — or named directly.
-   *
-   * A template's `command:` key is what it wants to be called, and VS Code cannot
-   * add a name it has never heard of to the Command Palette: the palette lists
-   * what a manifest declared at install time. So the *contributed* command takes
-   * an argument instead, which makes `command:` reachable from a keybinding the
-   * user writes once:
-   *
-   *     { "key": "cmd+k m", "command": "lifeloop.newFromTemplate", "args": "New meeting" }
-   *
-   * Install-time contribution plus an argument, rather than a second registry —
-   * the same conclusion `command.define` reached, arrived at from the other side.
-   */
-  on("lifeloop.newFromTemplate", async (wanted?: string) => {
-    const available: PageTemplate[] = [
-      ...templates(lifeloop.vault),
-      ...(["page", "project", "daily", "review"] as const).map(builtinTemplate),
-    ];
-    const nameOf = (t: PageTemplate) =>
-      t.command ?? t.page.replace(/^Templates\//, "").replace(/^builtin:/, "");
-
-    let template: PageTemplate | undefined;
-    if (typeof wanted === "string" && wanted.trim()) {
-      const target = wanted.trim().toLowerCase();
-      template = available.find(
-        (t) => nameOf(t).toLowerCase() === target || t.page.toLowerCase() === target,
-      );
-      if (!template) {
-        // Named and not found: say which names exist rather than silently
-        // opening a picker the keybinding did not ask for.
-        vscode.window.showWarningMessage(
-          `LifeLoop: no template called "${wanted}" — try ${available.map(nameOf).join(", ")}`,
-        );
-        return;
-      }
-    }
-
-    if (!template) {
-      const picked = await vscode.window.showQuickPick(
-        available.map((t) => ({
-          label: nameOf(t),
-          detail: t.page.startsWith("builtin:") ? "built in" : t.page,
-          template: t,
-        })),
-        { placeHolder: "Which template?" },
-      );
-      if (!picked) return;
-      template = picked.template;
-    }
-    let name = template.suggestedName ?? "";
-    if (template.confirmName || !name) {
-      const answer = await vscode.window.showInputBox({
-        prompt: "Name for the new page",
-        value: name,
-      });
-      if (answer === undefined) return;
-      name = answer;
-    }
-    const result = await createFromTemplate(lifeloop.vault, template, name);
-    if (!result.ok) {
-      vscode.window.showWarningMessage(`LifeLoop: ${result.message}`);
-      return;
-    }
-    if (!result.value.existed) await after();
-    const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(result.value.page));
-    const editor = await vscode.window.showTextDocument(document);
-    if (result.value.cursor !== null) {
-      const at = document.positionAt(result.value.cursor);
-      editor.selection = new vscode.Selection(at, at);
-    }
   });
-
-  // 1.12 — the Weekly Review, live until frozen.
-  on("lifeloop.openReview", () =>
-    fromTemplate(
-      "review", "Review",
-      `${lifeloop.config("reviewFolder", "Reviews")}/${week(day()).start}`,
-    ),
-  );
 
   on("lifeloop.freezeReview", async () => {
     const editor = vscode.window.activeTextEditor;
@@ -350,25 +435,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     if (report(await freezeReview(lifeloop.vault, page, render, day()), "review frozen")) await after();
   });
 
-  on("lifeloop.openToday", async () => {
-    const t = today(lifeloop.store, day());
-    const lines = [`# Today — ${t.date}`, ""];
-    const add = (title: string, list: any[]) => {
-      if (!list.length) return;
-      lines.push(`## ${title}`, "");
-      for (const task of list) lines.push(`* [ ] ${task.name}  _(${task.page})_`);
-      lines.push("");
-    };
-    add("Overdue", t.overdue); add("Due today", t.due);
-    add("Scheduled", t.scheduled); add("Waiting", t.waiting);
-    for (const d of upcoming(lifeloop.store, day(), lifeloop.config("upcomingDays", 14))) {
-      add(d.date, d.tasks);
-    }
-    const document = await vscode.workspace.openTextDocument({
-      content: lines.join("\n"), language: "markdown",
-    });
-    await vscode.window.showTextDocument(document, { preview: true });
-  });
+  on("lifeloop.openToday", () => vscode.commands.executeCommand("lifeloop.today.focus"));
 
   /**
    * What a vault actually loses by arriving here.
@@ -405,10 +472,10 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         : "_None._";
 
     const lines = [
-      "# Blocks LifeLoop does not execute",
+      "# Space Lua compatibility inventory",
       "",
-      "SilverBullet runs these. LifeLoop indexes them and stops there, so a vault that came",
-      "from SilverBullet keeps its notes and loses its scripts.",
+      "LifeLoop supports a bounded subset of Space Lua when enabled. This inventory classifies",
+      "calls for inspection; it does not prove that a script executes or its listeners run.",
       "",
       `* **${lua.length}** Space Lua block${lua.length === 1 ? "" : "s"}`,
       `* **${style.length}** Space Style block${style.length === 1 ? "" : "s"} — CSS for SilverBullet's editor, which VS Code does not expose`,
@@ -535,7 +602,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     if (updated) await after();
   });
 
-  on("lifeloop.openPage", () => openPage(lifeloop));
+  on("lifeloop.openSbRef", () => openSbRef(lifeloop));
   on("lifeloop.reindex", async () => {
     await lifeloop.reindex(true);
     vscode.window.setStatusBarMessage("LifeLoop: index rebuilt", 3000);

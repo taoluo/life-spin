@@ -25,6 +25,9 @@ export class Range {
   }
 }
 export class Selection extends Range {}
+export class WorkspaceEdit {
+  replace(_uri: any, _range: any, _content: string): void {}
+}
 export class Location { constructor(public uri: any, public range: any) {} }
 export class DocumentSymbol {
   children: DocumentSymbol[] = [];
@@ -82,6 +85,7 @@ export const workspace = {
   onDidDeleteFiles: () => ({ dispose: () => {} }),
   onDidCreateFiles: () => ({ dispose: () => {} }),
   onDidRenameFiles: () => ({ dispose: () => {} }),
+  onDidChangeConfiguration: () => ({ dispose: () => {} }),
   applyEdit: async () => true,
   openTextDocument: async () => ({}),
 };

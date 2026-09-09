@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { Store, indexVault, MemoryVault } from "@lifeloop/semantic-core";
-import { syncReminders, MemoryObservations, boundTasks } from "./sync.ts";
+import { syncReminders, MemoryObservations, boundTasks, resolveReminderConflict } from "./sync.ts";
 import type { Reminder } from "./reminders.ts";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +35,17 @@ async function setup(markdown: string) {
 }
 
 describe("the reverse flow, end to end", () => {
+  test("the LifeLoop resolver refuses a Reminder changed after it was shown", async () => {
+    const { vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    const result = await resolveReminderConflict({
+      vault, page: "Work", reminderId: "R1", choice: "markdown",
+      expectedLocal: "Local", expectedRemote: "Shown", observations: new MemoryObservations(),
+      reminders: new FakeReminders([reminder({ name: "Changed again" })]) as any,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "stale" });
+    cleanup();
+  });
+
   test("ticking on a watch completes the task in Markdown", async () => {
     const { store, vault, cleanup } = await setup(
       '* [ ] Submit paper [reminder: "R1"]\n',
@@ -57,6 +68,64 @@ describe("the reverse flow, end to end", () => {
     expect(text).toContain("* [x] Submit paper");
     // The date Reminders reported, not the date we happened to look.
     expect(text).toContain('[completed: "2026-09-09"]');
+    cleanup();
+  });
+
+  test("the bridge uses the same declared multi-character states as the index", async () => {
+    const markdown = '* [TO DO] Submit paper [reminder: "R1"]\n';
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "2026-09-08T09:00:00Z" });
+    const report = await syncReminders({
+      store, vault, observations,
+      taskStates: [{ state: "TO DO" }, { state: "DONE", done: true }],
+      reminders: new FakeReminders([
+        reminder({ completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      ]) as any,
+    });
+    expect(report.completed).toHaveLength(1);
+    expect(vault.read("Work.md")).toContain("* [x] Submit paper");
+    cleanup();
+  });
+
+  test("the bridge refuses a state write when its policy changed during the external read", async () => {
+    const markdown = '* [TO DO] Submit paper [reminder: "R1"]\n';
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "2026-09-08T09:00:00Z" });
+    const report = await syncReminders({
+      store, vault, observations,
+      taskStates: [{ state: "TO DO" }, { state: "DONE", done: true }],
+      isTaskPolicyCurrent: async () => false,
+      reminders: new FakeReminders([
+        reminder({ completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      ]) as any,
+    });
+    expect(report.completed).toHaveLength(0);
+    expect(report.refused[0].message).toContain("policy changed");
+    expect(vault.read("Work.md")).toBe(markdown);
+    cleanup();
+  });
+
+  test("the bridge re-locates a binding after its asynchronous policy check", async () => {
+    const markdown = '* [TO DO] Submit paper [reminder: "R1"]\n';
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "2026-09-08T09:00:00Z" });
+    const report = await syncReminders({
+      store, vault, observations,
+      taskStates: [{ state: "TO DO" }, { state: "DONE", done: true }],
+      isTaskPolicyCurrent: async () => {
+        await vault.write("Work.md", markdown + '* [TO DO] duplicate [reminder: "R1"]\n');
+        return true;
+      },
+      reminders: new FakeReminders([
+        reminder({ completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      ]) as any,
+    });
+    expect(report.completed).toHaveLength(0);
+    expect(report.refused[0].message).toContain("refusing to guess");
+    expect(vault.read("Work.md")).not.toContain("[completed:");
     cleanup();
   });
 

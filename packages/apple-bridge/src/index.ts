@@ -4,5 +4,6 @@ export * from "./reconcile.ts";
 export * from "./sync.ts";
 export * from "./notes.ts";
 export * from "./calendar.ts";
+export * from "./calendar-sync.ts";
 export * from "./locate.ts";
 export * from "./bind.ts";

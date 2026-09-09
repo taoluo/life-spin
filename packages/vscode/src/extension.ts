@@ -1,20 +1,18 @@
 import * as vscode from "vscode";
 import { assertRuntime } from "@lifeloop/semantic-core";
 import { LifeLoop } from "./workspace.ts";
-import { TodayView, ProjectsView, InboxView, BacklinksView, MentionsView } from "./views.ts";
+import { TodayView, ProjectsView, InboxView, LinkedTasksView, MentionsView, PersonContextView } from "./views.ts";
 import {
-  documentLinks, completion, references, publishDiagnostics, documentSymbols,
+  publishDiagnostics, documentSymbols,
 } from "./retrieval.ts";
 import { register } from "./commands.ts";
 import { registerApple } from "./apple.ts";
 import { extendMarkdownIt } from "./preview.ts";
 import { codeLenses, hovers, registerQueryCommands } from "./query-lens.ts";
 import { registerLua, renderSpaceLua, renderExpression, renderSpaceStyle } from "./lua.ts";
-import { register as registerSlash } from "./slash.ts";
 import { register as registerMentions } from "./mentions.ts";
 import { register as registerXray } from "./xray.ts";
-import { register as registerPickers } from "./pickers.ts";
-import { register as registerDecorations } from "./decoration.ts";
+import { registerBindings } from "./bindings.ts";
 
 let lifeloop: LifeLoop | undefined;
 
@@ -59,9 +57,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
 
   const markdown: vscode.DocumentSelector = { language: "markdown", scheme: "file" };
   context.subscriptions.push(
-    vscode.languages.registerDocumentLinkProvider(markdown, documentLinks(lifeloop)),
-    vscode.languages.registerCompletionItemProvider(markdown, completion(lifeloop), "[", "#"),
-    vscode.languages.registerReferenceProvider(markdown, references(lifeloop)),
     vscode.languages.registerDocumentSymbolProvider(markdown, documentSymbols(lifeloop)),
     // A query block gets a count and an action above it, and its table on hover.
     // The preview shows the same answer rendered in place; all three call the
@@ -71,23 +66,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   );
   registerQueryCommands(() => lifeloop, context);
   registerLua(() => lifeloop, context);
-  registerSlash(() => lifeloop, context);
   registerMentions(() => lifeloop, context);
   registerXray(() => lifeloop, context);
-  registerPickers(() => lifeloop, context);
-  registerDecorations(() => lifeloop, context);
+  registerBindings(lifeloop, context);
 
   const diagnostics = vscode.languages.createDiagnosticCollection("lifeloop");
   context.subscriptions.push(diagnostics);
   const refreshDiagnostics = () => publishDiagnostics(lifeloop!, diagnostics);
+  const reindex = () => void lifeloop!.reindex().catch((error) =>
+    void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`));
 
   const views = {
     "lifeloop.today": new TodayView(lifeloop),
     "lifeloop.projects": new ProjectsView(lifeloop),
     "lifeloop.inbox": new InboxView(lifeloop),
-    "lifeloop.backlinks": new BacklinksView(lifeloop),
+    "lifeloop.linkedTasks": new LinkedTasksView(lifeloop),
+    "lifeloop.personContext": new PersonContextView(lifeloop),
     "lifeloop.mentions": new MentionsView(lifeloop),
   };
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => {
+    views["lifeloop.linkedTasks"].refresh();
+    views["lifeloop.personContext"].refresh();
+  }));
   for (const [id, provider] of Object.entries(views)) {
     context.subscriptions.push(vscode.window.registerTreeDataProvider(id, provider));
   }
@@ -103,16 +103,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.languageId !== "markdown") return;
+      lifeloop!.noteSourceChange();
       clearTimeout(pendingReindex);
       pendingReindex = setTimeout(() => {
-        void lifeloop!.touch(event.document.uri, event.document.getText());
+        void lifeloop!.touch(event.document.uri, event.document.getText()).catch((error) =>
+          void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`));
       }, 400);
     }),
-    vscode.workspace.onDidDeleteFiles((event) => {
-      for (const uri of event.files) lifeloop!.forget(uri);
+    vscode.workspace.onDidDeleteFiles(() => { lifeloop!.noteSourceChange(); reindex(); }),
+    vscode.workspace.onDidCreateFiles(() => { lifeloop!.noteSourceChange(); reindex(); }),
+    vscode.workspace.onDidRenameFiles(() => { lifeloop!.noteSourceChange(); reindex(); }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("lifeloop.taskStates") ||
+          event.affectsConfiguration("lifeloop.executeSpaceLua")) {
+        lifeloop!.noteSourceChange();
+        reindex();
+      }
     }),
-    vscode.workspace.onDidCreateFiles(() => void lifeloop!.reindex()),
-    vscode.workspace.onDidRenameFiles(() => void lifeloop!.reindex()),
   );
 
   return api;

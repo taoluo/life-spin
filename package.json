@@ -15,7 +15,8 @@
     "test:integration": "node scripts/build-extension.mjs && node scripts/build-tests.mjs && node packages/vscode/out/runTest.js",
     "verify": "npm run typecheck && npm run vendor:check && npm run schema:check && npm test",
     "package": "node scripts/install-extension.mjs --no-install",
-    "install-extension": "node scripts/install-extension.mjs"
+    "install-extension": "node scripts/install-extension.mjs",
+    "test:foam": "node scripts/build-extension.mjs && node scripts/build-tests.mjs && node packages/vscode/out/runTest.js --foam"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

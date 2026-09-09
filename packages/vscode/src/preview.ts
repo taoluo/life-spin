@@ -2,7 +2,6 @@ import {
   runProjection, projectionNames, day, type ProjectionName, type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { expand } from "./transclusion.ts";
 
 /**
  * Queries that render in the Markdown preview.
@@ -62,6 +61,10 @@ export function parseQueryBlock(source: string): QueryBlock | { error: string } 
       case "days": args.days = Number(value); break;
       case "project": args.project = value; break;
       case "page": args.page = value; break;
+      case "person": args.person = value; break;
+      case "from": args.from = value; break;
+      case "to": args.to = value; break;
+      case "kind": args.kind = value; break;
       case "fields": fields = value.split(",").map((f) => f.trim()); break;
       case "limit": limit = Number(value); break;
       default: return { error: `unknown option "${escape(key)}"` };
@@ -86,7 +89,10 @@ function toRows(result: unknown): Record<string, unknown>[] {
   return [];
 }
 
-const DEFAULT_FIELDS = ["section", "name", "page", "deadline", "scheduled", "kind", "detail"];
+const DEFAULT_FIELDS = [
+  "section", "name", "person", "page", "date", "deadline", "scheduled", "birthday",
+  "lastInteractionDate", "reconnectOn", "openFollowups", "kind", "text", "detail",
+];
 
 function renderTable(rows: Record<string, unknown>[], columns: string[]): string {
   if (rows.length === 0) return `<p class="lifeloop-empty">Nothing to show.</p>`;
@@ -339,6 +345,8 @@ export function interpolations(source: string): string[] {
  * Fenced blocks tagged `lifeloop` or `query` render; everything else falls
  * through to the default fence renderer untouched.
  */
+export type LuaPreviewOutput = string | { markdown: string };
+
 export function extendMarkdownIt(
   lifeloop: () => LifeLoop | undefined,
   /**
@@ -348,23 +356,14 @@ export function extendMarkdownIt(
    * may run at all is a setting the extension owns — and markdown-it rendering is
    * synchronous, so the result has to be ready before the preview asks.
    */
-  renderSpaceLua?: (script: string) => string | undefined,
+  renderSpaceLua?: (script: string) => LuaPreviewOutput | undefined,
   /** Answers a `${...}`, or undefined to leave it as written. */
   renderExpression?: (expression: string) => string | undefined,
   /** The vault's own CSS, already scoped and filtered. */
   renderSpaceStyle?: () => string,
 ) {
   return (md: any) => {
-    // Transclusion first, and before anything is parsed: an embedded page's
-    // Markdown becomes real Markdown, and any `${...}` it carries is then answered
-    // by the interpolation rule below exactly as if it had been written here.
-    if (md.core?.ruler?.before) {
-      md.core.ruler.before("normalize", "lifeloop-transclude", (state: any) => {
-        const instance = lifeloop();
-        if (!instance || typeof state.src !== "string" || !state.src.includes("![")) return;
-        state.src = expand(instance, state.src);
-      });
-    }
+    // Foam owns ordinary note/media embeds; leave their source untouched.
 
     // `core.ruler` is always there in markdown-it proper, but a host that hands us
     // a narrower object should lose interpolation rather than the whole preview.
@@ -378,6 +377,7 @@ export function extendMarkdownIt(
     }
 
     const fallback = md.renderer.rules.fence;
+    let renderingLuaOutput = false;
     md.renderer.rules.fence = (tokens: any[], index: number, options: any, env: any, self: any) => {
       const token = tokens[index];
       const language = (token.info ?? "").trim().split(/\s+/)[0];
@@ -395,9 +395,16 @@ export function extendMarkdownIt(
       if (language === "space-lua") {
         // Only when execution is switched on, and only what the block *returns* —
         // a widget it built, rendered where SilverBullet would have put it inline.
+        if (renderingLuaOutput) return fallback(tokens, index, options, env, self);
         const rendered = renderSpaceLua?.(token.content);
         if (rendered === undefined) return fallback(tokens, index, options, env, self);
-        return rendered;
+        if (typeof rendered === "string") return rendered;
+        // Reuse the host renderer; a returned Lua fence stays inert instead of recursing.
+        renderingLuaOutput = true;
+        const allowHtml = md.options.html;
+        md.options.html = false; // Plain Lua strings never bypass the widget tag allowlist.
+        try { return `<div class="lifeloop-widget">${md.render(rendered.markdown, env)}</div>`; }
+        finally { md.options.html = allowHtml; renderingLuaOutput = false; }
       }
 
       if (language !== "lifeloop" && language !== "query") {

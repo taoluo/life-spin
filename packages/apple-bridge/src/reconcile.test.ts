@@ -136,24 +136,26 @@ describe("a stored mark is never trusted on sight", () => {
 
 describe("the projection, and who wins", () => {
   test("a renamed task is pushed out", async () => {
-    const [decision] = run([task({ name: "Submit the paper" })], [reminder()]);
+    const [decision] = run([task({ name: "Submit the paper" })], [reminder()], {
+      R1: { completed: false, modificationDate: "2026-09-08T09:00:00Z", name: "Submit paper" },
+    });
     expect(decision).toMatchObject({ action: "push", name: "Submit the paper" });
   });
 
-  test("a title edited in Reminders is not overwritten", async () => {
-    // Not Reminders acquiring the title — divergence detected on a projection.
+  test("a title edited only in Reminders is pulled", async () => {
     const [decision] = run(
       [task({ name: "Submit paper", pageModified: "2026-09-08T10:00:00Z" })],
       [reminder({ name: "Finish paper draft", modificationDate: "2026-09-08T11:00:00Z" })],
+      { R1: { completed: false, modificationDate: "2026-09-08T09:00:00Z", name: "Submit paper" } },
     );
-    expect(decision).toMatchObject({ action: "none" });
-    expect((decision as any).why).toContain("not overwriting");
+    expect(decision).toMatchObject({ action: "pull-name", name: "Finish paper draft" });
   });
 
   test("a note edited after their change is pushed", async () => {
     const [decision] = run(
       [task({ name: "Submit paper v2", pageModified: "2026-09-08T12:00:00Z" })],
       [reminder({ name: "Submit paper", modificationDate: "2026-09-08T11:00:00Z" })],
+      { R1: { completed: false, modificationDate: "2026-09-08T09:00:00Z", name: "Submit paper" } },
     );
     expect(decision).toMatchObject({ action: "push" });
   });

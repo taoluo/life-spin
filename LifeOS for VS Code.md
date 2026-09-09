@@ -1,5 +1,14 @@
 # LifeOS for VS Code
 
+> **2026-09-08 scope revision — current VS Code contract:**
+> [Foam / LifeLoop ownership](docs/plans/2026-09-08-foam-boundary.md) supersedes the
+> general PKM implementation assignments below. Foam owns ordinary note navigation,
+> links, tags, graph, templates, daily notes and embeds. LifeLoop owns task semantics,
+> source-verified mutations, Linked Tasks, Review and Apple interoperability.
+> No complete SilverBullet UI/runtime compatibility is promised. The original phase
+> descriptions below are historical where they conflict with this revision.
+
+
 > **本文档定义系统是什么、拒绝成为什么。**
 > 阶段划分、工程决策、每个阶段的 gate 与测试，见 `LifeOS Execution Plan.md`。
 > 跨 scope 长期有效的 ownership 与 mutation 规则，见 `DESIGN.md`。

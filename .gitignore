@@ -3,7 +3,8 @@
 
 # Editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 *.swp
 .groupedtimelineinclude
 

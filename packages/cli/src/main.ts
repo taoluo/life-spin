@@ -30,7 +30,11 @@ const emit = (data: unknown) => console.log(JSON.stringify(data, null, flag("jso
 switch (command) {
   case "index": {
     const store = openStore(flag("rebuild"));
-    const result = await indexVault(vaultRoot, store, { force: flag("rebuild") });
+    const taskStates = value("task-states");
+    const result = await indexVault(vaultRoot, store, {
+      force: flag("rebuild"),
+      taskStates: taskStates ? JSON.parse(taskStates) : undefined,
+    });
     console.log(
       `indexed ${result.indexed}, unchanged ${result.skipped}, removed ${result.removed} in ${result.ms}ms`,
     );
@@ -47,7 +51,11 @@ switch (command) {
       date: value("date") ?? day(),
       days: Number(value("days") ?? 14),
       project: value("project") ?? "",
-      page: value("to") ?? value("page") ?? "",
+      page: value("page") ?? (what === "backlinks" ? value("to") : ""),
+      person: value("person"),
+      from: value("from"),
+      to: value("to"),
+      kind: value("kind"),
     };
     emit(
       (projectionNames as string[]).includes(what)
@@ -63,12 +71,6 @@ switch (command) {
     store.close();
     break;
   }
-  case "search": {
-    const store = openStore();
-    emit(store.search(positional[1] ?? ""));
-    store.close();
-    break;
-  }
   default:
     console.log(`lifeloop — semantic core CLI
 
@@ -79,8 +81,8 @@ ${projectionNames.map((n) => `      ${n.padEnd(12)} ${projections[n].describes}`
 
   contract v${CONTRACT_VERSION}
   lifeloop dump   <vault>                 stable whole-store object dump
-  lifeloop search <vault> <terms>         full-text search
 
-  --db <path>   override the store location (":memory:" works)`);
+  --db <path>   override the store location (":memory:" works)
+  --task-states '<json>'  use the same ordered task-state policy as VS Code`);
     process.exit(command ? 1 : 0);
 }

@@ -125,29 +125,3 @@ export async function attachPageToTask(
 
   return { ok: true, changed: [destPath, source.path], value: { page: destination } };
 }
-
-/**
- * Move a quick note out of `Inbox/`.
- *
- * The destination is the user's, never inferred from a folder convention, and a
- * collision is a refusal rather than an overwrite.
- */
-export async function promotePage(
-  vault: Vault,
-  from: string,
-  to: string,
-): Promise<MutationResult<{ page: string }>> {
-  if (!to.trim()) return refuse("cancelled", "no destination given");
-  if (!validPageName(to)) return refuse("invalid", `not a page name: ${to}`);
-  const fromPath = pathOf(from);
-  const toPath = pathOf(to);
-  if (!vault.exists(fromPath)) return refuse("missing", `no such page: ${from}`);
-  if (vault.exists(toPath)) return refuse("collision", `${to} already exists`);
-
-  const cs = changeSet(`promote ${from} to ${to}`);
-  const contents = vault.read(fromPath);
-  cs.expected.set(fromPath, contents);
-  cs.writes.set(toPath, contents);
-  cs.removes.push(fromPath);
-  return applied(vault, cs, { page: to });
-}

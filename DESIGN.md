@@ -1,5 +1,14 @@
 # LifeLoop design contract
 
+> **2026-09-08 scope revision — current VS Code contract:**
+> [Foam / LifeLoop ownership](docs/plans/2026-09-08-foam-boundary.md) supersedes the
+> general PKM implementation assignments below. Foam owns ordinary note navigation,
+> links, tags, graph, templates, daily notes and embeds. LifeLoop owns task semantics,
+> source-verified mutations, Linked Tasks, Review and Apple interoperability.
+> No complete SilverBullet UI/runtime compatibility is promised. The original phase
+> descriptions below are historical where they conflict with this revision.
+
+
 What this file is for: the questions that would otherwise get re-argued every time someone
 proposes a feature. Scope moves; this should still be true when it has.
 
@@ -213,8 +222,8 @@ A view that has to reconstruct which task a click meant has already lost.
 Note how this sits against the ceiling above, because the two look contradictory and are not. There,
 reacting to a host event, the only text available came from the index and may already have been
 replaced — matching on it buys false confidence, so the guarantee stops at what the event asserts.
-Here the projection read the source itself when it rendered, so what it holds is a receipt for what
-the user was shown, and comparing it back detects that the source moved underneath. Identity comes
+Here the projection takes its row and receipt from the same indexed source version; comparing
+that receipt against the live source detects that the source moved underneath. Identity comes
 from the ref in both cases. The recorded state is only ever a staleness check, never a way to find
 a task.
 
@@ -273,28 +282,16 @@ application can delete it without telling anyone, so a stored id is a claim that
 answer is never to trust it on sight — every run asks the owner first, and a reminder that has been
 deleted over there has its mark erased rather than resurrected.
 
-Calendar's *scripting dictionary* exposes no modification date on an event — checked, not assumed —
-so that comparison is impossible over the route this uses, and the weaker rule applies: an event is
-pushed when the page is newer than this client's last successful push. An edit made in Calendar can
-be overwritten by a later edit here.
+External applications may expose a divergence, but LifeLoop's VS Code command is the sole conflict
+resolution control plane. A three-way title baseline distinguishes one-sided edits from concurrent
+edits. Concurrent edits keep the binding, preserve both values and pause writes. Resolve offers the
+current Markdown or Apple value (or an explicit detach), then rereads both sides and refuses if
+either changed after the choice was shown. There is no second resolver in Notes, Reminders or
+Calendar and no automatic merge engine.
 
-That asymmetry is the price of the interface, not a fact about calendars, and the distinction is
-worth keeping straight because it decides whether the weaker rule is permanent. It is not.
-EventKit's `EKCalendarItem` carries `lastModifiedDate` for events and reminders alike, so a bridge
-built on that gets the same comparison Reminders already gets here. A limitation of one interface
-should not be recorded as a property of the domain — the next implementation would inherit a
-constraint that was never true.
-
-**Reading a completed reminder back into LifeLoop.** The one reverse direction worth having, since
-people tick things on a watch. Still not built — but two of its three prerequisites arrived with the
-entry above. The stored identity exists now, and so does a polling path: `lifeloop.external.syncAll`
-already runs on a timer and already reads the other side's state (a reminder's `modification date`)
-to decide direction. What is missing is only the third: a named mutation that verifies the LifeLoop
-source before writing, never a bulk reconcile.
-
-Note what that makes this: the cheapest remaining item here, not the largest. The reason it is still
-unbuilt is that nothing has yet produced the "I ticked it on my watch and LifeLoop never knew" that
-would justify it — the same standard the entry above had to meet.
+**Reading a completed reminder back into LifeLoop.** This is implemented through the same guarded
+task mutation API as editor actions. Recurring reminders remain quarantined from ordinary
+complete/reopen reconciliation because one repeating commitment is not one LifeLoop checkbox.
 
 **Calendar state flowing back into task state is rejected, not deferred.** An elapsed event is not a
 completed task: a 9–11 block for "Deep Work: Paper" ending at 11 says nothing about the paper.

@@ -1,5 +1,6 @@
+import { createRequire } from "node:module";
 import { expect, test, describe } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LifeLoop } from "../src/workspace.ts";
@@ -8,7 +9,10 @@ import * as vscode from "./vscode-mock.ts";
 
 async function workspaceWith(files: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "lifeloop-preview-"));
-  for (const [path, body] of Object.entries(files)) writeFileSync(join(dir, path), body);
+  for (const [path, body] of Object.entries(files)) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), body);
+  }
   (vscode.workspace as any).root = dir;
   return { lifeloop: await LifeLoop.open(dir), dir };
 }
@@ -39,6 +43,24 @@ describe("query blocks in the preview", () => {
     expect(html).toContain("<th>name</th>");
     expect(html).not.toContain("<th>page</th>");
     expect((html.match(/<tr/g) ?? []).length).toBe(3); // header + two rows
+    lifeloop.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("relationship projections accept their named filters", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Journal/2026-09-08.md": "* Called [[People/Alice]] [interaction: call]\n",
+      "Journal/2026-09-09.md": "* Met [[People/Alice]] [interaction: meeting]\n",
+    });
+    const html = renderQuery(lifeloop,
+      "interactions\nperson: People/Alice\nfrom: 2026-09-09\nkind: meeting\nfields: date, kind, text");
+    expect(html).toContain("2026-09-09");
+    expect(html).toContain("meeting");
+    expect(html).not.toContain("2026-09-08");
+    expect(parseQueryBlock("person-context\nperson: People/Alice")).toMatchObject({
+      args: { person: "People/Alice" },
+    });
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -399,4 +421,23 @@ describe("embeds in the preview", () => {
     expect(nasty).not.toContain("<script");
     expect(nasty).toContain("&lt;script");
   });
+});
+
+
+test("Lua Markdown results use the host renderer, with nested Lua fences left inert", () => {
+  const MarkdownIt = createRequire(import.meta.url)("markdown-it");
+  const md = new MarkdownIt({ html: true });
+  let calls = 0;
+  extendMarkdownIt(() => undefined, () => {
+    calls++;
+    return { markdown: '<script>alert(1)</script>\n\n**bold**\n\n* parent\n  * child\n\n| A |\n| --- |\n| B |\n\n```space-lua\nrecursive\n```' };
+  })(md);
+  const html = md.render("```space-lua\nreturn value\n```");
+  expect(html).toContain("<strong>bold</strong>");
+  expect(html).toContain("<thead>");
+  expect(html.match(/<ul>/g)).toHaveLength(2);
+  expect(html).toContain("language-space-lua");
+  expect(calls).toBe(1);
+  expect(html).not.toContain("<script>");
+  expect(md.options.html).toBe(true);
 });

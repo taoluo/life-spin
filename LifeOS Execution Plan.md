@@ -1,5 +1,14 @@
 # LifeOS execution plan — Phases 0 to 3, and the conditions for 4
 
+> **2026-09-08 scope revision — current VS Code contract:**
+> [Foam / LifeLoop ownership](docs/plans/2026-09-08-foam-boundary.md) supersedes the
+> general PKM implementation assignments below. Foam owns ordinary note navigation,
+> links, tags, graph, templates, daily notes and embeds. LifeLoop owns task semantics,
+> source-verified mutations, Linked Tasks, Review and Apple interoperability.
+> No complete SilverBullet UI/runtime compatibility is promised. The original phase
+> descriptions below are historical where they conflict with this revision.
+
+
 `LifeOS for VS Code.md` says what the system is and what it refuses to become. It does not say
 what to build on Monday. This file is that: the assessment of that design, the decisions it left
 open taken here, and the phases with a definition of done and a gate.
@@ -186,8 +195,8 @@ re-resolves the semantic object or writes nothing.
 identity. The hash is *only* a staleness guard — it may never be used to find a task. `DESIGN.md`
 warns that matching on text "the index may already have replaced would only look like more
 certainty", and that is correct for the case it describes: reacting to a host event, where the only
-text available came from the index. The projection case is different in kind — we read the source
-ourselves when we rendered the row, so comparing it back detects that the source moved under us. It
+text available came from the index. The projection takes the displayed row and receipt from the
+same indexed source version, then compares against the live source before any write. The receipt
 is not a second opinion about identity; it is a receipt for what we showed the user.
 
 In VS Code this needs one more distinction, because there are three versions of a page at any

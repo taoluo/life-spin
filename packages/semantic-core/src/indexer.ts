@@ -4,6 +4,7 @@ import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { extractObjects, pageMetaFor, type LifeloopObject } from "./extract.ts";
 import { Store } from "./store.ts";
+import { validateTaskStates, type CycleStates } from "./mutations/tasks.ts";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -11,6 +12,15 @@ const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export const pageNameOf = (path: string) => path.replace(/\.md$/, "");
 
 const SKIP = new Set([".git", "node_modules", ".lifeloop", "tmp", ".obsidian", "silverbullet", "vendor", "packages"]);
+
+/** Whether a relative path belongs to the same Markdown domain as markdownFiles. */
+export function isVaultMarkdownPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  const parts = normalized.split("/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return false;
+  return normalized.endsWith(".md") && parts.every((part) =>
+    part !== "" && part !== ".." && !part.startsWith(".") && !SKIP.has(part));
+}
 
 export async function markdownFiles(root: string): Promise<string[]> {
   const out: string[] = [];
@@ -41,6 +51,7 @@ export async function indexVault(
   store: Store,
   options: {
     force?: boolean;
+    taskStates?: CycleStates;
     /**
      * Pages the caller holds a newer version of than the disk does.
      *
@@ -53,6 +64,15 @@ export async function indexVault(
   } = {},
 ): Promise<IndexResult> {
   const started = Date.now();
+  if (options.taskStates) validateTaskStates(options.taskStates);
+  const policy = JSON.stringify(options.taskStates ?? null);
+  const previous = store.db.prepare("SELECT value FROM meta WHERE key = 'task_states'").get() as { value: string } | undefined;
+  const policyChanged = previous?.value !== policy;
+  // The page batches below commit independently. Remove the certificate before
+  // the first batch so a later failure cannot leave a mixed index certified as
+  // the old policy. A missing certificate forces the next run to rebuild.
+  if (policyChanged) store.db.prepare("DELETE FROM meta WHERE key = 'task_states'").run();
+  let deferred = false;
   const paths = await markdownFiles(root);
   const vault = new Set(paths);
   const lookup = { has: (p: string) => vault.has(p), all: () => vault };
@@ -67,15 +87,15 @@ export async function indexVault(
 
   try {
   for (const path of paths) {
-    if (options.skip?.(path)) { skipped++; continue; }
+    if (options.skip?.(path)) { skipped++; deferred = true; continue; }
     const abs = join(root, path);
     const text = readFileSync(abs, "utf8");
     const digest = hash(text);
-    if (!options.force && store.hashOf(path) === digest) { skipped++; continue; }
+    if (!options.force && !policyChanged && store.hashOf(path) === digest) { skipped++; continue; }
     const stat = statSync(abs);
     const name = pageNameOf(path);
     const meta = pageMetaFor(name, stat.mtime.toISOString(), stat.birthtime.toISOString());
-    const objects = await extractObjects(text, meta, lookup);
+    const objects = await extractObjects(text, meta, lookup, options.taskStates);
     if (!pending) store.db.exec("BEGIN");
     try {
       store.writePage(
@@ -107,6 +127,8 @@ export async function indexVault(
     if (!vault.has(known)) { store.forgetPage(pageNameOf(known)); removed++; }
   }
 
+  // Do not certify a policy transition while any page was deferred to a dirty buffer.
+  if (!deferred) store.db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES ('task_states', ?)").run(policy);
   return { indexed, skipped, removed, ms: Date.now() - started };
 }
 

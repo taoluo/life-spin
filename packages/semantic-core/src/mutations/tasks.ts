@@ -3,7 +3,7 @@ import {
 } from "../mutation.ts";
 import type { Vault } from "../vault.ts";
 
-const MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\]])(\].*)$/;
+const MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\[\]\r\n]+)(\].*)$/;
 
 /** `[completed: "2026-09-08"]`, the shape LifeLoop already writes. */
 const COMPLETED = /\s*\[completed:\s*"[^"]*"\]/;
@@ -36,6 +36,7 @@ export async function setTaskState(
   handle: SourceHandle,
   done: boolean,
   now = new Date(),
+  states: CycleStates = DEFAULT_CYCLE,
 ): Promise<MutationResult<{ line: string }>> {
   const source = resolveHandle(vault, handle);
   if ("ok" in source) return source;
@@ -44,7 +45,11 @@ export async function setTaskState(
   if (!marker) return refuse("stale", `${handle.ref} is not a task line`);
 
   const [, open, state, rest] = marker;
-  if ((state !== " ") === done) {
+  validateTaskStates(states);
+  if (state.length > 1 && !states.some(s => s.state === state)) {
+    return refuse("invalid", `undeclared task state: ${state}`);
+  }
+  if (isTaskDone(state, states) === done) {
     return refuse("stale", `${handle.ref} is already ${done ? "done" : "open"}`);
   }
 
@@ -69,6 +74,7 @@ export async function stampCompletion(
   vault: Vault,
   handle: SourceHandle,
   date: string,
+  states: CycleStates = DEFAULT_CYCLE,
 ): Promise<MutationResult<{ line: string }>> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return refuse("invalid", `not a date: ${date}`);
   const source = resolveHandle(vault, handle);
@@ -76,6 +82,10 @@ export async function stampCompletion(
 
   const marker = MARKER.exec(source.line);
   if (!marker) return refuse("stale", `${handle.ref} is not a task line`);
+  validateTaskStates(states);
+  if (marker[2].length > 1 && !states.some(s => s.state === marker[2])) {
+    return refuse("invalid", `undeclared task state: ${marker[2]}`);
+  }
   if (COMPLETED.test(marker[3])) {
     return refuse("stale", `${handle.ref} already carries a completion date`);
   }
@@ -105,6 +115,25 @@ export type CycleStates = { state: string; done?: boolean }[];
 
 export const DEFAULT_CYCLE: CycleStates = [{ state: " " }, { state: "x", done: true }];
 
+/** Ambiguous duplicate definitions must not produce different index/mutation semantics. */
+export function validateTaskStates(states: CycleStates): void {
+  const seen = new Set<string>();
+  for (const spec of states) {
+    if (typeof spec.state !== "string" || !spec.state.length || /[\[\]\r\n]/.test(spec.state)) {
+      throw new Error("invalid task state marker");
+    }
+    if (seen.has(spec.state)) throw new Error(`duplicate task state: ${spec.state}`);
+    seen.add(spec.state);
+  }
+}
+
+/** Same completion predicate as LifeLoop/Completion.md and SB indexing. */
+export function isTaskDone(state: string, states: CycleStates = DEFAULT_CYCLE): boolean {
+  validateTaskStates(states);
+  return state === "x" || state === "X" || states.some(s => s.state === state && s.done === true);
+}
+
+
 export async function cycleTaskState(
   vault: Vault,
   handle: SourceHandle,
@@ -113,7 +142,7 @@ export async function cycleTaskState(
 ): Promise<MutationResult<{ line: string; state: string }>> {
   const cycle = states.length ? states : DEFAULT_CYCLE;
   // Whatever a vault declares, finishing must always be reachable.
-  const full = cycle.some((s) => s.done) ? cycle : [...cycle, { state: "x", done: true }];
+  const full = cycle.some((s) => isTaskDone(s.state, cycle)) ? cycle : [...cycle, { state: "x", done: true }];
 
   const source = resolveHandle(vault, handle);
   if ("ok" in source) return source;
@@ -122,11 +151,14 @@ export async function cycleTaskState(
   if (!marker) return refuse("stale", `${handle.ref} is not a task line`);
   const [, open, current, rest] = marker;
 
+  if (current.length > 1 && !full.some(s => s.state === current)) {
+    return refuse("invalid", `undeclared task state: ${current}`);
+  }
   const at = full.findIndex((s) => s.state === current);
   const next = full[(at + 1) % full.length];
 
   let tail = rest.replace(COMPLETED, "");
-  if (next.done) tail = `${tail} [completed: "${isoDate(now)}"]`;
+  if (isTaskDone(next.state, full)) tail = `${tail} [completed: "${isoDate(now)}"]`;
   const line = `${open}${next.state}${tail}`;
 
   const cs = changeSet(`cycle ${handle.ref} to '${next.state}'`);
@@ -176,7 +208,10 @@ export async function setTaskAttribute(
   if ("ok" in source) return source;
   if (!MARKER.test(source.line)) return refuse("stale", `${handle.ref} is not a task line`);
 
-  const existing = new RegExp(`\\s*\\[${name}:\\s*"[^"]*"\\]`);
+  const existing = new RegExp(`\\s*\\[${name}:\\s*"[^"]*"\\]`, "g");
+  if ([...source.line.matchAll(existing)].length > 1) {
+    return refuse("ambiguous", `${handle.ref} carries more than one ${name} attribute`);
+  }
   const stripped = source.line.replace(existing, "");
   const line = value === null ? stripped : `${stripped} [${name}: "${value}"]`;
 
@@ -184,4 +219,37 @@ export async function setTaskAttribute(
   cs.expected.set(source.path, source.text);
   cs.writes.set(source.path, replaceLine(source.text, source.lineStart, source.lineEnd, line));
   return applied(vault, cs, { line });
+}
+
+/** Replace only the task's visible title, preserving its checkbox and trailing metadata. */
+export async function setTaskName(
+  vault: Vault,
+  handle: SourceHandle,
+  name: string,
+): Promise<MutationResult<{ line: string }>> {
+  const title = name.trim();
+  if (!title || /[\r\n]/.test(title)) return refuse("invalid", "task name must be one line");
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  const marker = MARKER.exec(source.line);
+  if (!marker) return refuse("stale", `${handle.ref} is not a task line`);
+
+  const suffix = taskMetadataSuffix(marker[3]);
+  const line = `${marker[1]}${marker[2]}] ${title}${suffix}`;
+  const cs = changeSet(`rename ${handle.ref}`);
+  cs.expected.set(source.path, source.text);
+  cs.writes.set(source.path, replaceLine(source.text, source.lineStart, source.lineEnd, line));
+  return applied(vault, cs, { line });
+}
+
+const taskMetadataSuffix = (rest: string) =>
+  rest.match(/((?:\s+(?:#[\p{L}\p{N}_/-]+|\[[a-z][a-z0-9-]*:\s*"[^"]*"\]))+)\s*$/u)?.[1] ?? "";
+
+/** Current visible title from a source line; used to close bridge read/write races. */
+export function taskNameFromLine(line: string): string | null {
+  const marker = MARKER.exec(line);
+  if (!marker) return null;
+  const rest = marker[3].replace(/^\]\s*/, "");
+  const suffix = taskMetadataSuffix(rest);
+  return rest.slice(0, rest.length - suffix.length).trim();
 }

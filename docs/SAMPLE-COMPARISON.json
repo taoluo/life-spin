@@ -1,0 +1,190 @@
+{
+  "trial": {
+    "status": "READ_ONLY_INVENTORY_NOT_SCRIPT_EXECUTION",
+    "indexed": {
+      "indexed": 29,
+      "skipped": 0,
+      "removed": 0,
+      "ms": 218
+    },
+    "taskCount": 11,
+    "states": {
+      " ": 9,
+      "x": 2
+    },
+    "scriptBlocks": 38,
+    "dependencies": {
+      "command.define": [
+        "Library/LifeLoop/Attach",
+        "Library/LifeLoop/Audit",
+        "Library/LifeLoop/Capture",
+        "Library/LifeLoop/Core",
+        "Library/LifeLoop/External",
+        "Library/LifeLoop/Inbox",
+        "Library/LifeLoop/Lifecycle",
+        "Library/LifeLoop/Review",
+        "Library/LifeLoop/Tasks"
+      ],
+      "event.listen": [
+        "Library/LifeLoop/Completion",
+        "Library/LifeLoop/External",
+        "Library/LifeLoop/Journal"
+      ],
+      "actionButton.define": [
+        "Library/LifeLoop/Core"
+      ],
+      "mq.awaitEmptyQueue": [
+        "Library/LifeLoop/Inbox"
+      ],
+      "widget.new": [
+        "Library/LifeLoop/Journal"
+      ]
+    },
+    "source": "/Users/tao/.codex/recovery/lifeloop/trial-20260908T173403Z/vault"
+  },
+  "sb_docs": {
+    "status": "READ_ONLY_INVENTORY_NOT_SCRIPT_EXECUTION",
+    "indexed": {
+      "indexed": 241,
+      "skipped": 0,
+      "removed": 0,
+      "ms": 899
+    },
+    "taskCount": 36,
+    "states": {
+      " ": 24,
+      "TO DO": 2,
+      "DONE": 2,
+      "x": 5,
+      "NOT STARTED": 1,
+      "IN PROGRESS": 2
+    },
+    "scriptBlocks": 21,
+    "dependencies": {
+      "mq.subscribe": [
+        "API/mq"
+      ],
+      "service.define": [
+        "API/service"
+      ],
+      "syntax.define": [
+        "API/syntax"
+      ],
+      "widget.html": [
+        "API/syntax",
+        "API/widget",
+        "Library/silverbullet-diagram/Mermaid",
+        "Space Lua/Widget"
+      ],
+      "widget.htmlBlock": [
+        "API/syntax"
+      ],
+      "taskState.define": [
+        "API/taskState"
+      ],
+      "widget.markdown": [
+        "API/widget"
+      ],
+      "widget.sandbox": [
+        "API/widget"
+      ],
+      "actionButton.define": [
+        "CONFIG"
+      ],
+      "event.listen": [
+        "Library/Website"
+      ],
+      "widget.new": [
+        "Library/Website",
+        "Library/silverbullet-diagram/Mermaid"
+      ],
+      "command.define": [
+        "Library/silverbullet-diagram/Mermaid"
+      ]
+    },
+    "source": "/Users/tao/.codex/recovery/lifeloop/sb-samples-20260908T173735Z/docs"
+  },
+  "sb_libraries": {
+    "status": "READ_ONLY_INVENTORY_NOT_SCRIPT_EXECUTION",
+    "indexed": {
+      "indexed": 55,
+      "skipped": 0,
+      "removed": 0,
+      "ms": 153
+    },
+    "taskCount": 0,
+    "states": {},
+    "scriptBlocks": 47,
+    "dependencies": {
+      "actionButton.define": [
+        "Library/Std/APIs/Action Button",
+        "Library/Std/Config",
+        "Library/Std/Editor/Read Only Mode"
+      ],
+      "command.define": [
+        "Library/Std/APIs/Command",
+        "Library/Std/Config",
+        "Library/Std/Editor/Read Only Mode",
+        "Library/Std/Editor/Signature",
+        "Library/Std/Editor/Table",
+        "Library/Std/Infrastructure/Export",
+        "Library/Std/Infrastructure/Page Templates",
+        "Library/Std/Infrastructure/Share",
+        "Library/Std/Journal/Journal"
+      ],
+      "command.update": [
+        "Library/Std/APIs/Command",
+        "Library/Std/Journal/Journal"
+      ],
+      "syntax.define": [
+        "Library/Std/APIs/Syntax"
+      ],
+      "taskState.define": [
+        "Library/Std/APIs/Task State"
+      ],
+      "event.listen": [
+        "Library/Std/APIs/Virtual Page",
+        "Library/Std/Config"
+      ],
+      "widget.new": [
+        "Library/Std/APIs/Widget",
+        "Library/Std/Widgets/Widgets"
+      ],
+      "widget.html": [
+        "Library/Std/APIs/Widget",
+        "Library/Std/Widgets/Embed",
+        "Library/Std/Widgets/Widgets"
+      ],
+      "widget.htmlBlock": [
+        "Library/Std/APIs/Widget"
+      ],
+      "widget.markdown": [
+        "Library/Std/APIs/Widget",
+        "Library/Std/Widgets/Widgets"
+      ],
+      "widget.markdownBlock": [
+        "Library/Std/APIs/Widget"
+      ],
+      "widget.sandbox": [
+        "Library/Std/APIs/Widget"
+      ],
+      "mq.listen": [
+        "Library/Std/Config"
+      ],
+      "service.discover": [
+        "Library/Std/Infrastructure/Export",
+        "Library/Std/Infrastructure/Share"
+      ],
+      "service.invoke": [
+        "Library/Std/Infrastructure/Export",
+        "Library/Std/Infrastructure/Share"
+      ],
+      "service.define": [
+        "Library/Std/Infrastructure/Export",
+        "Library/Std/Infrastructure/Github",
+        "Library/Std/Infrastructure/URI"
+      ]
+    },
+    "source": "/Users/tao/.codex/recovery/lifeloop/sb-samples-20260908T173735Z/libraries"
+  }
+}

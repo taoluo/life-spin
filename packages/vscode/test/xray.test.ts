@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LifeLoop } from "../src/workspace.ts";
-import { ranged, at, toYaml, card, hovers } from "../src/xray.ts";
+import { ranged, at, card, hovers } from "../src/xray.ts";
 import * as vscode from "./vscode-mock.ts";
 
 async function workspaceWith(files: Record<string, string>) {
@@ -56,29 +56,10 @@ describe("what the lens shows", () => {
 });
 
 describe("the card", () => {
-  test("attributes come out as YAML, and the range itself is not one", () => {
-    const yaml = card({ ref: "P@0", tag: "task", done: false, range: [0, 5] } as any);
-    expect(yaml).toContain("tag: task");
-    expect(yaml).toContain("done: false");
-    expect(yaml).not.toContain("range:");
-  });
-
-  test("a list is a list and a nested object is indented", () => {
-    expect(toYaml(["a", "b"])).toBe("\n  - a\n  - b");
-    expect(toYaml({ a: 1, b: { c: 2 } })).toBe("\n  a: 1\n  b: \n    c: 2");
-    expect(toYaml([])).toBe("[]");
-  });
-
-  test("a value YAML would misread is quoted", () => {
-    expect(toYaml("2026-01-01")).toBe("2026-01-01");
-    expect(toYaml("yes: no")).toBe('"yes: no"');
-    expect(toYaml("  padded  ")).toBe('"  padded  "');
-  });
-
-  test("a very long value is cut rather than filling the screen", () => {
-    const long = toYaml("x".repeat(500));
-    expect(long.length).toBeLessThan(230);
-    expect(long).toContain("…");
+  test("shows native JSON values and omits the range", () => {
+    const value = { ref: "P@0", tag: "task", done: false, nested: { tags: ["yes", "no"] }, range: [0, 5] };
+    const markdown = card(value as any);
+    expect(markdown).toBe('```json\n' + JSON.stringify({ ref: "P@0", tag: "task", done: false, nested: { tags: ["yes", "no"] } }, null, 2) + '\n```');
   });
 });
 
@@ -100,7 +81,7 @@ describe("the hover", () => {
       document as any, { offset: 8 } as any, {} as any,
     ) as any;
     expect(hover.contents.value).toContain("**task**");
-    expect(hover.contents.value).toContain("state:");
+    expect(hover.contents.value).toContain('"state":');
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });

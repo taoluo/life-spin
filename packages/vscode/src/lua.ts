@@ -1,14 +1,14 @@
 import * as vscode from "vscode";
 import {
   runLua, collectDeclarations, cycleTaskState, DEFAULT_CYCLE,
-  type HostOptions, type CycleStates,
+  validateTaskStates, type HostOptions, type CycleStates,
 } from "@lifeloop/semantic-core";
 import {
   LuaTable, LuaBuiltinFunction, jsToLuaValue, luaValueToJS,
 } from "../../../vendor/silverbullet/client/space_lua/runtime.ts";
 import type { LifeLoop } from "./workspace.ts";
 import {
-  renderWidgetValue, valueToMarkdown, interpolations, safeSpaceStyle,
+  renderWidgetValue, valueToMarkdown, interpolations, safeSpaceStyle, type LuaPreviewOutput,
 } from "./preview.ts";
 
 /**
@@ -107,17 +107,21 @@ export async function cycleFor(lifeloop: LifeLoop): Promise<CycleStates> {
   const configured = vscode.workspace
     .getConfiguration("lifeloop")
     .get<{ state: string; done?: boolean }[]>("taskStates", []);
-  if (configured.length) return configured;
+  if (configured.length) { validateTaskStates(configured); return configured; }
 
   if (!isEnabled()) return DEFAULT_CYCLE;
   const blocks = lifeloop.store.objects("space-lua").map((b) => String(b.script ?? ""));
   if (blocks.length === 0) return DEFAULT_CYCLE;
 
-  const { declared } = await collectDeclarations(blocks, hostFor(lifeloop));
+  const { declared, errors } = await collectDeclarations(blocks, hostFor(lifeloop));
+  if (errors.length) throw new Error(`Task-state declarations failed: ${errors.map(e => e.error).join("; ")}`);
   if (declared.taskStates.length === 0) return DEFAULT_CYCLE;
 
   const ordered = [...declared.taskStates].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return [{ state: " " }, ...ordered.map((s) => ({ state: s.state, done: s.done }))];
+  const states = ordered.map(s => ({ state: s.state, done: s.done }));
+  if (!states.some(s => s.state === " ")) states.unshift({ state: " ", done: false });
+  validateTaskStates(states);
+  return states;
 }
 
 /**
@@ -125,11 +129,11 @@ export async function cycleFor(lifeloop: LifeLoop): Promise<CycleStates> {
  *
  * Markdown-it renders synchronously and Lua evaluates asynchronously, so the
  * answer has to exist before the preview asks for it. Blocks are evaluated when
- * the index changes and the rendered HTML is kept here; the preview then reads a
+ * the index changes and the HTML/Markdown result is kept here; the preview then reads a
  * plain map. A block that has not been evaluated yet renders as code, which is
  * also what it does when execution is off.
  */
-const rendered = new Map<string, string>();
+const rendered = new Map<string, LuaPreviewOutput>();
 
 /** Answers for `${...}` expressions, keyed by the expression as written. */
 const expressions = new Map<string, string>();
@@ -143,7 +147,7 @@ const expressions = new Map<string, string>();
  */
 let space: unknown;
 
-export function renderSpaceLua(script: string): string | undefined {
+export function renderSpaceLua(script: string): LuaPreviewOutput | undefined {
   return rendered.get(script.trim());
 }
 
@@ -265,51 +269,9 @@ async function refreshWidgets(instance: LifeLoop): Promise<void> {
       script.trim(),
       typeof value === "object" && typeof value.__widget === "string"
         ? renderWidgetValue(value)
-        : `<div class="lifeloop-widget">${markdownToHtmlish(valueToMarkdown(result.value))}</div>`,
+        : { markdown: valueToMarkdown(result.value) },
     );
   }
-}
-
-/**
- * Enough Markdown for a block's own output.
- *
- * A fenced block's result is rendered directly to HTML rather than substituted
- * back into the page — markdown-it has already tokenised by the time the fence
- * renderer runs, so there is nothing left to re-parse it. Tables and lists cover
- * what projections actually return; anything richer is a reason to use `${...}`,
- * which *is* substituted before parsing.
- */
-function markdownToHtmlish(markdown: string): string {
-  const escape = (t: string) =>
-    t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
-  const lines = markdown.split("\n");
-  const out: string[] = [];
-  let inTable = false;
-  let inList = false;
-
-  const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
-  const closeTable = () => { if (inTable) { out.push("</table>"); inTable = false; } };
-
-  for (const line of lines) {
-    if (/^\|\s*---/.test(line)) continue;
-    if (line.startsWith("|")) {
-      closeList();
-      if (!inTable) { out.push('<table class="lifeloop-query">'); inTable = true; }
-      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-      out.push(`<tr>${cells.map((c) => `<td>${escape(c)}</td>`).join("")}</tr>`);
-      continue;
-    }
-    if (line.startsWith("* ")) {
-      closeTable();
-      if (!inList) { out.push("<ul>"); inList = true; }
-      out.push(`<li>${escape(line.slice(2))}</li>`);
-      continue;
-    }
-    closeTable(); closeList();
-    if (line.trim()) out.push(`<p>${escape(line)}</p>`);
-  }
-  closeTable(); closeList();
-  return out.join("");
 }
 
 /**
@@ -387,15 +349,22 @@ export function registerLua(lifeloop: () => LifeLoop | undefined, context: vscod
     }
 
     const page = instance.pageNameOfUri(editor.document.uri);
+    let states: CycleStates;
+    try {
+      states = await instance.currentTaskStates();
+    } catch (error) {
+      vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
     const result = await cycleTaskState(
       instance.vault,
       {
         ref: `${page}@${editor.document.offsetAt(line.range.start)}`,
         expectedText: line.text,
-        expectedState: /\[([^\]])\]/.exec(line.text)?.[1],
+        expectedState: /\[([^\[\]\r\n]+)\]/.exec(line.text)?.[1],
         capturedAt: new Date().toISOString(),
       },
-      await cycleFor(instance),
+      states,
     );
 
     if (!result.ok) {
@@ -442,6 +411,25 @@ export function registerLua(lifeloop: () => LifeLoop | undefined, context: vscod
     );
     void refreshWidgets(instance0);
   }
+
+  on("lifeloop.runDeclaredCommand", async () => {
+    const instance = await enabledOrAsk();
+    if (!instance) return;
+    const { declared, call, errors } = await collectDeclarations(
+      scripts(instance).map(b => b.script), hostFor(instance),
+    );
+    if (errors.length) {
+      await vscode.window.showWarningMessage(`LifeLoop: ${errors.map(e => e.error).join("; ")}`);
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      declared.commands.map(spec => ({ label: spec.name, description: spec.description == null ? undefined : String(spec.description), spec })),
+      { placeHolder: "Run a command declared by this vault" },
+    );
+    if (!picked) return;
+    const result = await call(picked.spec.run);
+    if (!result.ok) await vscode.window.showWarningMessage(`LifeLoop: ${result.error}`);
+  });
 
   on("lifeloop.applyActionButtons", async () => {
     const instance = await enabledOrAsk();

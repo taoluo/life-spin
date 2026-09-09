@@ -338,6 +338,10 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
             days: args?.days as number,
             project: args?.project as string,
             page: args?.page as string,
+            person: args?.person as string,
+            from: args?.from as string,
+            to: args?.to as string,
+            kind: args?.kind as string,
           }),
         ),
       ]),
@@ -378,7 +382,7 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
       if (!name) throw new Error("taskState.define needs a name");
       declared.taskStates.push({
         name,
-        state: String(spec?.state ?? name.charAt(0)).charAt(0),
+        state: String(spec?.state ?? name),
         done: spec?.done === true,
         order: typeof spec?.order === "number" ? spec.order : undefined,
       });
@@ -390,19 +394,7 @@ export function buildEnv(options: HostOptions): { env: LuaEnv; declared: Declara
     define: fn((spec: unknown) => { declared.actionButtons.push(spec as any); return null; }),
   }));
 
-  /**
-   * `command.define` — recorded, and deliberately not registered.
-   *
-   * VS Code can register a command at runtime, but it cannot add one to the
-   * Command Palette: the palette lists what an extension declared in its manifest
-   * at install time, and a manifest cannot know what is in someone's notes. The
-   * workaround — a contributed command that lists the others — was built and then
-   * removed, because commands contributed at install time are enough and a second
-   * way to reach them is complexity nobody asked for.
-   *
-   * The declaration is still accepted rather than left undefined, so a block that
-   * happens to contain one still runs and everything else in it still counts.
-   */
+  /** Commands are collected as data; VS Code exposes them through its native picker. */
   env.set("command", table({
     define: fn((spec: any) => {
       const name = String(spec?.name ?? "").trim();

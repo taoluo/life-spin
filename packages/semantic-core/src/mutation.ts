@@ -1,5 +1,7 @@
 import type { Vault } from "./vault.ts";
 import { pathOf } from "./vault.ts";
+import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
+import { collectNodesOfType, renderToText } from "../../../vendor/silverbullet/plug-api/lib/tree.ts";
 
 /**
  * Every write goes through here (I5), and the contract is §27's, in one place:
@@ -26,10 +28,15 @@ export type SourceHandle = {
   capturedAt?: string;
 };
 
+/** A handle safe to retain across UI, prompt, timer, or bridge boundaries. */
+export type GuardedSourceHandle = SourceHandle & (
+  { expectedText: string } | { expectedState: string }
+);
+
 export type Refusal = {
   ok: false;
   /** Machine-readable, so a caller can distinguish "try again" from "tell the user". */
-  reason: "stale" | "missing" | "ambiguous" | "collision" | "invalid" | "cancelled";
+  reason: "stale" | "missing" | "ambiguous" | "collision" | "invalid" | "cancelled" | "unknown";
   message: string;
 };
 
@@ -80,7 +87,7 @@ export type ChangeSet = {
    * underneath. Optimistic rather than locked: conflicts are rare, and a refusal
    * that says so is better than a lock that can be held by a crashed pass.
    */
-  expected: Map<string, string>;
+  expected: Map<string, string | null>;
 };
 
 export const changeSet = (description: string): ChangeSet =>
@@ -116,17 +123,17 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
    * fails is reported rather than swallowed, because a half-applied set someone
    * knows about is recoverable and a silent one is not.
    */
-  const undo: { path: string; before: string | null }[] = [];
+  const undo: { path: string; before: string | null; after: string | null }[] = [];
   const written: string[] = [];
 
   try {
     for (const [path, content] of cs.writes) {
-      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null });
+      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null, after: content });
       await vault.write(path, content);
       written.push(path);
     }
     for (const path of cs.removes) {
-      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null });
+      undo.push({ path, before: vault.exists(path) ? vault.read(path) : null, after: null });
       await vault.remove(path);
       written.push(path);
     }
@@ -134,6 +141,9 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
     const failed: string[] = [];
     for (const step of undo.reverse()) {
       try {
+        const current = vault.exists(step.path) ? vault.read(step.path) : null;
+        if (current === step.before) continue;
+        if (current !== step.after) { failed.push(step.path); continue; }
         if (step.before === null) await vault.remove(step.path);
         else await vault.write(step.path, step.before);
       } catch {
@@ -180,6 +190,12 @@ const POSITION = /^(.*)@(\d+)$/;
  * position is used directly but still bounds-checked, because the page may have
  * shrunk since the index last saw it.
  */
+/** Map an upstream Markdown position (CRs removed) into the unchanged source. */
+export function originalSourceOffset(text: string, offset: number): number {
+  for (let i = 0; i <= offset && i < text.length; i++) if (text[i] === "\r") offset++;
+  return offset;
+}
+
 export function resolveRef(vault: Vault, ref: string): ResolvedSource | Refusal {
   const position = POSITION.exec(ref);
   const anchor = position ? null : ANCHOR.exec(ref);
@@ -198,14 +214,19 @@ export function resolveRef(vault: Vault, ref: string): ResolvedSource | Refusal 
     }
   } else {
     const name = anchor![2];
-    const first = text.indexOf(`$${name}`);
-    if (first === -1) return refuse("stale", `anchor $${name} is no longer in ${page}`);
+    // Use the same grammar as indexing: prefixes, code and escaped examples are
+    // not identities. Reuse the parser instead of a second anchor recognizer.
+    const matches = collectNodesOfType(parseMarkdown(text), "NamedAnchor")
+      .filter(node => renderToText(node) === `$${name}`);
+    if (matches.length === 0) return refuse("stale", `anchor $${name} is no longer in ${page}`);
     // Duplicating a line duplicates its anchor. Taking the first match is how the
     // wrong task gets written to, so two of them refuse rather than guess.
-    if (text.indexOf(`$${name}`, first + name.length + 1) !== -1) {
+    if (matches.length > 1) {
       return refuse("ambiguous", `anchor $${name} appears more than once in ${page}`);
     }
-    offset = first;
+    offset = matches[0].from!;
+    // The upstream parser removes CRs. Translate its position back to live text.
+    offset = originalSourceOffset(text, offset);
   }
 
   const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
@@ -222,7 +243,7 @@ export function resolveRef(vault: Vault, ref: string): ResolvedSource | Refusal 
   return { page, path, text, offset, line: text.slice(lineStart, lineEnd), lineStart, lineEnd };
 }
 
-const TASK_MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\]])(\])/;
+export const TASK_MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\[\]\r\n]+)(\])/;
 
 /**
  * Resolve a handle and check it still describes what the projection showed.

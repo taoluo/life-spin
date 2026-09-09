@@ -204,40 +204,4 @@ export class Store {
       .all() as any[];
     return rows.map((r) => JSON.stringify(JSON.parse(r.json))).join("\n") + "\n";
   }
-
-  /**
-   * Turn what someone typed into an FTS5 phrase.
-   *
-   * FTS5 has its own syntax — quotes, `AND`, `NEAR()`, `*`, `^`. A search box
-   * receives *text*, and `"unbalanced` threw `unterminated string` rather than
-   * finding anything. Each word becomes a quoted term, so punctuation is searched
-   * for rather than interpreted, and a trailing `*` is kept because prefix search
-   * is the one piece of syntax people actually mean.
-   */
-  static toMatchQuery(input: string): string {
-    const terms = input
-      .split(/\s+/)
-      .map((word) => word.trim())
-      .filter(Boolean)
-      .map((word) => {
-        const prefix = word.endsWith("*");
-        const bare = (prefix ? word.slice(0, -1) : word).replace(/"/g, "");
-        if (!bare) return "";
-        return `"${bare}"${prefix ? "*" : ""}`;
-      })
-      .filter(Boolean);
-    return terms.join(" ");
-  }
-
-  search(query: string, limit = 50): { page: string; snippet: string }[] {
-    const match = Store.toMatchQuery(query);
-    if (!match) return [];
-    return this.db
-      .prepare(
-        `SELECT pages.name AS page, snippet(fts, 0, '«', '»', '…', 12) AS snippet
-         FROM fts JOIN pages ON pages.id = fts.rowid
-         WHERE fts MATCH ? LIMIT ?`,
-      )
-      .all(Store.toMatchQuery(query), limit) as any[];
-  }
 }

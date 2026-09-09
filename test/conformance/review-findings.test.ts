@@ -3,9 +3,10 @@ import {
   MemoryVault, Store, indexVault, capture, setTaskState, resolveRef,
   attachPageToTask, pending, processItem, day, week,
 } from "@lifeloop/semantic-core";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { load } from "js-yaml";
 
 /**
  * Regression tests for defects found by review after the phases were called done.
@@ -25,6 +26,34 @@ describe("1. mutation safety and task identity", () => {
     expect(resolved, "an ambiguous anchor should refuse").toMatchObject({
       ok: false, reason: "ambiguous",
     });
+  });
+
+  test("only complete parsed anchor tokens can identify a task", async () => {
+    for (const literal of ["$anchor-long", "$anchor/child", "$anchor:child", "`$anchor`", "\\$anchor", "```\n$anchor\n```"] ) {
+      const text = `* [ ] wrong target ${literal}\n`;
+      const vault = MemoryVault.of({ "W.md": text });
+      expect(await setTaskState(vault, { ref: "W@anchor" }, true), literal)
+        .toMatchObject({ ok: false, reason: "stale" });
+      expect(vault.read("W.md")).toBe(text);
+    }
+  });
+
+  test("an exact anchor remains unique beside longer names and literal examples", async () => {
+    const prefix = "* [ ] other $anchor-long\n* [ ] example `$anchor`\n* [ ] escaped \\$anchor\n";
+    const vault = MemoryVault.of({ "W.md": `${prefix}* [ ] correct $anchor\n` });
+    expect((await setTaskState(vault, { ref: "W@anchor" }, true)).ok).toBe(true);
+    expect(vault.read("W.md")).toContain(`${prefix}* [x] correct $anchor [completed:`);
+  });
+
+  test("anchor positions map back to original CRLF and mixed-line-ending source", async () => {
+    for (const prefix of ["\r\n".repeat(20), "intro\n" + "\r\n".repeat(20)]) {
+      const before = `${prefix}* [ ] WRONG\r\n* [ ] target $anchor\r\n`;
+      const vault = MemoryVault.of({ "W.md": before });
+      expect(resolveRef(vault, "W@anchor")).toMatchObject({ offset: before.indexOf("$anchor") });
+      expect((await setTaskState(vault, { ref: "W@anchor" }, true)).ok).toBe(true);
+      expect(vault.read("W.md")).toContain(`${prefix}* [ ] WRONG\r\n* [x] target $anchor [completed:`);
+      expect(vault.read("W.md").split("\r\n").length).toBe(before.split("\r\n").length);
+    }
   });
 
   test("a captured line containing a newline must not smuggle content past Processed", async () => {
@@ -94,6 +123,26 @@ describe("3. apple bridge authority", () => {
 
     expect(result.ok).toBe(false);
     expect(deleted, "the orphaned reminder was not cleaned up").toEqual(["R-created"]);
+  });
+
+  test("an uncertain reminder binding reports and retains the created id", async () => {
+    const { bindReminder } = await import("@lifeloop/apple-bridge");
+    class ThrowingVault extends MemoryVault {
+      override async write(): Promise<void> { throw new Error("editor refused write"); }
+    }
+    const vault = new ThrowingVault(new Map([["W.md", "* [ ] a task\n"]]));
+    const deleted: string[] = [];
+    const result = await bindReminder(
+      vault, { ref: "W@0", expectedText: "* [ ] a task", expectedState: " " },
+      "a task", "", "", {
+        async create() { return "R-created"; },
+        async remove(id: string) { deleted.push(id); return true; },
+      } as any,
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: "unknown", orphaned: "R-created" });
+    expect(result.ok ? "" : result.message).toContain("binding outcome is unknown");
+    expect(deleted).toEqual([]);
   });
 });
 
@@ -166,20 +215,6 @@ const vaultWith = (files: Record<string, string>) => {
 };
 
 describe("input robustness", () => {
-  test("search must not throw on text a person would plausibly type", async () => {
-    const dir = vaultWith({ "A.md": "the decoder survived\n" });
-    const store = new Store(":memory:");
-    await indexVault(dir, store);
-
-    // FTS5 has its own query syntax. Anything typed into a search box is a
-    // *phrase*, not a query language, and must never blow up.
-    for (const query of ['"unbalanced', "AND", "a OR", "NEAR(", "decoder*", "-", "^", ":"]) {
-      expect(() => store.search(query), `search threw on ${JSON.stringify(query)}`).not.toThrow();
-    }
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   test("an attribute value containing a quote does not corrupt the line", async () => {
     const { setTaskAttribute } = await import("@lifeloop/semantic-core");
     const vault = MemoryVault.of({ "W.md": "* [ ] a task\n" });
@@ -192,6 +227,19 @@ describe("input robustness", () => {
       expect(line.split("\n").filter(Boolean)).toHaveLength(1);
     } else {
       expect(result.reason).toBe("invalid");
+    }
+  });
+});
+
+describe("Foam migration templates", () => {
+  test("the converted templates have valid frontmatter and no SB cursor markers", () => {
+    const root = resolve(import.meta.dirname, "../../docs/migration/foam-templates");
+    for (const name of ["daily-note", "project", "area", "person"]) {
+      const text = readFileSync(join(root, `${name}.md`), "utf8");
+      const match = /^---\n([\s\S]*?)\n---/.exec(text);
+      expect(match, `${name} has no frontmatter`).not.toBeNull();
+      expect(load(match![1]), `${name} frontmatter`).toBeTypeOf("object");
+      expect(text).not.toContain("|^|");
     }
   });
 });
@@ -219,6 +267,32 @@ describe("indexer failure behaviour", () => {
 
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a failed policy transition cannot certify a mixed index as the old policy", async () => {
+    const pages = Object.fromEntries(Array.from({ length: 501 }, (_, i) => [`${i}.md`, "* [DONE] task\n"]));
+    const dir = vaultWith(pages);
+    const store = new Store(":memory:");
+    const open = [{ state: "DONE", done: false }];
+    const done = [{ state: "DONE", done: true }];
+    try {
+      await indexVault(dir, store, { taskStates: open });
+      const write = store.writePage.bind(store);
+      let calls = 0;
+      store.writePage = ((...args: Parameters<Store["writePage"]>) => {
+        if (++calls === 501) throw new Error("injected final-batch failure");
+        return write(...args);
+      }) as Store["writePage"];
+      await expect(indexVault(dir, store, { taskStates: done })).rejects.toThrow("injected");
+      store.writePage = write;
+
+      const recovered = await indexVault(dir, store, { taskStates: open });
+      expect(recovered.indexed).toBe(501);
+      expect(store.objects("task").every((task) => task.done === false)).toBe(true);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -253,7 +327,7 @@ describe("index and projection consistency", () => {
 });
 
 describe("apple bridge persistence", () => {
-  test("after a restart, a note edited on the phone still updates its mirror", async () => {
+  test("after a restart, an unknown mirror is preserved and paused for resolution", async () => {
     const { planImport, applyImport } = await import("@lifeloop/apple-bridge");
     const note = {
       id: "N1", name: "idea", body: "<div>an idea</div>",
@@ -268,12 +342,14 @@ describe("apple bridge persistence", () => {
     const after = { lastImported: new Map() };
     const edited = { ...note, body: "<div>an idea, refined</div>", modified: "2026-09-09T10:00:00Z" };
     const plan = planImport([edited], vault.read("Inbox.md"), after);
-    await applyImport(vault, "Inbox", plan, after);
+    const result = await applyImport(vault, "Inbox", plan, after);
 
     expect(
       vault.read("Inbox.md"),
-      "the phone edit never reached the mirror after a restart",
-    ).toContain("refined");
+      "an unknown local mirror was overwritten after restart",
+    ).not.toContain("refined");
+    expect(vault.read("Inbox.md")).toContain('source-id: "N1"');
+    expect(result.conflicts).toHaveLength(1);
   });
 });
 
@@ -383,6 +459,27 @@ describe("the implementation contradicts its claims", () => {
     await apply(vault, cs).catch(() => {});
     expect(vault.read("A.md"), "the first file was written even though the set failed")
       .toBe("before\n");
+  });
+
+  test("rollback preserves a concurrent edit instead of overwriting it", async () => {
+    const { changeSet, apply } = await import("@lifeloop/semantic-core");
+    class ConcurrentFailure extends MemoryVault {
+      override async write(path: string, content: string): Promise<void> {
+        if (path === "B.md") {
+          await super.write("A.md", "user edit\n");
+          throw new Error("disk full");
+        }
+        return super.write(path, content);
+      }
+    }
+    const vault = new ConcurrentFailure(new Map([["A.md", "before\n"]]));
+    const cs = changeSet("two files");
+    cs.expected.set("A.md", "before\n");
+    cs.writes.set("A.md", "after\n");
+    cs.writes.set("B.md", "new\n");
+
+    await expect(apply(vault, cs)).rejects.toThrow("Could not undo A.md");
+    expect(vault.read("A.md")).toBe("user edit\n");
   });
 });
 
