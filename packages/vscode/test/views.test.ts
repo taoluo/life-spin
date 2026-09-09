@@ -607,6 +607,20 @@ test("a failed editor save cannot be reconciled from the dirty buffer", async ()
   }
 });
 
+test("a dirty buffer cannot certify durable disk equality", async () => {
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": "same\n" });
+  vscode.workspace.textDocuments = [{
+    uri: vscode.Uri.file(join(dir, "Work.md")), languageId: "markdown",
+    isDirty: true, isClosed: false, getText: () => "same\n",
+  } as any];
+  try {
+    expect(lifeloop.vault.durableEquals("Work.md", "same\n")).toBeUndefined();
+  } finally {
+    vscode.workspace.textDocuments = [];
+    lifeloop.dispose(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a declaration changed during the second pass is not published", async () => {
   vscode.workspace.settings["lifeloop.executeSpaceLua"] = true;
   const initial = '```space-lua\ntaskState.define {name="DONE", done=false}\n```\n';

@@ -40,6 +40,7 @@ export class WorkspaceVault implements Vault {
   }
 
   durableEquals(path: string, content: string | null): boolean | undefined {
+    if (this.isDirty(path)) return undefined;
     try { return this.disk.durableEquals(path, content); } catch { return undefined; }
   }
 
