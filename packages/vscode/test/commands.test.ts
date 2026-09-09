@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { day } from "@lifeloop/semantic-core";
 import { recordInteraction } from "../src/commands.ts";
+import { register as registerCommands } from "../src/commands.ts";
 import { taskTarget, type TaskTarget } from "../src/task-target.ts";
 import { LifeLoop } from "../src/workspace.ts";
 import * as vscode from "./vscode-mock.ts";
@@ -114,4 +115,29 @@ test("Log Interaction refuses a dirty Journal without saving it", async () => {
     expect(save).not.toHaveBeenCalled();
     expect(readFileSync(join(dir, journal), "utf8")).toBe(before);
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a date command re-admits its task after the prompt", async () => {
+  const initial = "prefixxxxx\n* [ ] unchanged\n";
+  const moved = "prefix\n* [ ] unchanged\n";
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": initial });
+  const handlers = new Map<string, Function>();
+  const registration = vi.spyOn(vscode.commands, "registerCommand").mockImplementation(((id: string, fn: Function) => {
+    handlers.set(id, fn); return { dispose() {} };
+  }) as any);
+  const context = { subscriptions: [] as any[] };
+  try {
+    registerCommands(lifeloop, context as any);
+    vi.spyOn(vscode.window, "showInputBox").mockImplementation((async () => {
+      writeFileSync(join(dir, "Work.md"), moved);
+      return "2026-09-10";
+    }) as any);
+    await handlers.get("lifeloop.setDeadline")!({
+      handle: { ref: "Work@11", expectedText: "* [ ] unchanged", expectedState: " " },
+    });
+    expect(readFileSync(join(dir, "Work.md"), "utf8")).toBe(moved);
+  } finally {
+    registration.mockRestore();
+    lifeloop.dispose(); rmSync(dir, { recursive: true, force: true });
+  }
 });

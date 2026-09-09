@@ -13,7 +13,7 @@ import type { LifeLoop } from "./workspace.ts";
 import type { Node } from "./views.ts";
 import { openSbRef, scriptNamespaces } from "./retrieval.ts";
 import { evaluateToMarkdown } from "./lua.ts";
-import { taskTarget, type TaskTarget, type TaskTargetInput } from "./task-target.ts";
+import { refreshTaskTarget, taskTarget, type TaskTarget, type TaskTargetInput } from "./task-target.ts";
 
 /**
  * Every command goes through a named mutation (I5). None of them writes a file
@@ -313,7 +313,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     try {
       const states = await lifeloop.currentTaskStates();
-      if (report(await setTaskState(lifeloop.vault, target.handle, true, new Date(), states), "completed")) await after();
+      const current = taskTarget(lifeloop, target);
+      if (!current) { void vscode.window.showWarningMessage("LifeLoop: that task changed; nothing was completed"); return; }
+      if (report(await setTaskState(lifeloop.vault, current.handle, true, new Date(), states), "completed")) await after();
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
     }
@@ -324,7 +326,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     try {
       const states = await lifeloop.currentTaskStates();
-      if (report(await setTaskState(lifeloop.vault, target.handle, false, new Date(), states), "reopened")) await after();
+      const current = taskTarget(lifeloop, target);
+      if (!current) { void vscode.window.showWarningMessage("LifeLoop: that task changed; nothing was reopened"); return; }
+      if (report(await setTaskState(lifeloop.vault, current.handle, false, new Date(), states), "reopened")) await after();
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
     }
@@ -432,7 +436,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         validateInput: (v) => (v === "" || /^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "YYYY-MM-DD"),
       });
       if (value === undefined) return;
-      const result = await setTaskAttribute(lifeloop.vault, at.handle, field, value || null);
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current) { vscode.window.showWarningMessage(`LifeLoop: that task changed; ${field} was not set`); return; }
+      const result = await setTaskAttribute(lifeloop.vault, current.handle, field, value || null);
       if (report(result, `set ${field}`)) await after();
     });
   }
@@ -443,7 +449,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     // The destination is the user's, never inferred from a folder convention.
     const destination = await vscode.window.showInputBox({ prompt: "New page for this task" });
     if (!destination) return;
-    if (report(await attachPageToTask(lifeloop.vault, at.handle, destination), `attached ${destination}`)) {
+    const current = await refreshTaskTarget(lifeloop, at);
+    if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no page was attached"); return; }
+    if (report(await attachPageToTask(lifeloop.vault, current.handle, destination), `attached ${destination}`)) {
       await after();
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(destination)));
     }

@@ -12,7 +12,7 @@ import {
   type CalendarExactRead,
 } from "@lifeloop/apple-bridge";
 import type { LifeLoop } from "./workspace.ts";
-import { taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
+import { refreshTaskTarget, taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
 import { personLink, sourceLink } from "./temporary-navigation.ts";
 
 type SyncConflict =
@@ -235,8 +235,10 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
 
     const list = lifeloop.config("reminderList", "");
     try {
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no reminder was added"); return; }
       const result = await bindReminder(
-        lifeloop.vault, at.handle, at.name, "", list, new Reminders(),
+        lifeloop.vault, current.handle, current.name, "", list, new Reminders(),
       );
       if (!result.ok) {
         vscode.window.showWarningMessage(`LifeLoop: ${result.message}`);
@@ -262,19 +264,21 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
       validateInput: (v) => (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v) ? null : "YYYY-MM-DD HH:MM"),
     });
     if (!when) return;
-    const minutes = lifeloop.config("eventMinutes", 60);
-    const start = new Date(when.replace(" ", "T"));
-    const end = new Date(start.getTime() + minutes * 60_000);
-    const fmt = (d: Date) => d.toLocaleString("en-US");
 
     try {
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no event was added"); return; }
+      const minutes = lifeloop.config("eventMinutes", 60);
+      const start = new Date(when.replace(" ", "T"));
+      const end = new Date(start.getTime() + minutes * 60_000);
+      const fmt = (d: Date) => d.toLocaleString("en-US");
       const calendarName = lifeloop.config("calendarName", "Calendar");
       const result = await bindCalendar(
-        lifeloop.vault, at.handle, at.name, fmt(start), fmt(end), calendarName, new Calendar(),
+        lifeloop.vault, current.handle, current.name, fmt(start), fmt(end), calendarName, new Calendar(),
       );
       if (!result.ok) { vscode.window.showWarningMessage(`LifeLoop: ${result.message}`); return; }
       const uid = result.value.id;
-      calendarObservations.set(uid, { localName: at.name, remoteSummary: at.name });
+      calendarObservations.set(uid, { localName: current.name, remoteSummary: current.name });
       await lifeloop.reindex();
       vscode.window.setStatusBarMessage("LifeLoop: added to calendar", 3000);
     } catch (error) {

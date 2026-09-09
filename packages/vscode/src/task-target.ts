@@ -110,3 +110,12 @@ export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTar
   const editor = vscode.window.activeTextEditor;
   return editor ? taskTargetAt(lifeloop, editor.document, editor.selection.active.line) : null;
 }
+
+/** Refresh the index, then re-admit the originally captured task identity. */
+export async function refreshTaskTarget(
+  lifeloop: LifeLoop,
+  input: TaskTargetInput,
+): Promise<TaskTarget | null> {
+  await lifeloop.currentTaskStates();
+  return taskTarget(lifeloop, input);
+}

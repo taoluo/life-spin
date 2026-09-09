@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { setTaskAttribute, TASK_MARKER } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { taskTarget, type TaskCommandHandle, type TaskTargetInput } from "./task-target.ts";
+import { taskTarget, taskTargetAt, type TaskTargetInput } from "./task-target.ts";
 
 export type BindingKind = "reminder" | "event";
 export type Binding = {
@@ -29,21 +29,15 @@ export function bindingsIn(text: string): Binding[] {
 
 type BindingAction = TaskTargetInput & { kind: BindingKind; id: string };
 
-const actionFor = (lifeloop: LifeLoop, document: vscode.TextDocument, binding: Binding): BindingAction => {
-  const state = TASK_MARKER.exec(binding.line)![2];
-  const handle: TaskCommandHandle = {
-    ref: `${lifeloop.pageNameOfUri(document.uri)}@${binding.lineStart}`,
-    expectedText: binding.line,
-    expectedState: state,
-    capturedAt: new Date().toISOString(),
-  };
-  return {
+const actionFor = (lifeloop: LifeLoop, document: vscode.TextDocument, binding: Binding): BindingAction | null => {
+  const target = taskTargetAt(lifeloop, document, document.positionAt(binding.lineStart).line);
+  return target ? {
     kind: binding.kind,
     id: binding.id,
-    handle,
-    page: lifeloop.pageNameOfUri(document.uri),
-    offset: binding.lineStart,
-  };
+    handle: target.handle,
+    page: target.page,
+    offset: target.offset,
+  } : null;
 };
 
 const command = (id: string, label: string, argument?: unknown) =>
@@ -89,6 +83,7 @@ export function registerBindings(lifeloop: LifeLoop, context: vscode.ExtensionCo
             .find((candidate) => offset >= candidate.from && offset < candidate.to);
           if (!binding) return undefined;
           const argument = actionFor(lifeloop, document, binding);
+          if (!argument) return undefined;
           const actions = [
             command("lifeloop.syncExternal", "Sync"),
             command("lifeloop.openExternalBinding", binding.kind === "reminder" ? "Open Reminders" : "Open Calendar", argument),
