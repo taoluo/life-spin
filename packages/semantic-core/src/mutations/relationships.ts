@@ -8,8 +8,11 @@ export const INTERACTION_KINDS = ["call", "meeting", "message", "other"] as cons
 export type InteractionKind = typeof INTERACTION_KINDS[number];
 
 const oneLine = (value: string) => value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
-const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-  new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const validDate = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
 
 function personSource(vault: Vault, person: string): { path: string; text: string } | null {
   if (!validPageName(person) || person.includes("[[") || person.includes("]]")) return null;

@@ -44,6 +44,8 @@ describe("relationship mutations", () => {
       .toMatchObject({ ok: false, reason: "missing" });
     expect(await logInteraction(vault, "People/Alice", "2026-02-31", "call"))
       .toMatchObject({ ok: false, reason: "invalid" });
+    expect(await logInteraction(vault, "People/Alice", "2026-99-99", "call"))
+      .toMatchObject({ ok: false, reason: "invalid" });
     expect(await logInteraction(vault, [], "2026-09-09", "call"))
       .toMatchObject({ ok: false, reason: "invalid" });
     expect(vault.list()).toEqual(["People/Alice.md"]);
