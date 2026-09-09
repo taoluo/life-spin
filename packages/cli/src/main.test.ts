@@ -26,6 +26,10 @@ test("named projection limit is applied", () => {
   const result = run("query", root, "people", "--limit", "1", "--json");
   expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout)).toHaveLength(1);
+
+  const none = run("query", root, "people", "--limit", "0", "--json");
+  expect(none.status).toBe(0);
+  expect(JSON.parse(none.stdout)).toEqual([]);
 });
 
 test.each(["-1", "nope", "1.5"])("invalid --limit %s fails without row JSON", (limit) => {

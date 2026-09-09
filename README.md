@@ -71,6 +71,45 @@ npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
 
+### Relationship query recipes
+
+Person pages are ordinary Markdown pages tagged `person`. These query blocks derive relationship
+facts without writing caches back to them. Replace `People/Alice` with an exact page path.
+
+<!-- relationship-recipes:start -->
+People and their current relationship facts:
+
+```lifeloop
+people
+fields: person, groups, birthday, contactEveryDays, lastInteractionDate, reconnectOn, openFollowups
+```
+
+One Person's recent Interaction timeline:
+
+```lifeloop
+interactions
+person: People/Alice
+fields: date, kind, text, people
+limit: 20
+```
+
+Reconnect work that is due today:
+
+```lifeloop
+reconnect
+date: today
+fields: person, kind, due, lastInteractionDate
+```
+
+One Person's follow-ups and recent context:
+
+```lifeloop
+person-context
+person: People/Alice
+fields: person, lastInteractionDate, reconnectOn, openFollowupRefs, recentInteractions
+```
+<!-- relationship-recipes:end -->
+
 To install the extension into your own VS Code:
 
 ```bash
