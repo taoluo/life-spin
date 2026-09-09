@@ -2,6 +2,8 @@ import {
   applied, changeSet, refuse, resolveHandle, type MutationResult, type SourceHandle,
 } from "../mutation.ts";
 import type { Vault } from "../vault.ts";
+import { parseMarkdown } from "../../../../vendor/silverbullet/client/markdown_parser/parser.ts";
+import { collectNodesOfType } from "../../../../vendor/silverbullet/plug-api/lib/tree.ts";
 
 const MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\[\]\r\n]+)(\].*)$/;
 
@@ -234,8 +236,23 @@ export async function setTaskName(
   const marker = MARKER.exec(source.line);
   if (!marker) return refuse("stale", `${handle.ref} is not a task line`);
 
-  const suffix = taskMetadataSuffix(marker[3]);
-  const line = `${marker[1]}${marker[2]}] ${title}${suffix}`;
+  const bodyFrom = marker[1].length + marker[2].length + 1;
+  const metadata = ["Hashtag", "Attribute", "NamedAnchor"].flatMap((type) =>
+    collectNodesOfType(parseMarkdown(source.line), type)
+      .filter((node) => node.from !== undefined && node.to !== undefined)
+      .map((node) => [node.from!, node.to!] as const));
+  const isMetadata = (offset: number) => metadata.some(([from, to]) => offset >= from && offset < to);
+  const visible: number[] = [];
+  for (let offset = bodyFrom; offset < source.line.length; offset++) {
+    if (!/\s/u.test(source.line[offset]) && !isMetadata(offset)) visible.push(offset);
+  }
+  if (!visible.length) return refuse("invalid", `${handle.ref} has no visible task name`);
+  const from = visible[0];
+  const to = visible.at(-1)! + 1;
+  if (metadata.some(([start, end]) => start < to && end > from)) {
+    return refuse("ambiguous", `${handle.ref} has metadata inside its task name`);
+  }
+  const line = source.line.slice(0, from) + title + source.line.slice(to);
   const cs = changeSet(`rename ${handle.ref}`);
   cs.expected.set(source.path, source.text);
   cs.writes.set(source.path, replaceLine(source.text, source.lineStart, source.lineEnd, line));

@@ -322,6 +322,21 @@ describe("the same query on three surfaces", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test.each([
+    ["blockquote", "> ~~~query\n> interactions\n> \n> ~~~", 2, 2],
+    ["list", "* ~~~query\n  interactions\n  \n  ~~~", 2, 2],
+    ["CRLF blockquote", "> ~~~query\r\n> interactions\r\n> \r\n> ~~~", 2, 2],
+  ])("query providers include a genuine blank %s body line", async (_name, text, line, character) => {
+    const { queryCompletions, hovers } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({ "W.md": "" });
+    const position = { line, character };
+    try {
+      expect((queryCompletions(() => lifeloop) as any)
+        .provideCompletionItems(documentOf(text), position)).not.toEqual([]);
+      expect((hovers(() => lifeloop) as any).provideHover(documentOf(text), position)).toBeDefined();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("Person completion replaces the whole current value", async () => {
     const { queryCompletions } = await import("../src/query-lens.ts");
     const { lifeloop, dir } = await workspaceWith({

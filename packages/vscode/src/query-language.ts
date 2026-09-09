@@ -115,18 +115,20 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
       const parsedFrom = node.from ?? 0;
       const from = originalSourceOffset(source, parsedFrom);
       const to = originalSourceOffset(source, node.to ?? parsedFrom);
+      const sourceLine = sourceLines.find((line) => from >= line.from && from <= line.to)!;
       return {
         text: source.slice(from, to).replace(/\r$/, ""),
         parsedText: node.children?.[0].text ?? "",
         parsedFrom,
+        prefix: source.slice(sourceLine.from, from),
       };
     });
     const codeLines = code.flatMap((part) => lines(part.parsedText).flatMap((line) => {
       const from = originalSourceOffset(source, part.parsedFrom + line.from);
       if (line.from === part.parsedText.length) {
-        const blank = sourceLines.find((candidate) =>
-          candidate.text === "" && from >= candidate.from && from < candidate.next);
-        return blank ? [blank] : [];
+        const blank = sourceLines.find((candidate) => from >= candidate.from && from < candidate.next);
+        if (!blank || !blank.text.startsWith(part.prefix) || blank.text.slice(part.prefix.length).trim()) return [];
+        return [{ ...blank, from: blank.to, to: blank.to }];
       }
       return [{
         ...line,

@@ -55,11 +55,36 @@ describe("locating a task by its binding", () => {
   test("refuses when another page carries the same binding", () => {
     const vault = MemoryVault.of({
       "A.md": '* [ ] a [reminder: "R1"]\n',
-      "B.md": '* [ ] b [reminder: "R1"]\n',
+      "B.md": "* [ ] b [reminder: R1]\n",
     });
     expect(locateReminderByBinding(vault, "A", "R1")).toMatchObject({
       ok: false, reason: "ambiguous",
     });
+  });
+
+  test("ignores fenced and inline-code binding examples", () => {
+    const vault = MemoryVault.of({
+      "A.md": '* [ ] real [reminder: "R1"]\n',
+      "Examples.md": [
+        "~~~md", '* [ ] fenced [reminder: "R1"]', "~~~",
+        '* [ ] inline `[reminder: "R1"]`', "",
+      ].join("\n"),
+    });
+    expect(locateReminderByBinding(vault, "A", "R1")).toMatchObject({ ok: true, name: "real" });
+  });
+
+  test("retains upstream multiline names and original CRLF coordinates", () => {
+    const vault = MemoryVault.of({
+      "A.md": 'prefix\r\n  * [ ] Local [reminder: R1]\r\n    continuation\r\n',
+    });
+    const found = locateReminderByBinding(vault, "A", "R1");
+    expect(found.ok).toBe(true);
+    if (!found.ok) return;
+    expect(found.name).toContain("Local");
+    expect(found.name).toContain("\n");
+    expect(found.name).toContain("continuation");
+    expect(found.line).toMatch(/^  \*/);
+    expect(found.handle.ref).toBe("A@8");
   });
 
   test("fails closed when the current vault inventory is unavailable", () => {

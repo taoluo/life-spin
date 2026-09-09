@@ -1,6 +1,6 @@
 import {
   setTaskState, stampCompletion, setTaskAttribute, setTaskName, tasks as taskQueries,
-  type Vault, type Store, type LifeloopObject, type Refusal, type CycleStates,
+  type Vault, type Store, type LifeloopObject, type CycleStates,
   type GuardedSourceHandle, type MutationResult,
 } from "@lifeloop/semantic-core";
 import { Reminders, type Reminder } from "./reminders.ts";
@@ -133,18 +133,26 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
     observedOn: options.observedOn ?? new Date().toISOString().slice(0, 10),
   });
   const synchronizedNames = new Map<string, string>();
+  const confirmedLines = new Map<string, { page: string; ref: string; line: string }>();
   const unsettled = new Set<string>(duplicateIds);
 
   const refuseDecision = (ref: string, reminderId: string, message: string) => {
     unsettled.add(reminderId);
     report.refused.push({ ref, message });
   };
-  const note = (result: { ok: true } | Refusal, ref: string, reminderId: string, onOk: () => void) => {
-    if (result.ok) {
-      const current = locateReminderByBinding(options.vault, pageOfRef(ref), reminderId);
-      if (current.ok) onOk(); else refuseDecision(ref, reminderId, current.message);
+  const note = (result: MutationResult<{ line: string }>, ref: string, reminderId: string, onOk: () => void) => {
+    if (!result.ok) {
+      refuseDecision(ref, reminderId, result.message);
+      return;
     }
-    else refuseDecision(ref, reminderId, result.message);
+    const page = pageOfRef(ref);
+    const current = locateReminderByBinding(options.vault, page, reminderId);
+    if (!current.ok || current.line !== result.value.line) {
+      refuseDecision(ref, reminderId, current.ok ? "Markdown changed during sync" : current.message);
+      return;
+    }
+    confirmedLines.set(reminderId, { page, ref, line: current.line });
+    onOk();
   };
 
   for (const decision of decisions) {
@@ -212,9 +220,12 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         );
         if (outcome === "ok") {
           const current = locateReminderByBinding(options.vault, pageOfRef(decision.ref), decision.reminderId);
-          if (current.ok && current.name === decision.name) {
+          if (current.ok && current.line === found.line) {
             report.pushed.push(decision.ref);
             synchronizedNames.set(decision.reminderId, decision.name);
+            confirmedLines.set(decision.reminderId, {
+              page: pageOfRef(decision.ref), ref: decision.ref, line: current.line,
+            });
           } else {
             refuseDecision(decision.ref, decision.reminderId,
               current.ok ? "Markdown changed during sync" : current.message);
@@ -232,6 +243,9 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
       case "flag-recurring":
         report.recurring.push(decision.ref);
         options.onRecurring?.(task);
+        confirmedLines.set(decision.reminderId, {
+          page: pageOfRef(decision.ref), ref: decision.ref, line: found.line,
+        });
         break;
 
       case "conflict":
@@ -241,12 +255,19 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         break;
 
       case "pull-name":
-        note(await setTaskName(options.vault, handle!, decision.name), decision.ref, decision.reminderId,
-          () => { report.pulled.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); });
+        if (found.name !== task.name) {
+          refuseDecision(decision.ref, decision.reminderId, "Markdown changed during sync");
+        } else {
+          note(await setTaskName(options.vault, handle!, decision.name), decision.ref, decision.reminderId,
+            () => { report.pulled.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); });
+        }
         break;
 
       case "none":
         report.skipped++;
+        confirmedLines.set(task.reminderId, {
+          page: pageOfRef(decision.ref), ref: decision.ref, line: found.line,
+        });
         break;
     }
   }
@@ -258,6 +279,17 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
   );
   for (const [id, reminder] of current) {
     if (unsettled.has(id)) continue;
+    const receipt = confirmedLines.get(id);
+    if (!receipt) {
+      refuseDecision(eligible.find((task) => task.reminderId === id)?.ref ?? id, id,
+        "Markdown was not confirmed during sync");
+      continue;
+    }
+    const confirmed = locateReminderByBinding(options.vault, receipt.page, id);
+    if (!confirmed.ok || confirmed.line !== receipt.line) {
+      refuseDecision(receipt.ref, id, confirmed.ok ? "Markdown changed during sync" : confirmed.message);
+      continue;
+    }
     const previous = options.observations.get(id);
     options.observations.set(id, {
       completed: reminder.completed,
@@ -296,7 +328,7 @@ export async function resolveReminderConflict(options: {
   if (remote.name !== options.expectedRemote) return { ok: false, reason: "stale", message: "Reminder changed after the conflict was shown" };
   const currentLocal = locateReminderByBinding(options.vault, options.page, options.reminderId);
   if (!currentLocal.ok) return { ok: false, reason: currentLocal.reason, message: currentLocal.message };
-  if (currentLocal.name !== options.expectedLocal) {
+  if (currentLocal.line !== located.line) {
     return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
   }
   if (options.choice === "reminders") {
@@ -304,7 +336,7 @@ export async function resolveReminderConflict(options: {
     if (result.ok) {
       const current = locateReminderByBinding(options.vault, options.page, options.reminderId);
       if (!current.ok) return { ok: false, reason: current.reason, message: current.message };
-      if (current.name !== remote.name) {
+      if (current.line !== result.value.line) {
         return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
       }
       options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: remote.modificationDate, name: remote.name });
@@ -316,7 +348,7 @@ export async function resolveReminderConflict(options: {
   if (outcome === "conflict") return { ok: false, reason: "stale", message: "Reminder changed during conflict resolution" };
   const confirmed = locateReminderByBinding(options.vault, options.page, options.reminderId);
   if (!confirmed.ok) return { ok: false, reason: confirmed.reason, message: confirmed.message };
-  if (confirmed.name !== local) {
+  if (confirmed.line !== currentLocal.line) {
     return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
   }
   options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: null, name: local });

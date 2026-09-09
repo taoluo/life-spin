@@ -1,5 +1,6 @@
 import {
-  TASK_MARKER, extractLiveItems, pageMetaFor, type Vault, type GuardedSourceHandle,
+  TASK_MARKER, extractLiveItems, originalSourceOffset, pageMetaFor,
+  type Vault, type GuardedSourceHandle,
 } from "@lifeloop/semantic-core";
 
 /**
@@ -99,15 +100,30 @@ export function locateReminderByBinding(vault: Vault, page: string, id: string):
     return { ok: false, reason: "missing", message: `page ${page} no longer exists` };
   }
 
-  const found: { path: string; located: Extract<Located, { ok: true }> }[] = [];
+  const found: { path: string; offset: number; line: string; name: string }[] = [];
   for (const path of new Set([...listed.filter((candidate) => candidate.endsWith(".md")), intendedPath])) {
     try {
       if (!vault.exists(path)) {
         return { ok: false, reason: "unknown", message: `vault changed while locating Reminder ${id}` };
       }
-      const located = locateByBinding(vault, path.slice(0, -3), "reminder", id);
-      if (located.ok) found.push({ path, located });
-      else if (located.reason === "ambiguous") return located;
+      const text = vault.read(path);
+      for (const item of extractLiveItems(text, pageMetaFor(path.slice(0, -3)))) {
+        if (item.tag !== "task" || item.inComment === true || item.reminder !== id) continue;
+        const parsedOffset = (item.range as [number, number] | undefined)?.[0];
+        if (parsedOffset === undefined || typeof item.name !== "string") {
+          return { ok: false, reason: "unknown", message: `could not parse the live task for Reminder ${id}` };
+        }
+        const itemOffset = originalSourceOffset(text, parsedOffset);
+        const offset = text.lastIndexOf("\n", Math.max(0, itemOffset - 1)) + 1;
+        const newline = text.indexOf("\n", offset);
+        let end = newline === -1 ? text.length : newline;
+        if (end > offset && text[end - 1] === "\r") end--;
+        const line = text.slice(offset, end);
+        if (!TASK_LINE.test(line)) {
+          return { ok: false, reason: "unknown", message: `could not parse the live task for Reminder ${id}` };
+        }
+        found.push({ path, offset, line, name: item.name });
+      }
     } catch (error) {
       return { ok: false, reason: "unknown", message: `could not read ${path}: ${(error as Error).message}` };
     }
@@ -121,11 +137,17 @@ export function locateReminderByBinding(vault: Vault, page: string, id: string):
   if (only.path !== intendedPath) {
     return { ok: false, reason: "missing", message: `Reminder ${id} moved away from ${page}` };
   }
-  const item = extractLiveItems(`${only.located.line}\n`, pageMetaFor(page))[0];
-  if (item?.tag !== "task" || typeof item.name !== "string") {
-    return { ok: false, reason: "unknown", message: `could not parse the live task for Reminder ${id}` };
-  }
-  return { ...only.located, name: item.name.trim() };
+  return {
+    ok: true,
+    line: only.line,
+    name: only.name,
+    handle: {
+      ref: `${page}@${only.offset}`,
+      expectedText: only.line,
+      expectedState: TASK_LINE.exec(only.line)?.[2],
+      capturedAt: new Date().toISOString(),
+    },
+  };
 }
 
 /** The page half of a `Page@pos` ref. */

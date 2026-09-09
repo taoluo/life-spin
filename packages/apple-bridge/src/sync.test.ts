@@ -299,6 +299,74 @@ describe("the reverse flow, end to end", () => {
     cleanup();
   });
 
+  test("a pull preserves a local title edit made during the Reminder read", async () => {
+    const markdown = '* [ ] Local [reminder: "R1"]\n';
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Local" });
+    const bridge = new FakeReminders([reminder({ name: "Remote" })], {
+      afterRead: () => vault.write("Work.md", '* [ ] Concurrent [reminder: "R1"]\n'),
+    });
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.pulled).toEqual([]);
+    expect(report.refused).toHaveLength(1);
+    expect(vault.read("Work.md")).toContain("Concurrent");
+    expect(observations.get("R1")?.name).toBe("Local");
+    cleanup();
+  });
+
+  test("a post-effect replacement cannot advance the completion baseline", async () => {
+    const markdown = '* [ ] Local [reminder: "R1"]\n';
+    const { store, cleanup } = await setup(markdown);
+    class ReplacingVault extends MemoryVault {
+      override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+        const ok = await super.writeIfUnchanged(path, before, after);
+        if (ok && path === "Work.md" && after?.includes("[completed:")) {
+          await this.write(path, '* [ ] Replacement [reminder: "R1"]\n');
+        }
+        return ok;
+      }
+    }
+    const vault = new ReplacingVault(new Map([["Work.md", markdown]]));
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Local" });
+    const report = await syncReminders({
+      store, vault, observations,
+      reminders: new FakeReminders([
+        reminder({ name: "Local", completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      ]) as any,
+    });
+    expect(report.completed).toEqual([]);
+    expect(report.refused).toHaveLength(1);
+    expect(observations.get("R1")?.completed).toBe(false);
+    cleanup();
+  });
+
+  test("a later await cannot stale an earlier completion baseline", async () => {
+    const markdown = [
+      '* [ ] One [reminder: "R1"]',
+      '* [ ] Two [reminder: "R2"]',
+      "",
+    ].join("\n");
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "One" });
+    observations.set("R2", { completed: false, modificationDate: "before", name: "Old" });
+    const bridge = new FakeReminders([
+      reminder({ id: "R1", name: "One", completed: true, completionDate: "2026-09-09T18:30:00Z" }),
+      reminder({ id: "R2", name: "Old" }),
+    ], {
+      beforeUpdate: () => vault.write("Work.md", vault.read("Work.md").replace(
+        /^\* \[x\] One.*$/m, '* [ ] Replacement [reminder: "R1"]',
+      )),
+    });
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.refused.some((entry) => entry.ref.startsWith("Work@") && entry.message.includes("changed")))
+      .toBe(true);
+    expect(observations.get("R1")?.completed).toBe(false);
+    cleanup();
+  });
+
   test("a remote edit at the update boundary is preserved as a conflict", async () => {
     const { store, vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
     const observations = new MemoryObservations();
@@ -360,6 +428,35 @@ describe("the reverse flow, end to end", () => {
     expect(observations.get("R1")).toBeUndefined();
     cleanup();
   });
+
+  test.each(["reminders", "markdown"] as const)(
+    "%s conflict resolution rejects a same-name replacement after its effect",
+    async (choice) => {
+      const markdown = '* [ ] Local [reminder: "R1"]\n';
+      class ReplacingVault extends MemoryVault {
+        override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+          const ok = await super.writeIfUnchanged(path, before, after);
+          if (choice === "reminders" && ok && after?.includes("Remote")) {
+            await this.write(path, '* [x] Remote [reminder: "R1"]\n');
+          }
+          return ok;
+        }
+      }
+      const vault = new ReplacingVault(new Map([["Work.md", markdown]]));
+      const observations = new MemoryObservations();
+      const bridge = new FakeReminders([reminder({ name: "Remote" })], {
+        beforeUpdate: choice === "markdown"
+          ? () => vault.write("Work.md", '* [x] Local [reminder: "R1"]\n')
+          : undefined,
+      });
+      const result = await resolveReminderConflict({
+        vault, page: "Work", reminderId: "R1", choice,
+        expectedLocal: "Local", expectedRemote: "Remote", observations, reminders: bridge as any,
+      });
+      expect(result).toMatchObject({ ok: false, reason: "stale" });
+      expect(observations.get("R1")).toBeUndefined();
+    },
+  );
 
   test("a second pass with nothing new does nothing", async () => {
     const { store, vault, cleanup } = await setup('* [ ] Submit paper [reminder: "R1"]\n');

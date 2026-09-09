@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { MemoryVault } from "../vault.ts";
-import { setTaskState, stampCompletion, toggleParked, setTaskAttribute, cycleTaskState } from "./tasks.ts";
+import { setTaskState, stampCompletion, toggleParked, setTaskAttribute, setTaskName, cycleTaskState } from "./tasks.ts";
 import { capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask } from "./inbox.ts";
 import { setProjectStatus, attachPageToTask, patchFrontmatter } from "./pages.ts";
 
@@ -15,6 +15,38 @@ const unchanged = (vault: MemoryVault, before: Record<string, string>) =>
 
 const refOf = (text: string, needle: string, page: string) =>
   `${page}@${text.indexOf(needle)}`;
+
+test.each([
+  [
+    '* [ ] #work Local [reminder: "R1"]\n',
+    '* [ ] #work Remote [reminder: "R1"]\n',
+  ],
+  [
+    '* [ ] Local [deadline: tomorrow] [reminder: "R1"]\n',
+    '* [ ] Remote [deadline: tomorrow] [reminder: "R1"]\n',
+  ],
+  [
+    '* [ ] $task Local [reminder: "R1"]\n',
+    '* [ ] $task Remote [reminder: "R1"]\n',
+  ],
+  [
+    '* [ ] 👩‍💻 Local [reminder: "R1"]\n',
+    '* [ ] Remote [reminder: "R1"]\n',
+  ],
+])("renaming a task preserves parsed metadata: %s", async (before, after) => {
+  const vault = MemoryVault.of({ "Work.md": before });
+  expect(await setTaskName(vault, { ref: "Work@0", expectedText: before.trimEnd() }, "Remote"))
+    .toMatchObject({ ok: true });
+  expect(vault.read("Work.md")).toBe(after);
+});
+
+test("renaming fails closed when metadata splits the visible title", async () => {
+  const text = '* [ ] Plan #work draft [reminder: "R1"]\n';
+  const vault = MemoryVault.of({ "Work.md": text });
+  expect(await setTaskName(vault, { ref: "Work@0", expectedText: text.trimEnd() }, "Remote"))
+    .toMatchObject({ ok: false });
+  expect(vault.read("Work.md")).toBe(text);
+});
 
 describe("ticking a task", () => {
   const text = "* [ ] Write design\n* [x] Already done\n";

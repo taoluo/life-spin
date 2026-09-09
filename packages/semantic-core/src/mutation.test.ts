@@ -135,6 +135,7 @@ test("a refused replacement never owns an identical third-party after-state", as
     override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
       if (path === "B.md") {
         await this.write(path, after!);
+        await this.write("C.md", "C-after");
         return false;
       }
       return super.writeIfUnchanged(path, before, after);
@@ -152,7 +153,7 @@ test("a refused replacement never owns an identical third-party after-state", as
   expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
   expect(vault.read("A.md")).toBe("A-before");
   expect(vault.read("B.md")).toBe("B-after");
-  expect(vault.read("C.md")).toBe("C-before");
+  expect(vault.read("C.md")).toBe("C-after");
 });
 
 test("a final refused effect cannot claim success from matching bytes", async () => {
@@ -177,6 +178,29 @@ test("a final refused effect cannot claim success from matching bytes", async ()
   expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
   expect(vault.read("A.md")).toBe("A-before");
   expect(vault.read("B.md")).toBe("B-after");
+});
+
+test("a thrown partial write preserves the uncertain effect", async () => {
+  class ThrowingVault extends MemoryVault {
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      const result = await super.writeIfUnchanged(path, before, after);
+      if (path === "B.md") throw new Error("response lost after write");
+      return result;
+    }
+  }
+  const vault = new ThrowingVault(new Map([
+    ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+  ]));
+  const cs = changeSet("partial response loss");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("A.md")).toBe("A-before");
+  expect(vault.read("B.md")).toBe("B-after");
+  expect(vault.read("C.md")).toBe("C-before");
 });
 
 test("a refused deletion never recreates a file deleted by another writer", async () => {
