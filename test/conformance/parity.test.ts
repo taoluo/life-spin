@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   Store, indexVault, projectionNames, runProjection, projections, CONTRACT_VERSION,
+  type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 import { LifeLoop } from "../../packages/vscode/src/workspace.ts";
 import { TodayView } from "../../packages/vscode/src/views.ts";
+import { taskSourceRef } from "../../packages/vscode/src/task-target.ts";
 import * as vscode from "../../packages/vscode/test/vscode-mock.ts";
 
 /**
@@ -24,7 +26,7 @@ const CLI = resolve(import.meta.dirname, "../../packages/cli/src/main.ts");
 const DATE = "2020-01-05";
 
 const cli = (args: string[]): unknown => {
-  const out = execFileSync("npx", ["tsx", CLI, ...args], {
+  const out = execFileSync(process.execPath, ["--import", "tsx", CLI, ...args], {
     encoding: "utf8",
     cwd: resolve(import.meta.dirname, "../.."),
     stdio: ["ignore", "pipe", "ignore"],
@@ -40,15 +42,18 @@ describe("the contract", () => {
     }
   });
 
-  test("every named projection runs against a real vault without arguments", async () => {
+  test("every named projection runs against a real vault with its declared arguments", async () => {
     const store = new Store(":memory:");
     await indexVault(FIXTURES, store);
+    const candidates: ProjectionArgs = {
+      date: DATE, days: 7, project: "Projects/RS Recovery", page: "Projects/Reed Solomon",
+      person: "People/Jiulong", from: "2020-01-01", to: DATE, kind: "meeting",
+    };
     for (const name of projectionNames) {
-      expect(() => runProjection(store, name, {
-        date: DATE, project: "Projects/RS Recovery", page: "Projects/Reed Solomon",
-        person: "People/Jiulong",
-      }))
-        .not.toThrow();
+      const args = Object.fromEntries(
+        (projections[name].allowedArgs ?? []).map((key) => [key, candidates[key]]),
+      ) as ProjectionArgs;
+      expect(() => runProjection(store, name, args)).not.toThrow();
     }
     store.close();
   });
@@ -60,7 +65,7 @@ describe("two clients, one answer", () => {
     const db = join(dir, "index.sqlite");
     try {
       writeFileSync(join(dir, "W.md"), "* [DONE] cli task\n");
-      execFileSync("npx", ["tsx", CLI, "index", dir, "--db", db,
+      execFileSync(process.execPath, ["--import", "tsx", CLI, "index", dir, "--db", db,
         "--task-states", '[{"state":"DONE","done":true}]'], {
         cwd: resolve(import.meta.dirname, "../.."), stdio: "ignore",
       });
@@ -73,7 +78,7 @@ describe("two clients, one answer", () => {
     const db = join(mkdtempSync(join(tmpdir(), "lifeloop-cli-")), "index.sqlite");
     // Index through the CLI, query through the CLI: the whole path a second
     // consumer actually takes, not a shortcut that shares our process.
-    execFileSync("npx", ["tsx", CLI, "index", "test/fixtures", "--db", db], {
+    execFileSync(process.execPath, ["--import", "tsx", CLI, "index", "test/fixtures", "--db", db], {
       cwd: resolve(import.meta.dirname, "../.."), stdio: "ignore",
     });
 
@@ -98,7 +103,9 @@ describe("two clients, one answer", () => {
       const projection = runProjection(lifeloop.store, "today", { date: undefined }) as any;
       const expected = new Set<string>([
         ...projection.overdue, ...projection.due, ...projection.scheduled, ...projection.waiting,
-      ].map((t: any) => String(t.ref)));
+      ].map((task: any) => taskSourceRef(
+        lifeloop.vault.read(`${task.page}.md`), task.page, task,
+      )));
 
       const flatten = (nodes: any[]): any[] =>
         nodes.flatMap((n) => [n, ...flatten(n.children ?? [])]);

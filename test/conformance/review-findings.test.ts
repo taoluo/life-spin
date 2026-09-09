@@ -478,7 +478,7 @@ describe("the implementation contradicts its claims", () => {
     cs.writes.set("A.md", "after\n");
     cs.writes.set("B.md", "new\n");
 
-    await expect(apply(vault, cs)).rejects.toThrow("Could not undo A.md");
+    expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
     expect(vault.read("A.md")).toBe("user edit\n");
   });
 });

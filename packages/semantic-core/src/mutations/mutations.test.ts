@@ -353,9 +353,11 @@ describe("a write that fails is not a success", () => {
     }
   }
 
-  test("the failure propagates instead of being reported as done", async () => {
+  test("a refused write returns UNKNOWN after an authoritative reread", async () => {
     const vault = new RefusingVault({ "Notes.md": "* [ ] a task\n" }, "Notes.md");
-    await expect(setTaskState(vault, { ref: "Notes@0" }, true)).rejects.toThrow(/refused the edit/);
+    const result = await setTaskState(vault, { ref: "Notes@0" }, true);
+    expect(result).toMatchObject({ ok: false, reason: "unknown" });
+    expect(result.ok ? "" : result.message).toContain("authoritative reread found no applied changes");
     expect(vault.read("Notes.md")).toBe("* [ ] a task\n");
   });
 
