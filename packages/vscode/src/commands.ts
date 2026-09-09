@@ -38,6 +38,88 @@ function report(result: { ok: true } | Refusal, success: string): boolean {
   return false;
 }
 
+const exactEventBinding = (line: string): string | undefined => {
+  const matches = [...line.matchAll(/\[event:\s*"([^"\r\n]+)"\]/g)];
+  return matches.length === 1 ? matches[0][1] : undefined;
+};
+
+export async function recordInteraction(
+  lifeloop: LifeLoop,
+  candidates: string[],
+  defaultKind?: InteractionKind,
+  source?: TaskTarget,
+  expectedEvent?: string,
+): Promise<void> {
+  const refresh = async (selected: string[]): Promise<TaskTarget | true | null> => {
+    await lifeloop.currentTaskStates();
+    if (!source) {
+      const current = new Set(people(lifeloop.store).map((person) => String(person.ref)));
+      return selected.every((person) => current.has(person)) ? true : null;
+    }
+    const target = taskTarget(lifeloop, source);
+    if (!target?.task) return null;
+    const direct = directPersonLinks(lifeloop.store, target.task);
+    if (!selected.every((person) => direct.includes(person))) return null;
+    if (expectedEvent !== undefined && exactEventBinding(target.line) !== expectedEvent) return null;
+    return target;
+  };
+  const current = async (selected: string[]) => {
+    try { return await refresh(selected); }
+    catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return null;
+    }
+  };
+  const stale = () => void vscode.window.showWarningMessage(
+    "LifeLoop: the task or a selected Person changed; no interaction was logged",
+  );
+
+  if (!(await current(candidates))) { stale(); return; }
+  const selected = candidates.length === 1
+    ? candidates
+    : (await vscode.window.showQuickPick(
+      candidates.map((person) => ({
+        label: person.split("/").at(-1) ?? person,
+        description: person,
+        id: person,
+      })),
+      { placeHolder: "Who was involved?", canPickMany: true },
+    ))?.map((item) => item.id);
+  if (!selected?.length) return;
+  if (!(await current(selected))) { stale(); return; }
+
+  const kinds = defaultKind
+    ? [defaultKind, ...INTERACTION_KINDS.filter((kind) => kind !== defaultKind)]
+    : [...INTERACTION_KINDS];
+  const picked = await vscode.window.showQuickPick(
+    kinds.map((id) => ({ label: id, id })), { placeHolder: "Interaction type" },
+  );
+  if (!picked) return;
+  if (!(await current(selected))) { stale(); return; }
+
+  const note = await vscode.window.showInputBox({
+    prompt: `What happened with ${selected.map((person) => person.split("/").at(-1)).join(", ")}?`,
+    placeHolder: "optional note",
+  });
+  if (note === undefined) return;
+  const final = await current(selected);
+  if (!final) { stale(); return; }
+
+  const date = day();
+  const journalFolder = "Journal";
+  if (lifeloop.vault.isDirty(`${journalFolder}/${date}.md`)) {
+    void vscode.window.showWarningMessage("LifeLoop: save the Journal page before logging an interaction");
+    return;
+  }
+  const expectedSources = final === true
+    ? new Map<string, string>()
+    : new Map([[`${final.page}.md`, lifeloop.vault.read(`${final.page}.md`)]]);
+  if (report(await logInteraction(
+    lifeloop.vault, selected, date, picked.id as InteractionKind, note,
+    journalFolder, expectedSources,
+  ), "interaction logged")) await lifeloop.reindex();
+}
+
 async function pickProject(lifeloop: LifeLoop): Promise<string | undefined> {
   const projects = lifeloop.store
     .objects("page")
@@ -80,36 +162,6 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
 
   const after = async () => { await lifeloop.reindex(); };
 
-  const recordInteraction = async (candidates: string[], defaultKind?: InteractionKind) => {
-    if (!candidates.length) return;
-    const selected = candidates.length === 1
-      ? candidates
-      : (await vscode.window.showQuickPick(
-        candidates.map((person) => ({
-          label: person.split("/").at(-1) ?? person,
-          description: person,
-          id: person,
-        })),
-        { placeHolder: "Who was involved?", canPickMany: true },
-      ))?.map((item) => item.id);
-    if (!selected?.length) return;
-    const kinds = defaultKind
-      ? [defaultKind, ...INTERACTION_KINDS.filter((kind) => kind !== defaultKind)]
-      : [...INTERACTION_KINDS];
-    const picked = await vscode.window.showQuickPick(
-      kinds.map((id) => ({ label: id, id })), { placeHolder: "Interaction type" },
-    );
-    if (!picked) return;
-    const note = await vscode.window.showInputBox({
-      prompt: `What happened with ${selected.map((person) => person.split("/").at(-1)).join(", ")}?`,
-      placeHolder: "optional note",
-    });
-    if (note === undefined) return;
-    if (report(await logInteraction(
-      lifeloop.vault, selected, day(), picked.id as InteractionKind, note,
-    ), "interaction logged")) await after();
-  };
-
   // 1.7 — Capture. Costs less than filing does: one box, no navigation.
   on("lifeloop.capture", async () => {
     const line = await vscode.window.showInputBox({
@@ -151,7 +203,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   on("lifeloop.logInteraction", async (input?: Pick<Node, "page">) => {
     const person = activePerson(lifeloop, input);
     if (!person) { void vscode.window.showWarningMessage("LifeLoop: open a page tagged `person`"); return; }
-    await recordInteraction([person]);
+    await recordInteraction(lifeloop, [person]);
   });
 
   on("lifeloop.createReconnectTask", async (input?: Pick<Node, "page">) => {
@@ -294,7 +346,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     const target = taskTarget(lifeloop, input);
     if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     const reminder = /\[reminder:\s*"([^"]+)"\]/.exec(target.line)?.[1];
-    const event = /\[event:\s*"([^"]+)"\]/.exec(target.line)?.[1];
+    const event = exactEventBinding(target.line);
     const done = target.task?.done === true;
     const linkedPeople = target.task ? directPersonLinks(lifeloop.store, target.task) : [];
     const action = await vscode.window.showQuickPick([
@@ -320,7 +372,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       { label: "$(go-to-file) Open Source", id: "source" },
     ], { placeHolder: target.name || "Task actions" });
     if (!action) return;
-    if (action.id === "interaction") return recordInteraction(linkedPeople, event ? "meeting" : undefined);
+    if (action.id === "interaction") {
+      return recordInteraction(lifeloop, linkedPeople, event ? "meeting" : undefined, target, event);
+    }
     if (action.id === "brief") return vscode.commands.executeCommand("lifeloop.preMeetingBrief", target);
     if (action.id === "project") return openTaskProject(lifeloop, target);
     if (action.id === "sync") return vscode.commands.executeCommand("lifeloop.syncExternal");

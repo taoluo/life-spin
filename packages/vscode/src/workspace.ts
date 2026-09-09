@@ -39,6 +39,10 @@ export class WorkspaceVault implements Vault {
     return open ? open.getText() : this.disk.read(path);
   }
 
+  isDirty(path: string): boolean {
+    return this.openDocument(path)?.isDirty === true;
+  }
+
   /**
    * Write through the editor when the document is open, so an unsaved buffer is
    * not silently replaced by a file write the user never sees.
