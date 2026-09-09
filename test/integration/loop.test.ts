@@ -21,12 +21,12 @@ import {
 
 class Workspace {
   readonly store: Store;
-  readonly vault: NodeVault;
+  readonly vault: CheckedNodeVault;
   private paths: string[] = [];
 
   private constructor(readonly root: string) {
     this.store = new Store(join(root, "index.sqlite"));
-    this.vault = new NodeVault(root, () => this.paths);
+    this.vault = new CheckedNodeVault(root, () => this.paths);
   }
 
   static async create(files: Record<string, string> = {}): Promise<Workspace> {
@@ -73,6 +73,17 @@ class Workspace {
   dispose(): void {
     this.store.close();
     rmSync(this.root, { recursive: true, force: true });
+  }
+}
+
+/** Test-only checked adapter; production disk mutations go through VS Code's versioned edits. */
+class CheckedNodeVault extends NodeVault {
+  async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
+    const current = this.exists(path) ? this.read(path) : null;
+    if (current !== before) return false;
+    if (after === null) await this.remove(path);
+    else await this.write(path, after);
+    return true;
   }
 }
 

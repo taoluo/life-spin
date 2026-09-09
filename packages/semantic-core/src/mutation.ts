@@ -140,7 +140,7 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
     for (const effect of effects) {
       for (const [path, before] of cs.expected) {
         const own = effects.find((candidate) => candidate.path === path);
-        const expected = written.includes(path) ? own?.after ?? before : before;
+        const expected = written.includes(path) ? (own ? own.after : before) : before;
         const now = vault.exists(path) ? vault.read(path) : null;
         if (now !== expected) throw new Error(`${path} changed during '${cs.description}'`);
       }

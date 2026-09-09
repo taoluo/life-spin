@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import { apply, changeSet } from "./mutation.ts";
-import type { Vault } from "./vault.ts";
+import { MemoryVault, NodeVault, type Vault } from "./vault.ts";
+
+test("NodeVault does not advertise unsupported conditional disk writes", () => {
+  expect("writeIfUnchanged" in new NodeVault("/unused", () => [])).toBe(false);
+});
 
 class FaultVault implements Vault {
   readonly root = "/memory";
@@ -318,4 +322,15 @@ test("safe rollback removes a file created before a later failure", async () => 
   expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
   expect(vault.exists("New.md")).toBe(false);
   expect(vault.read("C.md")).toBe("C-before");
+});
+
+test("serial removals retain the null state owned by earlier effects", async () => {
+  const vault = MemoryVault.of({ "A.md": "A-before", "B.md": "B-before" });
+  const cs = changeSet("remove two files");
+  cs.expected.set("A.md", "A-before");
+  cs.expected.set("B.md", "B-before");
+  cs.removes.push("A.md", "B.md");
+  expect(await apply(vault, cs)).toMatchObject({ ok: true, changed: ["A.md", "B.md"] });
+  expect(vault.exists("A.md")).toBe(false);
+  expect(vault.exists("B.md")).toBe(false);
 });

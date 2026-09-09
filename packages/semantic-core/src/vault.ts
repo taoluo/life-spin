@@ -76,20 +76,6 @@ export class NodeVault implements Vault {
     rmSync(this.abs(path), { force: true });
   }
 
-  async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
-    const current = this.exists(path) ? this.read(path) : null;
-    if (current !== before) return false;
-    if (after === null) rmSync(this.abs(path), { force: true });
-    else {
-      const full = this.abs(path);
-      mkdirSync(dirname(full), { recursive: true });
-      const temp = `${full}.${process.pid}.tmp`;
-      writeFileSync(temp, after, "utf8");
-      renameSync(temp, full);
-    }
-    return true;
-  }
-
   list(): string[] {
     return this.paths();
   }

@@ -22,12 +22,17 @@ export class WorkspaceVault implements Vault {
   }
 
   private openDocument(path: string): vscode.TextDocument | undefined {
-    const root = resolve(this.root);
-    const full = resolve(root, path);
-    if (full !== root && !full.startsWith(root + sep)) return undefined;
+    const full = this.fileUri(path).fsPath;
     return vscode.workspace.textDocuments.find(
       (d) => resolve(d.uri.fsPath) === full && !d.isClosed,
     );
+  }
+
+  private fileUri(path: string): vscode.Uri {
+    const root = resolve(this.root);
+    const full = resolve(root, path);
+    if (full !== root && !full.startsWith(root + sep)) throw new Error(`path escapes the vault: ${path}`);
+    return vscode.Uri.file(full);
   }
 
   exists(path: string): boolean {
@@ -83,11 +88,41 @@ export class WorkspaceVault implements Vault {
   }
 
   async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
-    const current = this.exists(path) ? this.read(path) : null;
-    if (current !== before) return false;
-    if (after === null) await this.remove(path);
-    else await this.write(path, after);
-    return (this.exists(path) ? this.read(path) : null) === after;
+    if (after === null) throw new Error(`conditional deletion is unsupported for ${path}`);
+    const uri = this.fileUri(path);
+
+    if (before === null) {
+      if (this.exists(path)) return false;
+      const edit = new vscode.WorkspaceEdit();
+      edit.createFile(uri, { contents: new TextEncoder().encode(after) });
+      const applied = await vscode.workspace.applyEdit(edit);
+      if (!applied) return false;
+      try {
+        if (this.disk.durableEquals(path, after) !== true) throw new Error("created contents were not persisted");
+      } catch (error) {
+        throw new Error(`${path} was created but its outcome is unknown: ${(error as Error).message}`);
+      }
+      return true;
+    }
+
+    const document = this.openDocument(path) ?? await vscode.workspace.openTextDocument(uri);
+    if (document.getText() !== before) return false;
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(
+      document.uri,
+      new vscode.Range(document.positionAt(0), document.positionAt(before.length)),
+      after,
+    );
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (!applied) return false;
+    try {
+      if (document.getText() !== after) throw new Error("the editor did not retain the replacement");
+      if (!await document.save()) throw new Error("the editor could not save it");
+      if (this.disk.durableEquals(path, after) !== true) throw new Error("saved contents did not match");
+    } catch (error) {
+      throw new Error(`${path} was edited but its outcome is unknown: ${(error as Error).message}`);
+    }
+    return true;
   }
 
   list(): string[] {

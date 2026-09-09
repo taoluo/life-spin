@@ -5,6 +5,9 @@
  * plain vitest. What genuinely needs a real host — activation, the tree widget,
  * the editor — is not faked here, because a fake that deep tests the fake.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 export enum TreeItemCollapsibleState { None = 0, Collapsed = 1, Expanded = 2 }
 export enum CompletionItemKind { File = 16, Keyword = 13, Snippet = 14, User = 25 }
 export enum DiagnosticSeverity { Error = 0, Warning = 1, Information = 2, Hint = 3 }
@@ -26,8 +29,18 @@ export class Range {
 }
 export class Selection extends Range {}
 export class WorkspaceEdit {
-  edits: { uri: any; range: any; content: string }[] = [];
-  replace(uri: any, range: any, content: string): void { this.edits.push({ uri, range, content }); }
+  edits: { uri: any; range?: any; content: string; create?: boolean; version?: number }[] = [];
+  replace(uri: any, range: any, content: string): void {
+    const document = workspace.textDocuments.find((entry) => entry.uri?.fsPath === uri.fsPath);
+    this.edits.push({ uri, range, content, version: document?.version });
+  }
+  createFile(uri: any, options?: { contents?: Uint8Array }): void {
+    this.edits.push({
+      uri,
+      content: options?.contents ? new TextDecoder().decode(options.contents) : "",
+      create: true,
+    });
+  }
 }
 export class Location { constructor(public uri: any, public range: any) {} }
 export class DocumentSymbol {
@@ -92,8 +105,52 @@ export const workspace = {
   onDidCreateFiles: () => ({ dispose: () => {} }),
   onDidRenameFiles: () => ({ dispose: () => {} }),
   onDidChangeConfiguration: () => ({ dispose: () => {} }),
-  applyEdit: async (_edit: any) => true,
-  openTextDocument: async () => ({}),
+  applyEdit: async (edit: WorkspaceEdit) => {
+    for (const entry of edit.edits) {
+      if (entry.create) {
+        if (existsSync(entry.uri.fsPath)) return false;
+        continue;
+      }
+      const document = workspace.textDocuments.find((candidate) => candidate.uri?.fsPath === entry.uri.fsPath);
+      if (document && entry.version !== undefined && document.version !== entry.version) return false;
+    }
+    for (const entry of edit.edits) {
+      if (entry.create) {
+        mkdirSync(dirname(entry.uri.fsPath), { recursive: true });
+        writeFileSync(entry.uri.fsPath, entry.content);
+        continue;
+      }
+      const document = workspace.textDocuments.find((candidate) => candidate.uri?.fsPath === entry.uri.fsPath);
+      document?.__replace?.(entry.content);
+    }
+    return true;
+  },
+  openTextDocument: async (uri: any) => {
+    const open = workspace.textDocuments.find((document) => document.uri?.fsPath === uri.fsPath);
+    if (open) return open;
+    if (!uri?.fsPath) return {};
+    let text = readFileSync(uri.fsPath, "utf8");
+    const document: any = {
+      uri, languageId: "markdown", version: 1, isDirty: false, isClosed: false,
+      getText: () => text,
+      positionAt: (offset: number) => {
+        const lines = text.slice(0, offset).split("\n");
+        return new Position(lines.length - 1, lines.at(-1)!.length);
+      },
+      __replace: (content: string) => {
+        text = content;
+        document.version++;
+        document.isDirty = true;
+      },
+      save: async () => {
+        writeFileSync(uri.fsPath, text);
+        document.isDirty = false;
+        return true;
+      },
+    };
+    workspace.textDocuments.push(document);
+    return document;
+  },
 };
 export const window = {
   registerFileDecorationProvider: () => ({ dispose: () => {} }),
