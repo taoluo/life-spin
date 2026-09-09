@@ -1,7 +1,9 @@
 import {
-  runProjection, projectionNames, day, type ProjectionName, type ProjectionArgs,
+  runProjection, projectionNames, projections, relationshipDate, relationshipProjectionNames,
+  day, type ProjectionName, type ProjectionArgs,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
+import { parseLocatedQuery } from "./query-language.ts";
 
 /**
  * Queries that render in the Markdown preview.
@@ -37,11 +39,9 @@ export type QueryBlock = {
  * §30's shape, and inventing a DSL here would be a second one to keep in step.
  */
 export function parseQueryBlock(source: string): QueryBlock | { error: string } {
-  const lines = source.split("\n").map((l) => l.trim()).filter(Boolean);
-  if (lines.length === 0) return { error: "empty query" };
-
-  const [head, ...rest] = lines;
-  const projection = head.split(/\s+/)[0] as ProjectionName;
+  const located = parseLocatedQuery(source);
+  if (!located.projection) return { error: "empty query" };
+  const projection = located.projection.text as ProjectionName;
   if (!projectionNames.includes(projection)) {
     return {
       error: `unknown projection "${escape(projection)}" — try one of: ${projectionNames.join(", ")}`,
@@ -51,11 +51,19 @@ export function parseQueryBlock(source: string): QueryBlock | { error: string } 
   const args: ProjectionArgs = {};
   let fields: string[] | undefined;
   let limit: number | undefined;
+  const relationship = (relationshipProjectionNames as readonly string[]).includes(projection);
+  const allowed = projections[projection].allowedArgs ?? [];
 
-  for (const line of rest) {
-    const match = /^([a-zA-Z]+):\s*(.+)$/.exec(line);
-    if (!match) return { error: `cannot read "${escape(line)}" — expected key: value` };
-    const [, key, value] = match;
+  if (located.malformed.length) {
+    return { error: `cannot read "${escape(located.malformed[0].text)}" — expected key: value` };
+  }
+  for (const option of located.options) {
+    const key = option.key.text;
+    const value = option.value.text;
+    if (!value) return { error: `cannot read "${escape(key)}:" — expected key: value` };
+    if (relationship && key !== "fields" && key !== "limit" && !allowed.includes(key as keyof ProjectionArgs)) {
+      return { error: `unknown option "${escape(key)}" for ${projection}` };
+    }
     switch (key) {
       case "date": args.date = value === "today" ? day() : value; break;
       case "days": args.days = Number(value); break;
@@ -65,10 +73,34 @@ export function parseQueryBlock(source: string): QueryBlock | { error: string } 
       case "from": args.from = value; break;
       case "to": args.to = value; break;
       case "kind": args.kind = value; break;
-      case "fields": fields = value.split(",").map((f) => f.trim()); break;
-      case "limit": limit = Number(value); break;
+      case "fields": {
+        fields = option.fields.map((field) => field.text);
+        if (relationship) {
+          const known = projections[projection].fields ?? [];
+          const unknown = fields.find((field) => !known.includes(field));
+          if (unknown) return { error: `unknown field "${escape(unknown)}" for ${projection}` };
+        }
+        break;
+      }
+      case "limit": {
+        limit = Number(value);
+        if (!Number.isInteger(limit) || limit < 0) {
+          return { error: `limit must be a non-negative integer, got ${escape(value)}` };
+        }
+        break;
+      }
       default: return { error: `unknown option "${escape(key)}"` };
     }
+  }
+
+  if (relationship) {
+    for (const key of ["date", "from", "to"] as const) {
+      const value = args[key];
+      if (value !== undefined && !relationshipDate(value)) {
+        return { error: `${key}: ${escape(String(value))} is not an ISO date` };
+      }
+    }
+    if (args.from && args.to && args.from > args.to) return { error: "from is after to" };
   }
 
   return { projection, args, fields, limit };

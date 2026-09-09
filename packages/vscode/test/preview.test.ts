@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LifeLoop } from "../src/workspace.ts";
 import { renderQuery, parseQueryBlock, extendMarkdownIt } from "../src/preview.ts";
+import { findLocatedQueryFences, parseLocatedQuery } from "../src/query-language.ts";
 import * as vscode from "./vscode-mock.ts";
 
 async function workspaceWith(files: Record<string, string>) {
@@ -121,6 +122,11 @@ describe("query blocks in the preview", () => {
       args: { project: "Projects/P" },
     });
     expect(parseQueryBlock("today\ncolour: red")).toMatchObject({ error: expect.any(String) });
+    expect(parseQueryBlock("people\nperson: People/Alice")).toMatchObject({ error: expect.any(String) });
+    expect(parseQueryBlock("interactions\nfields: date, unknown")).toMatchObject({ error: expect.any(String) });
+    for (const limit of ["-1", "1.5", "many"]) {
+      expect(parseQueryBlock(`interactions\nlimit: ${limit}`)).toMatchObject({ error: expect.any(String) });
+    }
   });
 });
 
@@ -154,6 +160,35 @@ describe("the same query on three surfaces", () => {
     const fences = findQueryFences(documentOf(page));
     expect(fences).toHaveLength(1);
     expect(fences[0].source).toBe("actionable\nfields: name");
+  });
+
+  test("fences close only with the matching marker and sufficient run length", () => {
+    const text = [
+      "~~~query",
+      "people",
+      "```",
+      "~~~   ",
+      "````lifeloop",
+      "interactions",
+      "```",
+      "`````",
+    ].join("\r\n");
+    const fences = findLocatedQueryFences(text);
+    expect(fences.map((fence) => [fence.language, fence.markerLength])).toEqual([
+      ["query", 3], ["lifeloop", 4],
+    ]);
+    expect(fences[0].source).toContain("```");
+    expect(fences[1].source).toContain("```");
+  });
+
+  test("located tokens retain live UTF-16 offsets across CRLF", () => {
+    const text = "😀 heading\r\n```query\r\ninteractions\r\nlimit: -1\r\n```\r\n";
+    const fence = findLocatedQueryFences(text)[0];
+    const query = parseLocatedQuery(fence.source, fence.bodyFrom);
+    expect(query.projection?.from).toBe(text.indexOf("interactions"));
+    expect(query.options[0].value).toEqual({
+      text: "-1", from: text.indexOf("-1"), to: text.indexOf("-1") + 2,
+    });
   });
 
   test("CodeLens shows a count — plain text, because a title cannot be a table", async () => {

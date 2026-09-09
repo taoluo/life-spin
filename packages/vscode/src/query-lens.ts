@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { runQueryBlock, toMarkdown, parseQueryBlock } from "./preview.ts";
 import type { LifeLoop } from "./workspace.ts";
+import { findLocatedQueryFences } from "./query-language.ts";
 
 /**
  * The same query, in the editor, on two surfaces that are good at different things.
@@ -19,34 +20,15 @@ import type { LifeLoop } from "./workspace.ts";
  * inventing their own filters, applied inside a single client.
  */
 
-const FENCE = /^```(lifeloop|query)[^\n]*$/;
-
 export type QueryFence = { range: vscode.Range; source: string; open: number };
 
 /** Every LifeLoop query block in a document, with the lines it spans. */
 export function findQueryFences(document: vscode.TextDocument): QueryFence[] {
-  const fences: QueryFence[] = [];
-  let open = -1;
-  let body: string[] = [];
-
-  for (let line = 0; line < document.lineCount; line++) {
-    const text = document.lineAt(line).text;
-    if (open === -1) {
-      if (FENCE.test(text.trim())) { open = line; body = []; }
-      continue;
-    }
-    if (text.trim().startsWith("```")) {
-      fences.push({
-        range: new vscode.Range(open, 0, line, text.length),
-        source: body.join("\n"),
-        open,
-      });
-      open = -1;
-      continue;
-    }
-    body.push(text);
-  }
-  return fences;
+  return findLocatedQueryFences(document.getText()).map((fence) => ({
+    range: new vscode.Range(fence.openLine, 0, fence.closeLine, fence.closeLength),
+    source: fence.source,
+    open: fence.openLine,
+  }));
 }
 
 const summarise = (lifeloop: LifeLoop, source: string): string => {
