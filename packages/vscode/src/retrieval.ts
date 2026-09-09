@@ -6,8 +6,10 @@ import {
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { findLocatedQueryFences, type QueryToken } from "./query-language.ts";
+import { findLocatedQueryFences, queryBodyContains, type QueryToken } from "./query-language.ts";
 import { taskTargetAt } from "./task-target.ts";
+import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
+import { collectNodesOfType, findNodeOfType, type ParseTree } from "../../../vendor/silverbullet/plug-api/lib/tree.ts";
 
 // Only LifeLoop semantic diagnostics and SB special refs live here. Foam owns generic PKM.
 
@@ -33,8 +35,7 @@ const positionAt = (text: string, offset: number): vscode.Position => {
 const exactPageExists = (lifeloop: LifeLoop, page: string): boolean => {
   try {
     if (!validPageName(page)) return false;
-    const path = pathOf(page);
-    return lifeloop.vault.list().includes(path) && lifeloop.vault.exists(path);
+    return lifeloop.vault.exists(pathOf(page));
   } catch { return false; }
 };
 
@@ -56,6 +57,11 @@ type LocatedInteraction = {
   reasons: string[];
 };
 
+const deepNodesOfType = (tree: ParseTree, type: string): ParseTree[] => [
+  ...(tree.type === type ? [tree] : []),
+  ...(tree.children?.flatMap((child) => deepNodesOfType(child, type)) ?? []),
+];
+
 /** One live classifier shared by diagnostics, hover, and symbols. */
 function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): LocatedInteraction[] {
   let date: string | null = null;
@@ -64,35 +70,34 @@ function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): L
   }
   const found: LocatedInteraction[] = [];
   const items = extractLiveItems(text, pageMetaFor(page ?? ""), lifeloop.taskStates);
+  const itemNodes = deepNodesOfType(parseMarkdown(text), "ListItem");
   for (const item of items) {
     const interaction = item.interaction;
-    if (item.inComment === true || typeof interaction !== "string") continue;
+    if (item.tag !== "item" || item.inComment === true || typeof interaction !== "string") continue;
     const [parsedFrom, parsedTo] = (item.range as [number, number] | undefined) ?? [0, 0];
-    const itemFrom = originalSourceOffset(text, parsedFrom);
-    const itemTo = originalSourceOffset(text, parsedTo);
-    const matches = [...text.slice(itemFrom, itemTo)
-      .matchAll(/\[interaction:\s*(?:"([^"\r\n]*)"|([^\]\r\n]*))\]/g)];
-    const match = matches.filter((candidate) =>
-      (candidate[1] ?? candidate[2] ?? "").trim() === interaction.trim()).at(-1);
-    if (!match) continue;
-    const attributeFrom = itemFrom + match.index!;
+    const node = itemNodes.find((candidate) => candidate.from === parsedFrom && candidate.to === parsedTo);
+    const owner = node?.children?.find((child) => child.type === "Paragraph" || child.type === "Task");
+    const attribute = owner && collectNodesOfType(owner, "Attribute").filter((candidate) =>
+      findNodeOfType(candidate, "AttributeName")?.children?.[0].text === "interaction").at(-1);
+    const value = attribute && findNodeOfType(attribute, "AttributeValue");
+    if (attribute?.from === undefined || attribute.to === undefined || value?.from === undefined || value.to === undefined) continue;
+    const attributeFrom = originalSourceOffset(text, attribute.from);
+    const attributeTo = originalSourceOffset(text, attribute.to - 1) + 1;
+    const valueFrom = originalSourceOffset(text, value.from);
+    const valueTo = value.to === value.from ? valueFrom : originalSourceOffset(text, value.to - 1) + 1;
     const lineFrom = text.lastIndexOf("\n", Math.max(0, attributeFrom - 1)) + 1;
     const newline = text.indexOf("\n", attributeFrom);
     const lineTo = newline < 0 ? text.length : newline - (text[newline - 1] === "\r" ? 1 : 0);
-    const raw = match[1] ?? match[2] ?? "";
-    const valueFrom = attributeFrom + (match[1] !== undefined
-      ? match[0].indexOf('"') + 1
-      : match[0].indexOf(":") + 1 + (match[0].slice(match[0].indexOf(":") + 1).match(/^\s*/)?.[0].length ?? 0));
     const linked = ((item.links as string[] | undefined) ?? []).filter((person) => exactPerson(lifeloop, person));
     const reasons = [
-      ...(!raw.trim() ? ["empty Interaction kind is excluded"] : []),
+      ...(!interaction.trim() ? ["empty Interaction kind is excluded"] : []),
       ...(!date ? ["Interaction is excluded because the page has no trustworthy Journal date"] : []),
       ...(!linked.length ? ["Interaction is excluded because it has no direct Person link"] : []),
     ];
     found.push({
-      attribute: { text: match[0], from: attributeFrom, to: attributeFrom + match[0].length },
-      value: { text: raw, from: valueFrom, to: valueFrom + raw.length },
-      kind: raw.trim(), lineFrom, lineTo, reasons,
+      attribute: { text: text.slice(attributeFrom, attributeTo), from: attributeFrom, to: attributeTo },
+      value: { text: interaction, from: valueFrom, to: valueTo },
+      kind: interaction.trim(), lineFrom, lineTo, reasons,
     });
   }
   return found;
@@ -105,7 +110,7 @@ export function definitions(lifeloop: LifeLoop): vscode.DefinitionProvider {
       const text = document.getText();
       const offset = document.offsetAt(position);
       const fence = findLocatedQueryFences(text).find((candidate) =>
-        offset >= candidate.bodyFrom && offset <= candidate.bodyTo);
+        queryBodyContains(candidate, offset));
       const projection = fence?.query.projection?.text;
       const ownsPerson = relationshipProjectionNames.includes(projection as any) &&
         (projections[projection as RelationshipProjectionName].allowedArgs ?? []).includes("person");
@@ -121,14 +126,16 @@ export function definitions(lifeloop: LifeLoop): vscode.DefinitionProvider {
       const link = [...text.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)]
         .find((match) => offset >= match.index! && offset < match.index! + match[0].length);
       const ref = link?.[1].trim() ?? "";
-      const at = ref.lastIndexOf("@");
-      if (at < 0 || exactPageExists(lifeloop, ref)) return undefined;
-      const page = resolveTarget(lifeloop, ref.slice(0, at));
-      if (!page) return undefined;
-      const source = resolveRef(lifeloop.vault, `${page}${ref.slice(at)}`);
-      if ("ok" in source) return undefined;
-      const target = positionAt(source.text, source.offset);
-      return new vscode.Location(lifeloop.pageUri(page), new vscode.Range(target, target));
+      try {
+        const at = ref.lastIndexOf("@");
+        if (at < 0 || exactPageExists(lifeloop, ref)) return undefined;
+        const page = resolveTarget(lifeloop, ref.slice(0, at));
+        if (!page) return undefined;
+        const source = resolveRef(lifeloop.vault, `${page}${ref.slice(at)}`);
+        if ("ok" in source) return undefined;
+        const target = positionAt(source.text, source.offset);
+        return new vscode.Location(lifeloop.pageUri(page), new vscode.Range(target, target));
+      } catch { return undefined; }
     },
   };
 }
@@ -275,7 +282,7 @@ export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
     provideHover(document, position) {
       const text = document.getText();
       const offset = document.offsetAt(position);
-      if (findLocatedQueryFences(text).some((fence) => offset >= fence.bodyFrom && offset <= fence.bodyTo) ||
+      if (findLocatedQueryFences(text).some((fence) => queryBodyContains(fence, offset)) ||
           [...text.matchAll(/\[\[[^\]]+\]\]/g)].some((link) =>
             offset >= link.index! && offset < link.index! + link[0].length)) return undefined;
 

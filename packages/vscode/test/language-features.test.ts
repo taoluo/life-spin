@@ -185,6 +185,40 @@ describe("narrow definitions", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("gives a newly created literal @ filename precedence before the index refreshes", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "Ordinary.md": "* anchor $anchor\n",
+      "Source.md": "[[Ordinary@anchor]]\n",
+    });
+    const document = documentOf("[[Ordinary@anchor]]\n", join(dir, "Source.md"));
+    const provider = definitions(lifeloop) as any;
+    try {
+      writeFileSync(join(dir, "Ordinary@anchor.md"), "literal\n");
+      expect(await provider.provideDefinition(document, { line: 0, character: 5 })).toBeUndefined();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("special-ref definitions fail closed when the target cannot be inspected", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "Target.md": "* anchored $task\n",
+      "Source.md": "[[Target@task]]\n",
+    });
+    const document = documentOf("[[Target@task]]\n", join(dir, "Source.md"));
+    const provider = definitions(lifeloop) as any;
+    try {
+      for (const method of ["exists", "read"] as const) {
+        const original = lifeloop.vault[method].bind(lifeloop.vault);
+        const inspected = vi.spyOn(lifeloop.vault, method).mockImplementation(((path: string) => {
+          if (path === "Target.md") throw new Error("unreadable");
+          return original(path);
+        }) as any);
+        expect(() => provider.provideDefinition(document, { line: 0, character: 5 })).not.toThrow();
+        expect(provider.provideDefinition(document, { line: 0, character: 5 })).toBeUndefined();
+        inspected.mockRestore();
+      }
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("resolves only exact canonical Person values inside query bodies", async () => {
     const { lifeloop, dir } = await workspaceWith({
       "People/Alice.md": "---\ntags: person\n---\n",
@@ -197,6 +231,12 @@ describe("narrow definitions", () => {
       const target = await provider.provideDefinition(document, { line: 2, character: 15 });
       expect(target.uri.fsPath).toBe(join(dir, "People/Alice.md"));
       expect(await provider.provideDefinition(document, { line: 4, character: 3 })).toBeUndefined();
+      const quoted = documentOf(
+        "> ```query\n> person-context\n> person: People/Alice\n> ```\n",
+        join(dir, "Query.md"),
+      );
+      expect((await provider.provideDefinition(quoted, { line: 2, character: 17 })).uri.fsPath)
+        .toBe(join(dir, "People/Alice.md"));
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -329,6 +369,19 @@ describe("command-only code actions", () => {
       expect(replace).toHaveBeenCalledTimes(1);
       expect((replace.mock.calls[0][0] as any).edits[0].uri).toBe(document.uri);
       expect((replace.mock.calls[0][0] as any).edits[0].content).toBe("person");
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("offers query fixes inside blockquote containers", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "Query.md": "" });
+    const text = "> ```query\n> interactions\n> Person: People/Alice\n> ```\n";
+    const document = documentOf(text, join(dir, "Query.md"));
+    const diagnostics = relationshipDiagnostics(lifeloop, text, "Query", true);
+    try {
+      const actions = await (codeActions(lifeloop) as any).provideCodeActions(
+        document, new vscode.Range(2, 0, 2, 24), { diagnostics },
+      );
+      expect(actions.map((action: any) => action.title)).toEqual(["Change to person"]);
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -525,6 +578,39 @@ test("live Interaction features follow parser and core item semantics", async ()
     }
     expect(relationshipDiagnostics(lifeloop, text, "Journal/2026-09-09", true)
       .map((entry: any) => entry.message)).toEqual(["empty Interaction kind is excluded"]);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("live Interaction ranges come from direct non-task parsed attributes", async () => {
+  const text = [
+    "* [[People/Alice]] [interaction: coffee] `[interaction: coffee]`",
+    "* [[People/Alice]] [interaction: call]",
+    "  * [[People/Alice]] [interaction: call]",
+    "* [ ] task [[People/Alice]] [interaction: task]",
+    "* [[People/Alice]] [interaction: 'single']",
+    "",
+  ].join("\n");
+  const { lifeloop, dir } = await workspaceWith({
+    "People/Alice.md": "---\ntags: person\n---\n",
+    "Journal/2026-09-09.md": text,
+  });
+  const document = documentOf(text, join(dir, "Journal/2026-09-09.md"));
+  const provider = relationshipHovers(lifeloop) as any;
+  const attributes = [...text.matchAll(/\[interaction:/g)].map((match) => match.index!);
+  try {
+    const symbols = (await (documentSymbols(lifeloop) as any).provideDocumentSymbols(document))
+      .filter((symbol: any) => symbol.detail.includes("Interaction"));
+    expect(symbols.map((symbol: any) => symbol.name)).toEqual(["coffee", "call", "call", "single"]);
+    expect(symbols.map((symbol: any) => document.offsetAt(symbol.selectionRange.start)))
+      .toEqual([attributes[0], attributes[2], attributes[3], attributes[5]]);
+    for (const index of [attributes[0], attributes[2], attributes[3], attributes[5]]) {
+      expect((await provider.provideHover(document, document.positionAt(index + 2))).contents.value)
+        .toContain("counts as an Interaction");
+    }
+    expect(await provider.provideHover(document, document.positionAt(attributes[1] + 2))).toBeUndefined();
+    const task = await provider.provideHover(document, document.positionAt(attributes[4] + 2));
+    expect(task.contents.value).toContain("Task relationships");
+    expect(task.contents.value).not.toContain("counts as an Interaction");
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
