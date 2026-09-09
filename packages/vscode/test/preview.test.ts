@@ -250,6 +250,7 @@ describe("the same query on three surfaces", () => {
 
       const keys = labels("~~~lifeloop\ninteractions\n\n~~~", 2, 0);
       expect(new Set(keys)).toEqual(new Set(["person", "from", "to", "kind", "fields", "limit"]));
+      expect(new Set(labels("~~~lifeloop\r\ninteractions\r\n\r\n~~~", 2, 0))).toEqual(new Set(keys));
       expect(labels("```query\ninteractions\nperson: \n```", 2, 8)).toEqual(["People/Alice"]);
       expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
         expect.arrayContaining(["call", "meeting"]),
@@ -278,6 +279,10 @@ describe("the same query on three surfaces", () => {
   test.each([
     ["opening info at EOF", "~~~query", 0, 8],
     ["blockquote prefix", "> ~~~query\n> ", 1, 0],
+    ["blank-body closing delimiter", "~~~query\n\n~~~", 2, 0],
+    ["later blockquote prefix", "> ~~~query\n> interactions\n> kind: call\n> ~~~", 2, 0],
+    ["later list prefix", "* ~~~query\n  interactions\n  kind: call\n  ~~~", 2, 0],
+    ["later CRLF blockquote prefix", "> ~~~query\r\n> interactions\r\n> kind: call\r\n> ~~~", 2, 0],
   ])("completion excludes %s", async (_name, text, line, character) => {
     const { queryCompletions } = await import("../src/query-lens.ts");
     const { lifeloop, dir } = await workspaceWith({ "W.md": "" });
@@ -304,6 +309,10 @@ describe("the same query on three surfaces", () => {
   test.each([
     ["opening info at EOF", "~~~query", 0, 8],
     ["blockquote prefix", "> ~~~query\n> people", 1, 0],
+    ["blank-body closing delimiter", "~~~query\n\n~~~", 2, 0],
+    ["later blockquote prefix", "> ~~~query\n> interactions\n> kind: call\n> ~~~", 2, 0],
+    ["later list prefix", "* ~~~query\n  interactions\n  kind: call\n  ~~~", 2, 0],
+    ["later CRLF blockquote prefix", "> ~~~query\r\n> interactions\r\n> kind: call\r\n> ~~~", 2, 0],
   ])("query hover excludes %s", async (_name, text, line, character) => {
     const { hovers } = await import("../src/query-lens.ts");
     const { lifeloop, dir } = await workspaceWith({ "W.md": "" });

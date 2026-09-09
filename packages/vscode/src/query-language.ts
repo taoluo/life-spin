@@ -121,12 +121,20 @@ export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
         parsedFrom,
       };
     });
-    const codeLines = code.flatMap((part) => lines(part.parsedText).map((line) => ({
-      ...line,
-      from: originalSourceOffset(source, part.parsedFrom + line.from),
-      to: originalSourceOffset(source, part.parsedFrom + line.to),
-      next: originalSourceOffset(source, part.parsedFrom + line.next),
-    })));
+    const codeLines = code.flatMap((part) => lines(part.parsedText).flatMap((line) => {
+      const from = originalSourceOffset(source, part.parsedFrom + line.from);
+      if (line.from === part.parsedText.length) {
+        const blank = sourceLines.find((candidate) =>
+          candidate.text === "" && from >= candidate.from && from < candidate.next);
+        return blank ? [blank] : [];
+      }
+      return [{
+        ...line,
+        from,
+        to: originalSourceOffset(source, part.parsedFrom + line.to),
+        next: originalSourceOffset(source, part.parsedFrom + line.next),
+      }];
+    }));
     const bodyFrom = codeLines[0]?.from ?? open.next;
     const bodyTo = closing ? close.from : endOffset;
     const hasOpeningNewline = open.next > open.to;
