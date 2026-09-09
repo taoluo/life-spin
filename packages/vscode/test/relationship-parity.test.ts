@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
-  bakeAt, runLua, runProjection,
+  bakeAt, findBakedSections, runLua, runProjection,
 } from "@lifeloop/semantic-core";
 import { evaluateToMarkdown } from "../src/lua.ts";
 import { codeLenses, hovers } from "../src/query-lens.ts";
@@ -96,20 +96,29 @@ const expected = {
 
 const cases = [
   { name: "people", args: {}, options: [], luaArgs: "", cliArgs: [],
-    fields: Object.keys(expected.people[0]), renderIdentity: "person", rows: expected.people },
+    fields: Object.keys(expected.people[0]), renderIdentity: "person", rows: expected.people,
+    renderedCells: ["friend", "02-29", "30", "1"], bakedCells: ["02-29", "2026-08-31", "1"],
+    excludedCells: [] },
   { name: "interactions", args: { person: "People/Alice", kind: "coffee" },
     options: ["person: People/Alice", "kind: coffee"],
     luaArgs: 'person = "People/Alice", kind = "coffee"',
     cliArgs: ["--person", "People/Alice", "--kind", "coffee"],
-    fields: Object.keys(coffee[0]), renderIdentity: "text", rows: coffee },
+    fields: Object.keys(coffee[0]), renderIdentity: "text", rows: coffee,
+    renderedCells: ["2026-08-01", "coffee", "People/Alice"],
+    bakedCells: ["2026-08-01", "coffee"],
+    excludedCells: ["People/Carol", "People/Eve"] },
   { name: "reconnect", args: { date: "2026-09-09" }, options: ["date: 2026-09-09"],
     luaArgs: 'date = "2026-09-09"', cliArgs: ["--date", "2026-09-09"],
     fields: ["person", "kind", "due", "lastInteractionDate"], renderIdentity: "person",
-    rows: expected.reconnect },
+    rows: expected.reconnect, renderedCells: ["never-contacted", "2026-08-31"],
+    bakedCells: ["never-contacted", "2026-08-01"],
+    excludedCells: ["People/Dave", "People/Eve"] },
   { name: "person-context", args: { person: "People/Alice" }, options: ["person: People/Alice"],
     luaArgs: 'person = "People/Alice"', cliArgs: ["--person", "People/Alice"],
     fields: Object.keys(expected["person-context"][0]), renderIdentity: "person",
-    rows: expected["person-context"] },
+    rows: expected["person-context"], renderedCells: ["friend", "02-29", "30", "1", "Work@0"],
+    bakedCells: ["02-29", "2026-08-31", "1"],
+    excludedCells: ["People/Bob", "People/Carol", "People/Dave", "People/Eve"] },
 ] as const;
 
 const assertRows = (actual: unknown, wanted: readonly unknown[]) => {
@@ -124,12 +133,28 @@ const assertRows = (actual: unknown, wanted: readonly unknown[]) => {
   }
 };
 
-const assertOrder = (rendered: string, values: string[]) => {
-  let from = 0;
-  for (const value of values) {
-    const at = rendered.indexOf(value, from);
-    expect(at, `${value} missing or out of order in ${rendered}`).toBeGreaterThanOrEqual(from);
-    from = at + value.length;
+const renderedCell = (value: string, html: boolean) => html ? `<td>${value}</td>` : `| ${value} |`;
+
+const assertRendered = (
+  rendered: string,
+  html: boolean,
+  entry: typeof cases[number],
+  wanted: readonly Record<string, unknown>[],
+  cells: readonly string[] = entry.renderedCells,
+) => {
+  const rows = html
+    ? (/<tbody>([\s\S]*?)<\/tbody>/.exec(rendered)?.[1].match(/<tr(?:\s|>)/g) ?? []).length
+    : Math.max(0, rendered.split("\n").filter((line) => line.startsWith("| ")).length - 2);
+  expect(rows).toBe(wanted.length);
+  for (const value of cells) {
+    if (wanted.some((row) => Object.values(row).some((cell) => String(cell) === value))) {
+      expect(rendered).toContain(renderedCell(value, html));
+    }
+  }
+  const dropped = entry.rows.slice(wanted.length)
+    .map((row) => String((row as any)[entry.renderIdentity]));
+  for (const value of [...entry.excludedCells, ...dropped]) {
+    expect(rendered).not.toContain(renderedCell(value, html));
   }
 };
 
@@ -167,14 +192,14 @@ describe("relationship projection parity", () => {
           assertRows(outcome.ok ? outcome.rows : [], wanted);
 
           const markdown = toMarkdown(outcome);
-          expect((hovers(() => lifeloop) as any).provideHover(queryDocument(source), { line: 2 }).contents.value)
-            .toBe(markdown);
+          const hover = (hovers(() => lifeloop) as any)
+            .provideHover(queryDocument(source), { line: 2, character: 0 }).contents.value;
+          expect(hover).toBe(markdown);
+          assertRendered(hover, false, entry, wanted);
           expect((codeLenses(() => lifeloop) as any).provideCodeLenses(queryDocument(source))[0].command.title)
-            .toContain(`${wanted.length} result`);
-          const identities = wanted.map((row) => String((row as any)[entry.renderIdentity]));
-          assertOrder(markdown, identities);
+            .toBe(`$(list-flat) ${entry.name}: ${wanted.length} ${wanted.length === 1 ? "result" : "results"}`);
           const preview = renderQuery(lifeloop, source);
-          assertOrder(preview, identities);
+          assertRendered(preview, true, entry, wanted);
           if (limit === 0) {
             expect(markdown).toBe("_Nothing to show._");
             expect(preview).toContain("Nothing to show.");
@@ -186,7 +211,10 @@ describe("relationship projection parity", () => {
             lifeloop.vault, "Recipe", 3, (value) => evaluateToMarkdown(lifeloop, value),
           )).ok).toBe(true);
           const baked = lifeloop.vault.read("Recipe.md");
-          assertOrder(baked, identities);
+          const section = findBakedSections(baked)[0];
+          assertRendered(
+            baked.slice(section.bodyFrom, section.bodyTo).trim(), false, entry, wanted, entry.bakedCells,
+          );
           if (limit === 0) expect(baked).toContain("_nothing_");
 
           const lua = await runLua(expression, { store: lifeloop.store, vault: lifeloop.vault });
