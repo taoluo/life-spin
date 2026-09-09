@@ -151,6 +151,8 @@ describe("the same query on three surfaces", () => {
       lineCount: lines.length,
       lineAt: (n: number) => ({ text: lines[n], length: lines[n].length }),
       getText: () => text,
+      offsetAt: (position: { line: number; character: number }) =>
+        lines.slice(0, position.line).reduce((n, line) => n + line.length + 1, 0) + position.character,
       languageId: "markdown",
     } as any;
   };
@@ -189,6 +191,39 @@ describe("the same query on three surfaces", () => {
     expect(query.options[0].value).toEqual({
       text: "-1", from: text.indexOf("-1"), to: text.indexOf("-1") + 2,
     });
+  });
+
+  test("completion stays inside query bodies and legal value positions", async () => {
+    const { queryCompletions } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "W.md": "* [ ] task\n",
+    });
+    const labels = (text: string, line: number, character: number) =>
+      (queryCompletions(() => lifeloop) as any)
+        .provideCompletionItems(documentOf(text), { line, character })
+        .map((item: any) => item.label);
+    try {
+      expect(labels("outside", 0, 3)).toEqual([]);
+      expect(labels("```query\n\n", 1, 0)).toEqual(expect.arrayContaining(["people", "interactions"]));
+
+      const keys = labels("~~~lifeloop\ninteractions\n\n~~~", 2, 0);
+      expect(new Set(keys)).toEqual(new Set(["person", "from", "to", "kind", "fields", "limit"]));
+      expect(labels("```query\ninteractions\nperson: \n```", 2, 8)).toEqual(["People/Alice"]);
+      expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
+        expect.arrayContaining(["call", "meeting"]),
+      );
+      expect(labels("```query\ninteractions\nfields: \n```", 2, 8)).toEqual(
+        expect.arrayContaining(["ref", "date", "people"]),
+      );
+      expect(labels("```query\ninteractions\nfrom: \n```", 2, 6)).toEqual([]);
+
+      lifeloop.noteSourceChange();
+      expect(labels("```query\ninteractions\nperson: \n```", 2, 8)).toEqual([]);
+      expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
+        expect.arrayContaining(["call", "meeting"]),
+      );
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("CodeLens shows a count — plain text, because a title cannot be a table", async () => {

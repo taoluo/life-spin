@@ -8,7 +8,7 @@ import {
 import { register } from "./commands.ts";
 import { registerApple } from "./apple.ts";
 import { extendMarkdownIt } from "./preview.ts";
-import { codeLenses, hovers, registerQueryCommands } from "./query-lens.ts";
+import { codeLenses, hovers, queryCompletions, registerQueryCommands } from "./query-lens.ts";
 import { registerLua, renderSpaceLua, renderExpression, renderSpaceStyle } from "./lua.ts";
 import { register as registerMentions } from "./mentions.ts";
 import { register as registerXray } from "./xray.ts";
@@ -56,6 +56,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
   context.subscriptions.push(status);
 
   const markdown: vscode.DocumentSelector = { language: "markdown", scheme: "file" };
+  const markdownText: vscode.DocumentSelector = [markdown, { language: "markdown", scheme: "untitled" }];
   context.subscriptions.push(
     vscode.languages.registerDocumentSymbolProvider(markdown, documentSymbols(lifeloop)),
     // A query block gets a count and an action above it, and its table on hover.
@@ -63,6 +64,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
     // same projection.
     vscode.languages.registerCodeLensProvider(markdown, codeLenses(() => lifeloop)),
     vscode.languages.registerHoverProvider(markdown, hovers(() => lifeloop)),
+    vscode.languages.registerCompletionItemProvider(markdownText, queryCompletions(() => lifeloop), ":", ","),
   );
   registerQueryCommands(() => lifeloop, context);
   registerLua(() => lifeloop, context);

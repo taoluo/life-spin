@@ -92,6 +92,7 @@ export class LifeLoop {
   private indexing: Promise<void> = Promise.resolve();
   private readonly indexedBuffers = new Map<string, string>();
   private sourceRevision = 0;
+  private indexedRevision = -1;
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChange = this.changed.event;
 
@@ -139,6 +140,7 @@ export class LifeLoop {
       }
       this.taskStates = states;
     }
+    this.indexedRevision = this.sourceRevision;
     this.changed.fire();
   }
 
@@ -198,8 +200,9 @@ export class LifeLoop {
         throw new Error("task-state policy source changed while rebuilding; retry the operation");
       }
       this.taskStates = states;
-      this.changed.fire();
-    } else this.changed.fire();
+    }
+    this.indexedRevision = this.sourceRevision;
+    this.changed.fire();
   }
 
   private async indexDocument(uri: vscode.Uri, text: string, states: CycleStates): Promise<void> {
@@ -291,6 +294,10 @@ export class LifeLoop {
 
   noteSourceChange(): void {
     this.sourceRevision++;
+  }
+
+  indexIsSettled(): boolean {
+    return this.indexedRevision === this.sourceRevision;
   }
 
   private serial(work: () => Promise<void>): Promise<void> {

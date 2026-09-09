@@ -1,4 +1,8 @@
 import * as vscode from "vscode";
+import {
+  INTERACTION_KINDS, people, projectionNames, projections, relationshipProjectionNames,
+  type ProjectionArgs, type RelationshipProjectionName,
+} from "@lifeloop/semantic-core";
 import { runQueryBlock, toMarkdown, parseQueryBlock } from "./preview.ts";
 import type { LifeLoop } from "./workspace.ts";
 import { findLocatedQueryFences } from "./query-language.ts";
@@ -29,6 +33,58 @@ export function findQueryFences(document: vscode.TextDocument): QueryFence[] {
     source: fence.source,
     open: fence.openLine,
   }));
+}
+
+const completion = (label: string, kind: vscode.CompletionItemKind, insertText = label) => {
+  const item = new vscode.CompletionItem(label, kind);
+  item.insertText = insertText;
+  return item;
+};
+
+export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.CompletionItemProvider {
+  return {
+    provideCompletionItems(document, position) {
+      const instance = lifeloop();
+      if (!instance) return [];
+      const text = document.getText();
+      const offset = document.offsetAt(position);
+      const fence = findLocatedQueryFences(text).find((candidate) =>
+        offset >= candidate.bodyFrom && offset <= candidate.bodyTo);
+      if (!fence) return [];
+
+      const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+      const lineEnd = text.indexOf("\n", offset);
+      const projection = fence.query.projection;
+      if (!projection || (projection.from >= lineStart && projection.from <= (lineEnd < 0 ? text.length : lineEnd))) {
+        return projectionNames.map((name) => completion(name, vscode.CompletionItemKind.Keyword));
+      }
+      if (!(relationshipProjectionNames as readonly string[]).includes(projection.text)) return [];
+
+      const before = text.slice(lineStart, offset);
+      const colon = before.indexOf(":");
+      const name = projection.text as RelationshipProjectionName;
+      if (colon < 0) {
+        return [...(projections[name].allowedArgs ?? []), "fields", "limit"]
+          .map((key) => completion(String(key), vscode.CompletionItemKind.Keyword, `${String(key)}: `));
+      }
+
+      const key = /^\s*([A-Za-z]+)\s*:/.exec(before)?.[1] as keyof ProjectionArgs | "fields" | "limit" | undefined;
+      if (!key) return [];
+      if (key === "kind") {
+        return INTERACTION_KINDS.map((kind) => completion(kind, vscode.CompletionItemKind.Keyword));
+      }
+      if (key === "fields") {
+        return (projections[name].fields ?? [])
+          .map((field) => completion(field, vscode.CompletionItemKind.Keyword));
+      }
+      if (key === "person" && (projections[name].allowedArgs ?? []).includes("person") && instance.indexIsSettled()) {
+        return people(instance.store)
+          .map((person) => String(person.ref)).sort()
+          .map((person) => completion(person, vscode.CompletionItemKind.User));
+      }
+      return [];
+    },
+  };
 }
 
 const summarise = (lifeloop: LifeLoop, source: string): string => {
