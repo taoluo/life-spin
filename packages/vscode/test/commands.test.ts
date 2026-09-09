@@ -108,6 +108,38 @@ describe("task-originated Log Interaction", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("keeps the exact source admitted by the final Log check", async () => {
+    const { lifeloop, dir } = await workspaceWith(files());
+    try {
+      const source = task(lifeloop, line);
+      vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any, options: any) =>
+        options.placeHolder === "Who was involved?"
+          ? items
+          : items.find((item: any) => item.id === "meeting")) as any);
+      let afterNote = false;
+      vi.spyOn(vscode.window, "showInputBox").mockImplementation((async () => {
+        afterNote = true;
+        return "notes";
+      }) as any);
+      const read = lifeloop.vault.read.bind(lifeloop.vault);
+      let finalReads = 0;
+      let changed = false;
+      vi.spyOn(lifeloop.vault, "read").mockImplementation((path) => {
+        const text = read(path);
+        if (afterNote && path === "Work.md" && ++finalReads === 4) {
+          writeFileSync(join(dir, path), `${line.replace("Meet", "Changed without a Person").replace(" [[People/Alice]] and [[People/Bob]]", "")}\n`);
+          changed = true;
+        }
+        return text;
+      });
+
+      await recordInteraction(lifeloop, ["People/Alice", "People/Bob"], "meeting", source, "E1");
+      expect(changed).toBe(true);
+      expect(readFileSync(join(dir, "Work.md"), "utf8")).toContain("Changed without a Person");
+      expect(lifeloop.vault.exists(`Journal/${day()}.md`)).toBe(false);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   for (const boundary of ["task identity", "task text", "direct People", "Person tag", "default event"] as const) {
     test(`registered Log commands preserve an existing Journal after ${boundary} drift`, async () => {
       const date = day();
@@ -249,6 +281,30 @@ for (const field of ["Deadline", "Scheduled"] as const) {
   });
 }
 
+test("Deadline keeps exact numeric identity after refresh returns", async () => {
+  const line = "* [ ] unchanged";
+  const initial = `prefixxxxx\n${line}\n`;
+  const moved = `prefix\n${line}\n`;
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": initial });
+  const handlers = registered(lifeloop);
+  vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("2026-09-10" as any);
+  const read = lifeloop.vault.read.bind(lifeloop.vault);
+  let taskReads = 0;
+  vi.spyOn(lifeloop.vault, "read").mockImplementation((path) => {
+    const text = read(path);
+    if (path === "Work.md" && ++taskReads === 4) {
+      queueMicrotask(() => writeFileSync(join(dir, path), moved));
+    }
+    return text;
+  });
+  try {
+    await handlers.get("lifeloop.setDeadline")!({
+      handle: { ref: "Work@11", expectedText: line, expectedState: " " },
+    });
+    expect(readFileSync(join(dir, "Work.md"), "utf8")).toBe(moved);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 for (const [command, state] of [["completeTask", " "], ["reopenTask", "x"]] as const) {
   test(`${command} awaits refresh and re-admits the retained task`, async () => {
     const line = `* [${state}] unchanged`;
@@ -291,6 +347,7 @@ test("Attach Page re-admits its task after the prompt", async () => {
   vscode.window.activeTextEditor = {
     document: {
       uri: vscode.Uri.file(join(dir, "Work.md")), languageId: "markdown",
+      getText: () => initial,
       lineAt: () => ({ text: line, range: { start: new vscode.Position(1, 0) } }),
       offsetAt: () => "prefixxxxx\n".length,
     },

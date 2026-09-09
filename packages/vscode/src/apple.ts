@@ -235,7 +235,8 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
 
     const list = lifeloop.config("reminderList", "");
     try {
-      const current = await refreshTaskTarget(lifeloop, at);
+      const refreshed = await refreshTaskTarget(lifeloop, at);
+      const current = refreshed && taskTarget(lifeloop, refreshed);
       if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no reminder was added"); return; }
       const result = await bindReminder(
         lifeloop.vault, current.handle, current.name, "", list, new Reminders(),
@@ -266,7 +267,8 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
     if (!when) return;
 
     try {
-      const current = await refreshTaskTarget(lifeloop, at);
+      const refreshed = await refreshTaskTarget(lifeloop, at);
+      const current = refreshed && taskTarget(lifeloop, refreshed);
       if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no event was added"); return; }
       const minutes = lifeloop.config("eventMinutes", 60);
       const start = new Date(when.replace(" ", "T"));

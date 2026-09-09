@@ -2,6 +2,15 @@ import { resolveHandle, setTaskAttribute, type Vault, type GuardedSourceHandle, 
 import type { Reminders } from "./reminders.ts";
 import type { Calendar } from "./calendar.ts";
 
+const strictTaskSource = (vault: Vault, handle: GuardedSourceHandle) => {
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  const numeric = /@(\d+)$/.exec(handle.ref);
+  return numeric && source.lineStart !== Number(numeric[1])
+    ? { ok: false as const, reason: "stale" as const, message: `${handle.ref} no longer starts at that position` }
+    : source;
+};
+
 /**
  * Create a reminder and bind it to a task, or leave nothing behind.
  *
@@ -23,11 +32,15 @@ export async function bindReminder(
   list: string,
   bridge: Pick<Reminders, "create" | "remove">,
 ): Promise<MutationResult<{ id: string }> & { orphaned?: string }> {
+  const admitted = strictTaskSource(vault, handle);
+  if ("ok" in admitted) return admitted;
   const id = await bridge.create(title, body, list);
 
   let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
   try {
-    bound = await setTaskAttribute(vault, handle, "reminder", id);
+    const current = strictTaskSource(vault, handle);
+    if ("ok" in current) bound = current;
+    else bound = await setTaskAttribute(vault, handle, "reminder", id);
   } catch (error) {
     return {
       ok: false,
@@ -68,14 +81,16 @@ export async function bindCalendar(
   calendarName: string,
   bridge: Pick<Calendar, "create" | "remove">,
 ): Promise<MutationResult<{ id: string }> & { orphaned?: string }> {
-  const source = resolveHandle(vault, handle);
+  const source = strictTaskSource(vault, handle);
   if ("ok" in source) return source;
   const bindings = source.line.match(/\[event:\s*"[^"]*"\]/g) ?? [];
   if (bindings.length) return { ok: false, reason: bindings.length > 1 ? "ambiguous" : "invalid", message: "task already has a Calendar binding" };
   const id = await bridge.create(title, start, end, calendarName);
   let bound: Awaited<ReturnType<typeof setTaskAttribute>>;
   try {
-    bound = await setTaskAttribute(vault, handle, "event", id);
+    const current = strictTaskSource(vault, handle);
+    if ("ok" in current) bound = current;
+    else bound = await setTaskAttribute(vault, handle, "event", id);
   } catch (error) {
     return { ok: false, reason: "unknown", message: `${(error as Error).message}. Calendar event ${id} was retained because binding outcome is unknown.`, orphaned: id };
   }

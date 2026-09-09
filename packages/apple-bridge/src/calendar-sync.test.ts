@@ -97,9 +97,27 @@ test("a Calendar event is removed when its Markdown binding loses a race", async
   expect(vault.read("Work.md")).toContain("Edited");
 });
 
+test("a Calendar event is removed when its numeric task moves during creation", async () => {
+  const line = "* [ ] Old";
+  const vault = MemoryVault.of({ "Work.md": `prefixxxxx\n${line}\n` });
+  let removed = "";
+  const result = await bindCalendar(
+    vault, { ref: "Work@11", expectedText: line, expectedState: " " },
+    "Old", "start", "end", "Calendar",
+    {
+      create: async () => { await vault.write("Work.md", `prefix\n${line}\n`); return "E2"; },
+      remove: async (id) => { removed = id; return true; },
+    },
+  );
+  expect(result.ok).toBe(false);
+  expect(removed).toBe("E2");
+  expect(vault.read("Work.md")).toBe(`prefix\n${line}\n`);
+});
+
 test("an uncertain Calendar binding retains the event for reconciliation", async () => {
   class RefusingVault extends MemoryVault {
     override async write(): Promise<void> { throw new Error("editor refused write"); }
+    override async writeIfUnchanged(): Promise<boolean> { throw new Error("editor refused write"); }
   }
   const vault = new RefusingVault(new Map([["Work.md", "* [ ] Old\n"]]));
   let removed = false;

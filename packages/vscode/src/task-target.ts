@@ -19,6 +19,7 @@ export type TaskTargetInput = {
 export type TaskTarget = {
   handle: TaskCommandHandle;
   page: string;
+  sourceText: string;
   offset: number;
   line: string;
   name: string;
@@ -81,6 +82,7 @@ export function taskTargetAt(
       capturedAt: new Date().toISOString(),
     },
     page,
+    sourceText: document.getText(),
     offset,
     line: sourceLine.text,
     name: taskNameFromLine(sourceLine.text) ?? "",
@@ -100,6 +102,7 @@ export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTar
     return {
       handle,
       page: source.page,
+      sourceText: source.text,
       offset: source.lineStart,
       line: source.line,
       name: taskNameFromLine(source.line) ?? "",

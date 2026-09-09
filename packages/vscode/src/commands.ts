@@ -113,7 +113,7 @@ export async function recordInteraction(
   }
   const expectedSources = final === true
     ? new Map<string, string>()
-    : new Map([[`${final.page}.md`, lifeloop.vault.read(`${final.page}.md`)]]);
+    : new Map([[`${final.page}.md`, final.sourceText]]);
   if (report(await logInteraction(
     lifeloop.vault, selected, date, picked.id as InteractionKind, note,
     journalFolder, expectedSources,
@@ -436,7 +436,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         validateInput: (v) => (v === "" || /^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "YYYY-MM-DD"),
       });
       if (value === undefined) return;
-      const current = await refreshTaskTarget(lifeloop, at);
+      const refreshed = await refreshTaskTarget(lifeloop, at);
+      const current = refreshed && taskTarget(lifeloop, refreshed);
       if (!current) { vscode.window.showWarningMessage(`LifeLoop: that task changed; ${field} was not set`); return; }
       const result = await setTaskAttribute(lifeloop.vault, current.handle, field, value || null);
       if (report(result, `set ${field}`)) await after();
@@ -449,7 +450,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     // The destination is the user's, never inferred from a folder convention.
     const destination = await vscode.window.showInputBox({ prompt: "New page for this task" });
     if (!destination) return;
-    const current = await refreshTaskTarget(lifeloop, at);
+    const refreshed = await refreshTaskTarget(lifeloop, at);
+    const current = refreshed && taskTarget(lifeloop, refreshed);
     if (!current) { vscode.window.showWarningMessage("LifeLoop: that task changed; no page was attached"); return; }
     if (report(await attachPageToTask(lifeloop.vault, current.handle, destination), `attached ${destination}`)) {
       await after();
