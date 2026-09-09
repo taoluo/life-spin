@@ -111,6 +111,7 @@ export const languages = {
   registerHoverProvider: () => ({ dispose: () => {} }),
   registerDocumentLinkProvider: () => ({ dispose: () => {} }),
   registerCompletionItemProvider: () => ({ dispose: () => {} }),
+  registerDefinitionProvider: () => ({ dispose: () => {} }),
   registerReferenceProvider: () => ({ dispose: () => {} }),
   createDiagnosticCollection: () => {
     const map = new Map<string, any[]>();
