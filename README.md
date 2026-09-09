@@ -66,7 +66,7 @@ own assertions run against our copy** on every `npm test`.
 
 ```bash
 npm install
-npm run verify                      # typecheck, vendor integrity, schema pin, 647 tests (+ 3 live-SB skips)
+npm run verify                      # typecheck, vendor integrity, schema pin, 856 tests (+ 3 live-SB skips)
 npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
@@ -122,9 +122,9 @@ development, open `packages/vscode` in VS Code and press F5.
 ### Testing
 
 ```bash
-npm test                  # 647 headless tests (+ 3 live-SB skips)
-npm run test:integration  # 17 tests inside a real VS Code (downloads it once)
-npm run test:foam         # 24 tests with Foam 0.44.6; folder rename remains unqualified
+npm test                  # 856 headless tests (+ 3 live-SB skips)
+npm run test:integration  # 22 tests inside a real VS Code (downloads it once)
+npm run test:foam         # 29 tests with Foam 0.44.6; folder rename remains unqualified
 npm run verify            # everything above, plus typecheck and the two guards
 ```
 

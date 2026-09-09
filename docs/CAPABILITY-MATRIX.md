@@ -1,6 +1,6 @@
 # Foam / LifeLoop capability matrix
 
-Current as of 2026-09-08. “Verified” means the named behavior has executable or
+Current as of 2026-09-09. “Verified” means the named behavior has executable or
 source-level evidence; accepting an SB declaration is not counted as runtime parity.
 
 ## General notes
@@ -60,9 +60,9 @@ are not enabled merely for parity because they bypass LifeLoop's mutation and ow
 
 ## Current verification
 
-- `npm run verify`: typecheck, vendor guard and schema guard pass; 641 tests pass and 3 live-SB checks skip because no RuntimeAPI client answered.
+- `npm run verify`: typecheck, vendor guard and schema guard pass; 856 tests pass and 3 live-SB checks skip because no RuntimeAPI client answered.
 - Live SilverBullet 2.10.0: current result is SKIP. The isolated fixture and checks remain available, but no live RuntimeAPI client answered this run.
-- Task-only VS Code 1.136.1: 16 tests pass, 8 Foam-only tests skip.
-- VS Code 1.136.1 + Foam 0.44.6: 23 tests pass, known folder-rename qualification skips.
+- Task-only VS Code 1.136.1: 22 tests pass, 8 Foam-only tests skip.
+- VS Code 1.136.1 + Foam 0.44.6: 29 tests pass, 1 known folder-rename qualification test skips.
 - Real Apple Notes and Calendar: SKIP because AppleEvent calls timed out on this host. Fake bridges verify Notes full-body import, pending two-way sync, Calendar compensation, all three conflict paths and stale-resolution refusal. Reminders uses the same fake-backed verification; no personal external data was changed.
 - Original trial and official sample sources remain unchanged; inventories use durable isolated copies.

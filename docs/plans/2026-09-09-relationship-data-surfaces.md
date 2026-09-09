@@ -1,6 +1,6 @@
 # Relationship data surfaces
 
-Status: proposed next implementation pass.
+Status: implemented and qualified on `vscode-implementation`.
 
 This design selects the useful, low-cost parts of
 [`silverbullet/docs/Concepts/all-in-one-design.md`](../../silverbullet/docs/Concepts/all-in-one-design.md)
@@ -15,7 +15,7 @@ transform indexed objects and render tables, but the index remains disposable. D
 `.lifeloop/index.sqlite` and rebuilding it must recover every Person, Interaction and follow-up
 fact.
 
-The selected next pass contains four features, ordered by user-workflow value:
+The completed pass contains four features, ordered by user-workflow value:
 
 1. Logging an Interaction from a task that directly identifies Person pages.
 2. Named relationship projections for reusable tables and transformations.
@@ -83,7 +83,7 @@ disposition so “already present” and “worth building next” are not confu
 
 ### Resulting implementation scope
 
-Only four rows above require product changes in this pass:
+Only four rows above required product changes in this pass:
 
 ```text
 Person        → task-originated multi-person Interaction logging
