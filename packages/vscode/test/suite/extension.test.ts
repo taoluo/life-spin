@@ -810,7 +810,8 @@ suite("Foam coexistence (0.44.6)", function () {
     assert.ok(!doc.getText().includes("Foam/Target"), doc.getText());
     assert.ok(doc.getText().includes("#Detail"), doc.getText());
     assert.ok(doc.getText().includes("KEEP_UNSAVED"), doc.getText());
-    assert.ok(await doc.save());
+    if (doc.isDirty) assert.ok(await doc.save());
+    assert.strictEqual(readFileSync(doc.uri.fsPath, "utf8"), doc.getText());
   });
   // Foam 0.44.6 rewrites to [[Child]] but its definition provider loses the target.
   // Keep the failed qualification reproducible, separate from the supported gate.
