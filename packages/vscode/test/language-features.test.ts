@@ -105,6 +105,25 @@ describe("relationship diagnostics", () => {
         .some((diagnostic: any) => diagnostic.message.includes("direct Person"))).toBe(true);
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
+
+  test("empty query and frontmatter values are Errors on real tokens", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "People/Alice.md": "---\ntags: person\n---\n" });
+    const query = "```query\r\ninteractions\r\nperson:\r\nfields:\r\nlimit:\r\n```\r\n";
+    const person = "---\r\ntags: person\r\nbirthday:\r\ncontact-every:\r\n---\r\n";
+    try {
+      for (const [text, page, expected] of [
+        [query, "Query", ["person", "fields", "limit"]],
+        [person, "People/Alice", ["birthday", "contact-every"]],
+      ] as const) {
+        const document = documentOf(text);
+        const diagnostics = relationshipDiagnostics(lifeloop, text, page, true);
+        expect(diagnostics.map((entry: any) => text.slice(
+          document.offsetAt(entry.range.start), document.offsetAt(entry.range.end),
+        ))).toEqual(expected);
+        expect(diagnostics.every((entry: any) => entry.severity === vscode.DiagnosticSeverity.Error)).toBe(true);
+      }
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 describe("narrow definitions", () => {
@@ -139,6 +158,37 @@ describe("narrow definitions", () => {
       expect(target.uri.fsPath).toBe(join(dir, "People/Alice.md"));
       expect(await provider.provideDefinition(document, { line: 4, character: 3 })).toBeUndefined();
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("definitions enforce projection ownership and fail closed on unsafe Person paths", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Query.md": "",
+    });
+    const provider = definitions(lifeloop) as any;
+    try {
+      for (const projection of ["people", "reconnect", "actionable", "nonsense"]) {
+        const text = `\`\`\`query\n${projection}\nperson: People/Alice\n\`\`\`\n`;
+        expect(await provider.provideDefinition(documentOf(text, join(dir, "Query.md")), { line: 2, character: 15 }))
+          .toBeUndefined();
+      }
+      for (const person of ["./People/Alice", "People//Alice", "/People/Alice", "../../../outside"]) {
+        const text = `\`\`\`query\nperson-context\nperson: ${person}\n\`\`\`\n`;
+        expect(() => provider.provideDefinition(
+          documentOf(text, join(dir, "Query.md")), { line: 2, character: 10 },
+        )).not.toThrow();
+        expect(provider.provideDefinition(
+          documentOf(text, join(dir, "Query.md")), { line: 2, character: 10 },
+        )).toBeUndefined();
+      }
+      const text = "```query\nperson-context\nperson: People/Alice\n```\n";
+      const document = documentOf(text, join(dir, "Query.md"));
+      const exists = vi.spyOn(lifeloop.vault, "exists").mockImplementation(() => { throw new Error("unreadable"); });
+      expect(provider.provideDefinition(document, { line: 2, character: 15 })).toBeUndefined();
+      exists.mockRestore();
+      vi.spyOn(lifeloop.vault, "read").mockImplementation(() => { throw new Error("unreadable"); });
+      expect(provider.provideDefinition(document, { line: 2, character: 15 })).toBeUndefined();
+    } finally { vi.restoreAllMocks(); lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

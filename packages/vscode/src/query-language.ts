@@ -1,3 +1,7 @@
+import { originalSourceOffset } from "@lifeloop/semantic-core";
+import { parseMarkdown } from "../../../vendor/silverbullet/client/markdown_parser/parser.ts";
+import { collectNodesOfType, findNodeOfType } from "../../../vendor/silverbullet/plug-api/lib/tree.ts";
+
 export type QueryToken = { text: string; from: number; to: number };
 export type QueryOption = { key: QueryToken; value: QueryToken; fields: QueryToken[] };
 export type LocatedQuery = {
@@ -80,34 +84,37 @@ export function parseLocatedQuery(source: string, base = 0): LocatedQuery {
 export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
   const sourceLines = lines(source);
   const found: LocatedQueryFence[] = [];
-  for (let i = 0; i < sourceLines.length; i++) {
-    const open = /^\s*(`{3,}|~{3,})(lifeloop|query)(?:[ \t].*)?$/.exec(sourceLines[i].text);
-    if (!open) continue;
-    const marker = open[1][0] as "`" | "~";
-    const markerLength = open[1].length;
-    let close = i + 1;
-    for (; close < sourceLines.length; close++) {
-      const candidate = /^\s*(`+|~+)\s*$/.exec(sourceLines[close].text);
-      if (candidate && candidate[1][0] === marker && candidate[1].length >= markerLength) break;
-    }
-    const closed = close < sourceLines.length;
-    const bodyFrom = sourceLines[i].next;
-    const bodyTo = closed ? sourceLines[close].from : source.length;
+  for (const fence of collectNodesOfType(parseMarkdown(source), "FencedCode")) {
+    const info = findNodeOfType(fence, "CodeInfo")?.children?.[0].text ?? "";
+    const language = /^(lifeloop|query)(?:[ \t].*)?$/.exec(info)?.[1] as "lifeloop" | "query" | undefined;
+    if (!language) continue;
+    const marks = fence.children?.filter((child) => child.type === "CodeMark") ?? [];
+    const opening = marks[0]?.children?.[0].text ?? "";
+    if (!/^(`{3,}|~{3,})$/.test(opening)) continue;
+    const marker = opening[0] as "`" | "~";
+    const markerLength = opening.length;
+    const openOffset = originalSourceOffset(source, fence.from ?? 0);
+    const open = sourceLines.find((line) => openOffset >= line.from && openOffset <= line.to)!;
+    const closing = marks[1];
+    const closeOffset = closing ? originalSourceOffset(source, closing.from ?? source.length) : source.length;
+    const close = closing
+      ? sourceLines.find((line) => closeOffset >= line.from && closeOffset <= line.to)!
+      : sourceLines.at(-1)!;
+    const bodyFrom = open.next;
+    const bodyTo = closing ? close.from : source.length;
     const body = source.slice(bodyFrom, bodyTo).replace(/\r?\n$/, "");
     found.push({
-      language: open[2] as "lifeloop" | "query",
+      language,
       marker,
       markerLength,
       source: body,
       bodyFrom,
       bodyTo,
-      openLine: sourceLines[i].line,
-      closeLine: closed ? sourceLines[close].line : sourceLines.at(-1)!.line,
-      closeLength: closed ? sourceLines[close].text.length : sourceLines.at(-1)!.text.length,
+      openLine: open.line,
+      closeLine: close.line,
+      closeLength: close.text.length,
       query: parseLocatedQuery(body, bodyFrom),
     });
-    if (closed) i = close;
-    else break;
   }
   return found;
 }

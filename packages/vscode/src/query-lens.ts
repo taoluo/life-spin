@@ -70,17 +70,27 @@ export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.C
 
       const key = /^\s*([A-Za-z]+)\s*:/.exec(before)?.[1] as keyof ProjectionArgs | "fields" | "limit" | undefined;
       if (!key) return [];
-      if (key === "kind") {
+      const allowed = projections[name].allowedArgs ?? [];
+      if (key === "kind" && allowed.includes("kind")) {
         return INTERACTION_KINDS.map((kind) => completion(kind, vscode.CompletionItemKind.Keyword));
       }
       if (key === "fields") {
         return (projections[name].fields ?? [])
           .map((field) => completion(field, vscode.CompletionItemKind.Keyword));
       }
-      if (key === "person" && (projections[name].allowedArgs ?? []).includes("person") && instance.indexIsSettled()) {
+      if (key === "person" && allowed.includes("person") && instance.indexIsSettled()) {
+        const option = fence.query.options.find((candidate) =>
+          candidate.key.text === "person" && candidate.key.from >= lineStart && candidate.key.from <= offset);
+        const range = option && new vscode.Range(
+          document.positionAt(option.value.from), document.positionAt(option.value.to),
+        );
         return people(instance.store)
           .map((person) => String(person.ref)).sort()
-          .map((person) => completion(person, vscode.CompletionItemKind.User));
+          .map((person) => {
+            const item = completion(person, vscode.CompletionItemKind.User);
+            if (range) item.range = range;
+            return item;
+          });
       }
       return [];
     },

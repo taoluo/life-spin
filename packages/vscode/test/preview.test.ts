@@ -147,12 +147,19 @@ describe("the same query on three surfaces", () => {
 
   const documentOf = (text: string) => {
     const lines = text.split("\n");
+    const offsetAt = (position: { line: number; character: number }) =>
+      lines.slice(0, position.line).reduce((n, line) => n + line.length + 1, 0) + position.character;
+    const positionAt = (offset: number) => {
+      let line = 0;
+      while (line + 1 < lines.length && offset >= offsetAt({ line: line + 1, character: 0 })) line++;
+      return new vscode.Position(line, offset - offsetAt({ line, character: 0 }));
+    };
     return {
       lineCount: lines.length,
       lineAt: (n: number) => ({ text: lines[n], length: lines[n].length }),
       getText: () => text,
-      offsetAt: (position: { line: number; character: number }) =>
-        lines.slice(0, position.line).reduce((n, line) => n + line.length + 1, 0) + position.character,
+      offsetAt,
+      positionAt,
       languageId: "markdown",
     } as any;
   };
@@ -181,6 +188,26 @@ describe("the same query on three surfaces", () => {
     ]);
     expect(fences[0].source).toContain("```");
     expect(fences[1].source).toContain("```");
+  });
+
+  test("query fences exclude nested examples and indented code", () => {
+    const text = [
+      "~~~~markdown",
+      "```query",
+      "people",
+      "```",
+      "~~~~",
+      "",
+      "    ~~~lifeloop",
+      "    interactions",
+      "    ~~~",
+      "",
+      "~~~query",
+      "reconnect",
+    ].join("\n");
+    const fences = findLocatedQueryFences(text);
+    expect(fences).toHaveLength(1);
+    expect(fences[0].source).toBe("reconnect");
   });
 
   test("located tokens retain live UTF-16 offsets across CRLF", () => {
@@ -217,12 +244,32 @@ describe("the same query on three surfaces", () => {
         expect.arrayContaining(["ref", "date", "people"]),
       );
       expect(labels("```query\ninteractions\nfrom: \n```", 2, 6)).toEqual([]);
+      expect(labels("```query\npeople\nkind: \n```", 2, 6)).toEqual([]);
+      expect(labels("```query\nreconnect\nperson: \n```", 2, 8)).toEqual([]);
 
       lifeloop.noteSourceChange();
       expect(labels("```query\ninteractions\nperson: \n```", 2, 8)).toEqual([]);
       expect(labels("```query\ninteractions\nkind: \n```", 2, 6)).toEqual(
         expect.arrayContaining(["call", "meeting"]),
       );
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("Person completion replaces the whole current value", async () => {
+    const { queryCompletions } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice Smith.md": "---\ntags: person\n---\n",
+    });
+    const text = "```query\ninteractions\nperson: People/A suffix\n```";
+    const document = documentOf(text);
+    try {
+      const item = (queryCompletions(() => lifeloop) as any)
+        .provideCompletionItems(document, { line: 2, character: "person: People/A".length })
+        .find((candidate: any) => candidate.label === "People/Alice Smith");
+      const from = document.offsetAt(item.range.start);
+      const to = document.offsetAt(item.range.end);
+      expect(text.slice(0, from) + item.insertText + text.slice(to))
+        .toContain("person: People/Alice Smith\n```");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 

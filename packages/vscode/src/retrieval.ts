@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import {
   birthday, cadence, day, directPersonLinks, extractLiveItems, nextBirthday, originalSourceOffset,
   pageDate, pageMetaFor, pageObject, pathOf, people, personContext, projectionNames, projections, relationshipDate,
-  relationshipProjectionNames, resolveRef, TASK_MARKER,
+  relationshipProjectionNames, resolveRef, TASK_MARKER, validPageName,
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
@@ -30,10 +30,18 @@ const positionAt = (text: string, offset: number): vscode.Position => {
   return new vscode.Position(before.length - 1, before.at(-1)!.length);
 };
 
-const exactPerson = (lifeloop: LifeLoop, person: string): boolean => {
-  const path = pathOf(person);
-  if (!lifeloop.vault.exists(path)) return false;
+const exactPageExists = (lifeloop: LifeLoop, page: string): boolean => {
   try {
+    if (!validPageName(page)) return false;
+    const path = pathOf(page);
+    return lifeloop.vault.list().includes(path) && lifeloop.vault.exists(path);
+  } catch { return false; }
+};
+
+const exactPerson = (lifeloop: LifeLoop, person: string): boolean => {
+  try {
+    if (!exactPageExists(lifeloop, person)) return false;
+    const path = pathOf(person);
     const page = pageObject(lifeloop.vault.read(path), pageMetaFor(person));
     return (page.itags as string[] | undefined)?.includes("person") === true;
   } catch { return false; }
@@ -98,7 +106,10 @@ export function definitions(lifeloop: LifeLoop): vscode.DefinitionProvider {
       const offset = document.offsetAt(position);
       const fence = findLocatedQueryFences(text).find((candidate) =>
         offset >= candidate.bodyFrom && offset <= candidate.bodyTo);
-      const person = fence?.query.options.find((option) =>
+      const projection = fence?.query.projection?.text;
+      const ownsPerson = relationshipProjectionNames.includes(projection as any) &&
+        (projections[projection as RelationshipProjectionName].allowedArgs ?? []).includes("person");
+      const person = ownsPerson && fence?.query.options.find((option) =>
         option.key.text === "person" && offset >= option.value.from && offset <= option.value.to);
       if (person && exactPerson(lifeloop, person.value.text)) {
         return new vscode.Location(
@@ -111,7 +122,7 @@ export function definitions(lifeloop: LifeLoop): vscode.DefinitionProvider {
         .find((match) => offset >= match.index! && offset < match.index! + match[0].length);
       const ref = link?.[1].trim() ?? "";
       const at = ref.lastIndexOf("@");
-      if (at < 0 || lifeloop.vault.exists(pathOf(ref))) return undefined;
+      if (at < 0 || exactPageExists(lifeloop, ref)) return undefined;
       const page = resolveTarget(lifeloop, ref.slice(0, at));
       if (!page) return undefined;
       const source = resolveRef(lifeloop.vault, `${page}${ref.slice(at)}`);
@@ -128,7 +139,7 @@ const diagnostic = (
   message: string,
   severity: vscode.DiagnosticSeverity,
 ) => new vscode.Diagnostic(
-  new vscode.Range(positionAt(text, token.from), positionAt(text, Math.max(token.from + 1, token.to))),
+  new vscode.Range(positionAt(text, token.from), positionAt(text, token.to)),
   message,
   severity,
 );
@@ -160,6 +171,10 @@ export function relationshipDiagnostics(
     for (const option of query.options) {
       const key = option.key.text;
       if (key === "limit") {
+        if (!option.value.text.trim()) {
+          error(option.key, "limit must be non-empty");
+          continue;
+        }
         const limit = Number(option.value.text);
         if (!Number.isInteger(limit) || limit < 0) {
           error(option.value, "limit must be a non-negative integer");
@@ -167,6 +182,10 @@ export function relationshipDiagnostics(
         continue;
       }
       if (key === "fields") {
+        if (!option.value.text.trim()) {
+          error(option.key, "fields must be non-empty");
+          continue;
+        }
         const known = projections[name].fields ?? [];
         for (const field of option.fields) {
           if (!known.includes(field.text)) error(field, `unknown field for ${name}: ${field.text}`);
@@ -177,19 +196,22 @@ export function relationshipDiagnostics(
         error(option.key, `unknown option for ${name}: ${key}`);
         continue;
       }
+      if (!option.value.text.trim()) {
+        error(option.key, `${key} must be non-empty`);
+        continue;
+      }
       if ((key === "date" || key === "from" || key === "to") &&
           !(key === "date" && option.value.text === "today") &&
           !relationshipDate(option.value.text)) {
         error(option.value, `${key} must be an ISO date`);
       }
-      if (key === "kind" && !option.value.text.trim()) error(option.key, "kind must be non-empty");
       if (key === "person" && includeIdentity && !people(lifeloop.store)
         .some((person) => person.ref === option.value.text)) {
         error(option.value, `no such Person page: ${option.value.text}`);
       }
     }
     const values = new Map(query.options.map((option) => [option.key.text, option]));
-    if (name === "person-context" && !values.get("person")?.value.text) {
+    if (name === "person-context" && !values.has("person")) {
       error(query.projection, "person-context requires person");
     }
     const from = values.get("from");
@@ -202,15 +224,13 @@ export function relationshipDiagnostics(
     let pageObjectValue;
     try { pageObjectValue = pageObject(text, pageMetaFor(page)); } catch { pageObjectValue = undefined; }
     if (pageObjectValue && (pageObjectValue.itags as string[] | undefined)?.includes("person")) {
-      const frontmatter = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0] ?? "";
       for (const [field, valid] of [["birthday", birthday], ["contact-every", cadence]] as const) {
         if (pageObjectValue[field] === undefined || valid(pageObjectValue[field]) !== undefined) continue;
-        const match = new RegExp(`^${field}:\\s*(.*?)\\s*$`, "m").exec(frontmatter);
-        if (match) {
-          const from = match.index + match[0].indexOf(match[1]);
-          info({ text: match[1], from, to: from + match[1].length },
-            `${field} is ignored because its value is invalid`);
-        }
+        const located = frontmatterField(text, field);
+        if (!located) continue;
+        const message = `${field} is ignored because its value is invalid`;
+        if (located.value.text.trim()) info(located.value, message);
+        else error(located.key, message);
       }
     }
 
@@ -221,14 +241,17 @@ export function relationshipDiagnostics(
   return found;
 }
 
-const frontmatterValue = (text: string, field: string): QueryToken | undefined => {
+const frontmatterField = (text: string, field: string): { key: QueryToken; value: QueryToken } | undefined => {
   const frontmatter = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0];
   if (!frontmatter) return undefined;
   const match = new RegExp(`^${field}:[ \\t]*(.*?)[ \\t]*$`, "m").exec(frontmatter);
   if (!match) return undefined;
   const value = /^(.*?)[ \\t]+#.*$/.exec(match[1])?.[1].trimEnd() ?? match[1];
   const from = match.index + match[0].indexOf(match[1]);
-  return { text: value, from, to: from + value.length };
+  return {
+    key: { text: field, from: match.index, to: match.index + field.length },
+    value: { text: value, from, to: from + value.length },
+  };
 };
 
 const markdown = (value: string, range: vscode.Range): vscode.Hover => {
@@ -267,7 +290,7 @@ export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
         let livePage;
         try { livePage = pageObject(text, pageMetaFor(page)); } catch { livePage = undefined; }
         if (livePage && (livePage.itags as string[] | undefined)?.includes("person")) {
-          const born = frontmatterValue(text, "birthday");
+          const born = frontmatterField(text, "birthday")?.value;
           if (born && offset >= born.from && offset <= born.to) {
             const value = birthday(livePage.birthday);
             const next = value ? nextBirthday(value, day()) : undefined;
@@ -276,7 +299,7 @@ export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
                 new vscode.Range(positionAt(text, born.from), positionAt(text, born.to)));
             }
           }
-          const cadenceToken = frontmatterValue(text, "contact-every");
+          const cadenceToken = frontmatterField(text, "contact-every")?.value;
           if (cadenceToken && offset >= cadenceToken.from && offset <= cadenceToken.to && lifeloop.indexIsSettled()) {
             const days = cadence(livePage["contact-every"]);
             const context = days ? personContext(lifeloop.store, page) : null;
