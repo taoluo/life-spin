@@ -232,6 +232,12 @@ export function relationshipDiagnostics(
         if (located.value.text.trim()) info(located.value, message);
         else error(located.key, message);
       }
+      const days = cadence(pageObjectValue["contact-every"]);
+      const context = days && includeIdentity ? personContext(lifeloop.store, page) : null;
+      const located = frontmatterField(text, "contact-every");
+      if (located && context && context.cadenceDays === days && context.lastInteraction && !context.reconnectOn) {
+        info(located.value, "reconnect date cannot be represented and is ignored");
+      }
     }
 
     for (const interaction of locatedInteractions(lifeloop, text, page)) {

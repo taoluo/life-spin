@@ -339,6 +339,29 @@ describe("relationship hover", () => {
       expect(selected(cadence)).toBe('"30d"');
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
+
+  test("reports an unrepresentable reconnect date without claiming it is due", async () => {
+    const person = "---\ntags: person\ncontact-every: 3000000d\n---\n";
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": person,
+      "Journal/2026-09-09.md": "* Call [[People/Alice]] [interaction: call]\n",
+    });
+    const document = documentOf(person, join(dir, "People/Alice.md"));
+    const provider = relationshipHovers(lifeloop) as any;
+    try {
+      const diagnostics = relationshipDiagnostics(lifeloop, person, "People/Alice", true);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].severity).toBe(vscode.DiagnosticSeverity.Information);
+      expect(diagnostics[0].message).toContain("cannot be represented");
+      expect(person.slice(
+        document.offsetAt(diagnostics[0].range.start), document.offsetAt(diagnostics[0].range.end),
+      )).toBe("3000000d");
+
+      const hover = await provider.provideHover(document, document.positionAt(person.indexOf("3000000d")));
+      expect(hover.contents.value).toContain("Reconnect: none yet · not due");
+      expect(hover.contents.value).not.toContain("+010240-05");
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 test("live Interaction features follow parser and core item semantics", async () => {

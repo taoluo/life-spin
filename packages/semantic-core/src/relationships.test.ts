@@ -128,6 +128,32 @@ describe("personal relationship facts", () => {
     x.done();
   });
 
+  test("keeps valid cadence while omitting unrepresentable derived dates", async () => {
+    const x = await indexed({
+      "People/Exact.md": "---\ntags: person\ncontact-every: 2912191d\n---\n",
+      "People/Near.md": "---\ntags: person\ncontact-every: 1d\n---\n",
+      "People/Overflow.md": "---\ntags: person\ncontact-every: 3000000d\n---\n",
+      "People/Never.md": "---\ntags: person\ncontact-every: 3000000d\n---\n",
+      "Journal/2026-09-09.md": "* Exact [[People/Exact]] [interaction: call]\n* Overflow [[People/Overflow]] [interaction: call]\n",
+      "Journal/9999-12-30.md": "* Near [[People/Near]] [interaction: call]\n",
+    });
+    expect(personContext(x.store, "People/Exact")).toMatchObject({
+      cadenceDays: 2912191, reconnectOn: "9999-12-31",
+    });
+    expect(personContext(x.store, "People/Near")).toMatchObject({ cadenceDays: 1, reconnectOn: "9999-12-31" });
+    expect(personContext(x.store, "People/Overflow")).toMatchObject({ cadenceDays: 3000000 });
+    expect(personContext(x.store, "People/Overflow")).not.toHaveProperty("reconnectOn");
+    expect(personRows(x.store).find((row) => row.person === "People/Overflow")).toEqual({
+      person: "People/Overflow", groups: [], contactEveryDays: 3000000,
+      lastInteractionDate: "2026-09-09", openFollowups: 0,
+    });
+    expect(reconnectRows(x.store, "2026-09-09").some((row) => row.person === "People/Overflow")).toBe(false);
+    expect(reconnectRows(x.store, "2026-09-09")).toContainEqual({
+      person: "People/Never", kind: "never-contacted", due: null,
+    });
+    x.done();
+  });
+
   test("uses direct Person links for actions and inherited links only for context", async () => {
     const x = await indexed({
       "People/Alice.md": "---\ntags: person\n---\n",

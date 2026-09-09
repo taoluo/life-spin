@@ -154,6 +154,8 @@ export function personContext(store: Store, person: string): PersonContext | nul
   if (!page) return null;
   const history = interactions(store).filter((entry) => entry.people.includes(person));
   const cadenceDays = cadence(page["contact-every"]);
+  const shifted = cadenceDays && history[0] ? shift(history[0].date, cadenceDays) : undefined;
+  const reconnectOn = shifted ? relationshipDate(shifted) ?? undefined : undefined;
   return {
     person: page,
     interactions: history,
@@ -162,7 +164,7 @@ export function personContext(store: Store, person: string): PersonContext | nul
       ((task.ilinks as string[] | undefined) ?? []).includes(person),
     ),
     cadenceDays,
-    reconnectOn: cadenceDays && history[0] ? shift(history[0].date, cadenceDays) : undefined,
+    ...(reconnectOn ? { reconnectOn } : {}),
   };
 }
 
