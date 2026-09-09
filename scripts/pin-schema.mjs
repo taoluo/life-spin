@@ -47,7 +47,10 @@ for (const file of files) {
 }
 
 // Read explicitly rather than inferred: these are named in code as object fields.
-for (const key of ["status", "tags", "aliases", "week", "frozen"]) frontmatterKeys.add(key);
+for (const key of [
+  "status", "tags", "aliases", "week", "frozen",
+  "birthday", "contact-every", "date", "groups",
+]) frontmatterKeys.add(key);
 for (const attr of ["deadline", "scheduled", "completed", "reminder", "event"]) {
   taskAttributes.add(attr);
 }
