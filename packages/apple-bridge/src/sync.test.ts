@@ -1,22 +1,32 @@
 import { expect, test, describe } from "vitest";
 import { Store, indexVault, MemoryVault } from "@lifeloop/semantic-core";
 import { syncReminders, MemoryObservations, boundTasks, resolveReminderConflict } from "./sync.ts";
-import type { Reminder } from "./reminders.ts";
+import { Reminders, type Reminder } from "./reminders.ts";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** A Reminders that answers from a script, so 2b is testable without a Mac. */
 class FakeReminders {
-  updates: { id: string; name: string }[] = [];
-  constructor(private readonly items: Reminder[]) {}
+  updates: { id: string; expectedName: string; name: string }[] = [];
+  constructor(
+    private readonly items: Reminder[],
+    private readonly hooks: { afterRead?(): void | Promise<void>; beforeUpdate?(): void | Promise<void> } = {},
+  ) {}
   async read(ids: string[]) {
-    return new Map(this.items.filter((r) => ids.includes(r.id)).map((r) => [r.id, r]));
+    const result = new Map(this.items.filter((r) => ids.includes(r.id)).map((r) => [r.id, r]));
+    await this.hooks.afterRead?.();
+    return result;
   }
   async create() { return "NEW"; }
-  async update(id: string, name: string) {
-    this.updates.push({ id, name });
-    return this.items.some((r) => r.id === id);
+  async update(id: string, expectedName: string, name: string) {
+    await this.hooks.beforeUpdate?.();
+    this.updates.push({ id, expectedName, name });
+    const item = this.items.find((candidate) => candidate.id === id);
+    if (!item) return "gone" as const;
+    if (item.name !== expectedName) return "conflict" as const;
+    item.name = name;
+    return "ok" as const;
   }
 }
 
@@ -25,14 +35,27 @@ const reminder = (over: Partial<Reminder> = {}): Reminder => ({
   completionDate: null, modificationDate: "2026-09-08T09:00:00Z", recurring: false, ...over,
 });
 
-async function setup(markdown: string) {
+async function setup(input: string | Record<string, string>) {
+  const files = typeof input === "string" ? { "Work.md": input } : input;
   const dir = mkdtempSync(join(tmpdir(), "lifeloop-sync-"));
-  writeFileSync(join(dir, "Work.md"), markdown);
+  for (const [path, markdown] of Object.entries(files)) writeFileSync(join(dir, path), markdown);
   const store = new Store(":memory:");
   await indexVault(dir, store);
-  const vault = MemoryVault.of({ "Work.md": markdown });
+  const vault = MemoryVault.of(files);
   return { store, vault, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
+
+test("Reminder title updates compare the observed name and never rewrite the body", async () => {
+  let invocation: { script: string; args: string[] } | undefined;
+  const reminders = new Reminders(async (script, args) => {
+    invocation = { script, args };
+    return "conflict";
+  });
+  expect(await reminders.update("R1", "Remote", "Local")).toBe("conflict");
+  expect(invocation?.args).toEqual(["R1", "Remote", "Local"]);
+  expect(invocation?.script).toContain("is not expectedName");
+  expect(invocation?.script).not.toContain("set body of r");
+});
 
 describe("the reverse flow, end to end", () => {
   test("the LifeLoop resolver refuses a Reminder changed after it was shown", async () => {
@@ -176,6 +199,83 @@ describe("the reverse flow, end to end", () => {
     });
     expect(bridge.updates).toHaveLength(0);
     expect(report.pushed).toHaveLength(0);
+    cleanup();
+  });
+
+  test("an unresolved title conflict cannot authorize a push on the next pass", async () => {
+    const { store, vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Old" });
+    const bridge = new FakeReminders([reminder({ name: "Remote" })]);
+    const first = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    const second = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(first.conflicts).toHaveLength(1);
+    expect(second.conflicts).toHaveLength(1);
+    expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")?.name).toBe("Old");
+    cleanup();
+  });
+
+  test("a duplicate Reminder id across pages refuses every effect", async () => {
+    const { store, vault, cleanup } = await setup({
+      "A.md": '* [ ] Local A [reminder: "R1"]\n',
+      "B.md": '* [ ] Local B [reminder: "R1"]\n',
+    });
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Old" });
+    const bridge = new FakeReminders([reminder({ name: "Old" })]);
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.refused).toHaveLength(2);
+    expect(bridge.updates).toEqual([]);
+    expect(vault.read("A.md")).toContain("Local A");
+    expect(vault.read("B.md")).toContain("Local B");
+    expect(observations.get("R1")?.name).toBe("Old");
+    cleanup();
+  });
+
+  test("a push rechecks its live Markdown binding after the Reminder read", async () => {
+    const markdown = '* [ ] Local [reminder: "R1"]\n';
+    const { store, vault, cleanup } = await setup(markdown);
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Old" });
+    const bridge = new FakeReminders([reminder({ name: "Old" })], {
+      afterRead: () => vault.write("Work.md", "* [ ] no longer bound\n"),
+    });
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.pushed).toEqual([]);
+    expect(report.refused).toHaveLength(1);
+    expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")?.name).toBe("Old");
+    cleanup();
+  });
+
+  test("a remote edit at the update boundary is preserved as a conflict", async () => {
+    const { store, vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    const observations = new MemoryObservations();
+    observations.set("R1", { completed: false, modificationDate: "before", name: "Old" });
+    const remote = reminder({ name: "Old", body: "keep" });
+    const bridge = new FakeReminders([remote], { beforeUpdate: () => { remote.name = "Changed again"; } });
+    const report = await syncReminders({ store, vault, observations, reminders: bridge as any });
+    expect(report.pushed).toEqual([]);
+    expect(report.refused).toHaveLength(1);
+    expect(remote).toMatchObject({ name: "Changed again", body: "keep" });
+    expect(observations.get("R1")?.name).toBe("Old");
+    cleanup();
+  });
+
+  test("Use Markdown rechecks local authority after its remote read", async () => {
+    const { vault, cleanup } = await setup('* [ ] Local [reminder: "R1"]\n');
+    const observations = new MemoryObservations();
+    const bridge = new FakeReminders([reminder({ name: "Remote" })], {
+      afterRead: () => vault.write("Work.md", '* [ ] Changed [reminder: "R1"]\n'),
+    });
+    const result = await resolveReminderConflict({
+      vault, page: "Work", reminderId: "R1", choice: "markdown",
+      expectedLocal: "Local", expectedRemote: "Remote", observations, reminders: bridge as any,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "stale" });
+    expect(bridge.updates).toEqual([]);
+    expect(observations.get("R1")).toBeUndefined();
     cleanup();
   });
 

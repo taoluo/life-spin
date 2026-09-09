@@ -21,7 +21,7 @@ export type BoundTask = {
 };
 
 export type Decision =
-  | { action: "push"; ref: string; reminderId: string; name: string; body: string }
+  | { action: "push"; ref: string; reminderId: string; expectedName: string; name: string }
   | { action: "complete"; ref: string; reminderId: string; date: string; dateWasReported: boolean }
   | { action: "reopen"; ref: string; reminderId: string }
   | { action: "clear-mark"; ref: string; reminderId: string; why: string }
@@ -191,7 +191,10 @@ export function reconcile(input: ReconcileInput): Decision[] {
     } else if (remoteChanged) {
       decisions.push({ action: "pull-name", ref: task.ref, reminderId: task.reminderId, name: reminder.name });
     } else {
-      decisions.push({ action: "push", ref: task.ref, reminderId: task.reminderId, name: task.name, body: reminder.body });
+      decisions.push({
+        action: "push", ref: task.ref, reminderId: task.reminderId,
+        expectedName: reminder.name, name: task.name,
+      });
     }
   }
 

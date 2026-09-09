@@ -102,21 +102,38 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
   };
   if (bound.length === 0) return report;
 
-  const current: Map<string, Reminder> = await bridge.read(bound.map((t) => t.reminderId));
-  const lastSeen = new Map<string, Observation>();
+  const byReminder = new Map<string, BoundTask[]>();
   for (const task of bound) {
+    const tasks = byReminder.get(task.reminderId) ?? [];
+    tasks.push(task);
+    byReminder.set(task.reminderId, tasks);
+  }
+  const duplicateIds = new Set(
+    [...byReminder].filter(([, tasks]) => tasks.length > 1).map(([id]) => id),
+  );
+  for (const id of duplicateIds) {
+    for (const task of byReminder.get(id)!) {
+      report.refused.push({ ref: task.ref, message: `Reminder ${id} is bound to multiple tasks` });
+    }
+  }
+  const eligible = bound.filter((task) => !duplicateIds.has(task.reminderId));
+  if (eligible.length === 0) return report;
+
+  const current: Map<string, Reminder> = await bridge.read(eligible.map((t) => t.reminderId));
+  const lastSeen = new Map<string, Observation>();
+  for (const task of eligible) {
     const seen = options.observations.get(task.reminderId);
     if (seen) lastSeen.set(task.reminderId, seen);
   }
 
   const decisions = reconcile({
-    tasks: bound,
+    tasks: eligible,
     reminders: current,
     lastSeen,
     observedOn: options.observedOn ?? new Date().toISOString().slice(0, 10),
   });
   const synchronizedNames = new Map<string, string>();
-  const unsettled = new Set<string>();
+  const unsettled = new Set<string>(duplicateIds);
 
   const refuseDecision = (ref: string, reminderId: string, message: string) => {
     unsettled.add(reminderId);
@@ -128,7 +145,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
   };
 
   for (const decision of decisions) {
-    const task = bound.find((t) => t.ref === decision.ref)!;
+    const task = eligible.find((t) => t.ref === decision.ref)!;
 
     /**
      * Re-locate by the binding, immediately before writing.
@@ -178,10 +195,31 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         break;
 
       case "push": {
-        const ok = await bridge.update(decision.reminderId, decision.name, decision.body);
-        if (ok) { report.pushed.push(decision.ref); synchronizedNames.set(decision.reminderId, decision.name); }
-        else unsettled.add(decision.reminderId);
-        // A push that finds nothing is the deleted case; the next pass clears it.
+        const found = locateByBinding(
+          options.vault, pageOfRef(decision.ref), "reminder", decision.reminderId,
+        );
+        const liveName = found.ok ? taskNameFromLine(found.line) : null;
+        if (!found.ok || liveName !== decision.name) {
+          refuseDecision(
+            decision.ref,
+            decision.reminderId,
+            found.ok ? "Markdown changed during sync" : found.message,
+          );
+          break;
+        }
+        const outcome = await bridge.update(
+          decision.reminderId, decision.expectedName, decision.name,
+        );
+        if (outcome === "ok") {
+          report.pushed.push(decision.ref);
+          synchronizedNames.set(decision.reminderId, decision.name);
+        } else {
+          refuseDecision(
+            decision.ref,
+            decision.reminderId,
+            outcome === "gone" ? "Reminder disappeared during sync" : "Reminder changed during sync",
+          );
+        }
         break;
       }
 
@@ -191,6 +229,7 @@ async function runSync(options: SyncOptions): Promise<SyncReport> {
         break;
 
       case "conflict":
+        unsettled.add(decision.reminderId);
         report.conflicts.push({ ref: decision.ref, reminderId: decision.reminderId,
           local: decision.local, remote: decision.remote, reason: decision.why });
         break;
@@ -255,7 +294,14 @@ export async function resolveReminderConflict(options: {
     if (result.ok) options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: remote.modificationDate, name: remote.name });
     return result;
   }
-  if (!await bridge.update(options.reminderId, local, remote.body)) return { ok: false, reason: "missing", message: "Reminder disappeared during resolution" };
+  const currentLocal = locateByBinding(options.vault, options.page, "reminder", options.reminderId);
+  if (!currentLocal.ok) return { ok: false, reason: currentLocal.reason, message: currentLocal.message };
+  if (taskNameFromLine(currentLocal.line) !== options.expectedLocal) {
+    return { ok: false, reason: "stale", message: "Markdown changed during conflict resolution" };
+  }
+  const outcome = await bridge.update(options.reminderId, options.expectedRemote, local);
+  if (outcome === "gone") return { ok: false, reason: "missing", message: "Reminder disappeared during resolution" };
+  if (outcome === "conflict") return { ok: false, reason: "stale", message: "Reminder changed during conflict resolution" };
   options.observations.set(options.reminderId, { completed: remote.completed, modificationDate: null, name: local });
   return { ok: true, changed: [], value: undefined };
 }

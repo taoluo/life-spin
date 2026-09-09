@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveCalendarConflict, syncCalendar, type CalendarObservation } from "./calendar-sync.ts";
-import { bindCalendar } from "./bind.ts";
+import { bindCalendar, bindReminder } from "./bind.ts";
 import type { CalendarEvent } from "./calendar.ts";
 
 const event = (summary: string): CalendarEvent => ({
@@ -95,6 +95,23 @@ test("a Calendar event is removed when its Markdown binding loses a race", async
   expect(result.ok).toBe(false);
   expect(removed).toBe("E2");
   expect(vault.read("Work.md")).toContain("Edited");
+});
+
+test.each([
+  ["one", '* [ ] Old [reminder: "R1"]\n', "invalid"],
+  ["multiple", '* [ ] Old [reminder: "R1"] [reminder: "R2"]\n', "ambiguous"],
+] as const)("a Reminder is not created when the task already has %s binding", async (_name, text, reason) => {
+  const vault = MemoryVault.of({ "Work.md": text });
+  let created = 0;
+  const result = await bindReminder(
+    vault, { ref: "Work@0", expectedText: text.trimEnd(), expectedState: " " },
+    "Old", "", "", {
+      create: async () => { created++; return "R3"; },
+      remove: async () => true,
+    },
+  );
+  expect(result).toMatchObject({ ok: false, reason });
+  expect(created).toBe(0);
 });
 
 test("a Calendar event is removed when its numeric task moves during creation", async () => {

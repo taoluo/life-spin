@@ -18,7 +18,7 @@ class Fake {
     return new Map(this.items.filter((r) => ids.includes(r.id)).map((r) => [r.id, r]));
   }
   async create() { return "NEW"; }
-  async update() { return true; }
+  async update() { return "ok" as const; }
 }
 
 describe("locating a task by its binding", () => {

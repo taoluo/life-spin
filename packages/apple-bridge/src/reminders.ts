@@ -109,14 +109,14 @@ end run
 const UPDATE_SCRIPT = `
 on run argv
   set theId to item 1 of argv
-  set theName to item 2 of argv
-  set theBody to item 3 of argv
+  set expectedName to item 2 of argv
+  set theName to item 3 of argv
   tell application "Reminders"
     set matches to (every reminder whose id is theId)
     if (count of matches) is 0 then return "gone"
     set r to item 1 of matches
+    if (name of r as string) is not expectedName then return "conflict"
     set name of r to theName
-    set body of r to theBody
     return "ok"
   end tell
 end run
@@ -168,9 +168,11 @@ export class Reminders {
     return this.run(CREATE_SCRIPT, [name, body, list]);
   }
 
-  /** Returns false when the reminder no longer exists over there. */
-  async update(id: string, name: string, body: string): Promise<boolean> {
-    return (await this.run(UPDATE_SCRIPT, [id, name, body])) === "ok";
+  /** Compare-and-set the projected title without touching the externally owned body. */
+  async update(id: string, expectedName: string, name: string): Promise<"ok" | "gone" | "conflict"> {
+    const result = await this.run(UPDATE_SCRIPT, [id, expectedName, name]);
+    if (result === "ok" || result === "gone" || result === "conflict") return result;
+    throw new Error(`unexpected Reminders update response: ${result}`);
   }
 
   /** Delete a reminder. Used to undo a creation whose binding could not be written. */

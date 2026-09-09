@@ -34,6 +34,12 @@ export async function bindReminder(
 ): Promise<MutationResult<{ id: string }> & { orphaned?: string }> {
   const admitted = strictTaskSource(vault, handle);
   if ("ok" in admitted) return admitted;
+  const bindings = admitted.line.match(/\[reminder:\s*"[^"]*"\]/g) ?? [];
+  if (bindings.length) return {
+    ok: false,
+    reason: bindings.length > 1 ? "ambiguous" : "invalid",
+    message: "task already has a Reminder binding",
+  };
   const id = await bridge.create(title, body, list);
 
   let bound: Awaited<ReturnType<typeof setTaskAttribute>>;

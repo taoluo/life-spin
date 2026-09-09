@@ -53,7 +53,7 @@ function appleCommands(lifeloop: LifeLoop) {
     vi.spyOn(bridge.Calendar.prototype, "updateSummary").mockResolvedValue("ok"),
     vi.spyOn(bridge.Calendar.prototype, "remove").mockResolvedValue(true),
     vi.spyOn(bridge.Reminders.prototype, "create").mockResolvedValue("NEW-REMINDER"),
-    vi.spyOn(bridge.Reminders.prototype, "update").mockResolvedValue(true),
+    vi.spyOn(bridge.Reminders.prototype, "update").mockResolvedValue("ok"),
     vi.spyOn(bridge.Reminders.prototype, "remove").mockResolvedValue(true),
     vi.spyOn(bridge, "syncCalendar").mockRejectedValue(new Error("unexpected Sync")),
     vi.spyOn(bridge, "syncReminders").mockRejectedValue(new Error("unexpected Sync")),
