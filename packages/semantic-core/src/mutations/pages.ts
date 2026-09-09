@@ -105,23 +105,12 @@ export async function attachPageToTask(
   }
 
   const contents = template || `# ${destination.split("/").pop()}\n`;
-  await vault.write(destPath, contents);
-
   const line = `${source.line} [[${destination}]]`;
   const next = source.text.slice(0, source.lineStart) + line + source.text.slice(source.lineEnd);
-  try {
-    await vault.write(source.path, next);
-  } catch (error) {
-    // Compensate only if nothing else has touched the page we just made.
-    if (vault.exists(destPath) && vault.read(destPath) === contents) await vault.remove(destPath);
-    else {
-      return refuse(
-        "collision",
-        `${destination} was written by something else; left in place after ${source.path} failed`,
-      );
-    }
-    throw error;
-  }
-
-  return { ok: true, changed: [destPath, source.path], value: { page: destination } };
+  const cs = changeSet(`attach ${destination} to ${handle.ref}`);
+  cs.expected.set(destPath, null);
+  cs.expected.set(source.path, source.text);
+  cs.writes.set(destPath, contents);
+  cs.writes.set(source.path, next);
+  return applied(vault, cs, { page: destination });
 }

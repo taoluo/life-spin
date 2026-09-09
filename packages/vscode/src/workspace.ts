@@ -82,6 +82,14 @@ export class WorkspaceVault implements Vault {
     await this.disk.remove(path);
   }
 
+  async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
+    const current = this.exists(path) ? this.read(path) : null;
+    if (current !== before) return false;
+    if (after === null) await this.remove(path);
+    else await this.write(path, after);
+    return (this.exists(path) ? this.read(path) : null) === after;
+  }
+
   list(): string[] {
     return this.paths();
   }

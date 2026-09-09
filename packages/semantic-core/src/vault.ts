@@ -16,6 +16,8 @@ export interface Vault {
   read(path: string): string;
   /** Confirm persisted contents after a write response is lost. */
   durableEquals?(path: string, content: string | null): boolean | undefined;
+  /** Atomically replace the expected live value, or return false without writing. */
+  writeIfUnchanged?(path: string, before: string | null, after: string | null): Promise<boolean>;
   /**
    * Async, because one implementation cannot be otherwise.
    *
@@ -74,6 +76,20 @@ export class NodeVault implements Vault {
     rmSync(this.abs(path), { force: true });
   }
 
+  async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
+    const current = this.exists(path) ? this.read(path) : null;
+    if (current !== before) return false;
+    if (after === null) rmSync(this.abs(path), { force: true });
+    else {
+      const full = this.abs(path);
+      mkdirSync(dirname(full), { recursive: true });
+      const temp = `${full}.${process.pid}.tmp`;
+      writeFileSync(temp, after, "utf8");
+      renameSync(temp, full);
+    }
+    return true;
+  }
+
   list(): string[] {
     return this.paths();
   }
@@ -100,6 +116,13 @@ export class MemoryVault implements Vault {
   }
   async write(path: string, content: string): Promise<void> { this.files.set(path, content); }
   async remove(path: string): Promise<void> { this.files.delete(path); }
+  async writeIfUnchanged(path: string, before: string | null, after: string | null): Promise<boolean> {
+    const current = this.files.get(path) ?? null;
+    if (current !== before) return false;
+    if (after === null) this.files.delete(path);
+    else this.files.set(path, after);
+    return true;
+  }
   list(): string[] { return [...this.files.keys()].sort(); }
 
   /** A snapshot, for asserting that a failed mutation changed nothing at all. */

@@ -131,16 +131,23 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
       path, before: vault.exists(path) ? vault.read(path) : null, after: null,
     })),
   ];
+  if (effects.length && !vault.writeIfUnchanged) {
+    return refuse("unknown", `'${cs.description}' requires a vault with checked writes`);
+  }
   const written: string[] = [];
 
   try {
-    for (const [path, content] of cs.writes) {
-      await vault.write(path, content);
-      written.push(path);
-    }
-    for (const path of cs.removes) {
-      await vault.remove(path);
-      written.push(path);
+    for (const effect of effects) {
+      for (const [path, before] of cs.expected) {
+        const own = effects.find((candidate) => candidate.path === path);
+        const expected = written.includes(path) ? own?.after ?? before : before;
+        const now = vault.exists(path) ? vault.read(path) : null;
+        if (now !== expected) throw new Error(`${path} changed during '${cs.description}'`);
+      }
+      if (!await vault.writeIfUnchanged!(effect.path, effect.before, effect.after)) {
+        throw new Error(`${effect.path} changed during '${cs.description}'`);
+      }
+      written.push(effect.path);
     }
   } catch (error) {
     const read = () => effects.map((step) => {
@@ -167,10 +174,8 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
         let current: string | null | undefined;
         try { current = vault.exists(step.path) ? vault.read(step.path) : null; } catch { continue; }
         if (current !== step.after) continue;
-        try {
-          if (step.before === null) await vault.remove(step.path);
-          else await vault.write(step.path, step.before);
-        } catch { /* reconciled below */ }
+        try { await vault.writeIfUnchanged?.(step.path, step.after, step.before); }
+        catch { /* reconciled below */ }
       }
       if (read().every((step) => step.current === step.before) &&
           effects.every((step) => durablyEquals(step, step.before))) {

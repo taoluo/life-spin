@@ -19,6 +19,12 @@ class FaultVault implements Vault {
     this.value = this.mode === "after" ? content : "third-party state";
     throw new Error("response lost after write");
   }
+  async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+    if ((this.exists(path) ? this.read(path) : null) !== before) return false;
+    if (after === null) await this.remove();
+    else await this.write(path, after);
+    return true;
+  }
   async remove() { throw new Error("unused"); }
   list() { return ["W.md"]; }
   durableEquals(_path: string, content: string | null) {
@@ -65,6 +71,12 @@ test("serial rollback rechecks ownership before each compensating write", async 
       if (path === "B.md" && content === "B-before") this.files.set("A.md", "A-third");
       this.files.set(path, content);
     }
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (after === null) this.files.delete(path);
+      else await this.write(path, after);
+      return true;
+    }
   }
   const vault = new InterleavedVault();
   const cs = changeSet("three files");
@@ -74,6 +86,44 @@ test("serial rollback rechecks ownership before each compensating write", async 
   }
   expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
   expect(vault.read("A.md")).toBe("A-third");
+});
+
+test("a later forward write cannot replace state changed during an earlier effect", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const suspended = new Promise<void>((resolve) => { entered = resolve; });
+  const resumed = new Promise<void>((resolve) => { resume = resolve; });
+  class ForwardBarrierVault implements Vault {
+    readonly root = "/memory";
+    readonly files = new Map([["A.md", "A-before"], ["B.md", "B-before"]]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) { return this.files.get(path)!; }
+    durableEquals(path: string, content: string | null) { return this.files.get(path) === content; }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "A.md") { entered(); await resumed; }
+      this.files.set(path, content);
+    }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "A.md") { entered(); await resumed; }
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (after === null) this.files.delete(path); else this.files.set(path, after);
+      return true;
+    }
+  }
+  const vault = new ForwardBarrierVault();
+  const cs = changeSet("forward barrier");
+  for (const name of ["A", "B"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+  const result = apply(vault, cs);
+  await suspended;
+  vault.files.set("B.md", "B-third");
+  resume();
+  expect(await result).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("B.md")).toBe("B-third");
 });
 
 test("a third-party edit survives while rollback is suspended", async () => {
@@ -96,6 +146,13 @@ test("a third-party edit survives while rollback is suspended", async () => {
       if (path === "B.md" && content === "B-before") { entered(); await resumed; }
       this.files.set(path, content);
     }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "B.md" && after === "B-before") { entered(); await resumed; }
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (path === "C.md") throw new Error("disk full");
+      if (after === null) this.files.delete(path); else this.files.set(path, after);
+      return true;
+    }
   }
   const vault = new BarrierVault();
   const cs = changeSet("barrier rollback");
@@ -111,6 +168,48 @@ test("a third-party edit survives while rollback is suspended", async () => {
   expect(Object.fromEntries(vault.files)).toEqual({
     "A.md": "A-third", "B.md": "B-before", "C.md": "C-before",
   });
+});
+
+test("a same-target edit survives while its rollback is suspended", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const suspended = new Promise<void>((resolve) => { entered = resolve; });
+  const resumed = new Promise<void>((resolve) => { resume = resolve; });
+  class SameTargetBarrierVault implements Vault {
+    readonly root = "/memory";
+    readonly files = new Map([
+      ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+    ]);
+    exists(path: string) { return this.files.has(path); }
+    read(path: string) { return this.files.get(path)!; }
+    durableEquals(path: string, content: string | null) { return this.files.get(path) === content; }
+    list() { return [...this.files.keys()]; }
+    async remove(path: string) { this.files.delete(path); }
+    async write(path: string, content: string) {
+      if (path === "C.md") throw new Error("disk full");
+      if (path === "B.md" && content === "B-before") { entered(); await resumed; }
+      this.files.set(path, content);
+    }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "B.md" && after === "B-before") { entered(); await resumed; }
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (path === "C.md") throw new Error("disk full");
+      if (after === null) this.files.delete(path); else this.files.set(path, after);
+      return true;
+    }
+  }
+  const vault = new SameTargetBarrierVault();
+  const cs = changeSet("same-target rollback barrier");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+  const result = apply(vault, cs);
+  await suspended;
+  vault.files.set("B.md", "B-third");
+  resume();
+  expect(await result).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("B.md")).toBe("B-third");
 });
 
 test("an unreadable partial state is preserved for reconciliation", async () => {
@@ -133,6 +232,11 @@ test("an unreadable partial state is preserved for reconciliation", async () => 
     async write(path: string, content: string) {
       if (path === "C.md") { this.unreadable = true; throw new Error("disk full"); }
       this.files.set(path, content);
+    }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (after === null) this.files.delete(path); else await this.write(path, after);
+      return true;
     }
     value(path: string) { return this.files.get(path); }
   }
@@ -166,6 +270,11 @@ test.each(["before", "after"] as const)("reconciles rollback response loss %s it
       }
       this.files.set(path, content);
     }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (after === null) this.files.delete(path); else await this.write(path, after);
+      return true;
+    }
     value(path: string) { return this.files.get(path); }
   }
   const vault = new RollbackVault();
@@ -193,6 +302,11 @@ test("safe rollback removes a file created before a later failure", async () => 
     async write(path: string, content: string) {
       if (path === "C.md") throw new Error("disk full");
       this.files.set(path, content);
+    }
+    async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if ((this.files.get(path) ?? null) !== before) return false;
+      if (after === null) this.files.delete(path); else await this.write(path, after);
+      return true;
     }
   }
   const vault = new CreateVault();
