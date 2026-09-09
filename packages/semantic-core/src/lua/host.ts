@@ -1,7 +1,7 @@
 import { parseExpressionString, parseBlock } from "../../../../vendor/silverbullet/client/space_lua/parse.ts";
 import { evalExpression, evalStatement } from "../../../../vendor/silverbullet/client/space_lua/eval.ts";
 import {
-  LuaEnv, LuaStackFrame, LuaBuiltinFunction, LuaTable, jsToLuaValue, luaValueToJS,
+  LuaEnv, LuaStackFrame, LuaBuiltinFunction, LuaTable, luaValueToJS,
 } from "../../../../vendor/silverbullet/client/space_lua/runtime.ts";
 import { makeLuaBudget, LuaBudgetStopped } from "../../../../vendor/silverbullet/client/space_lua/budget.ts";
 import {
@@ -17,6 +17,7 @@ import type { Vault } from "../vault.ts";
 import { tasks, backlinks, brokenLinks } from "../query.ts";
 import { runProjection, projectionNames, type ProjectionArgs, type ProjectionName } from "../contract.ts";
 import { day } from "../projections.ts";
+import { jsToLuaValue } from "../compat/lua.ts";
 import {
   emptyRegistries, MessageQueue, SUPPORTED_EVENTS,
   type Registries, type SyntaxSpec,
@@ -590,7 +591,11 @@ export async function runLua(
 
   try {
     if (mode === "expression") {
-      const value = await evalExpression(parseExpressionString(source), env, sf);
+      const expression = parseExpressionString(source);
+      const value = await evalExpression(expression, env, sf);
+      if (expression.type === "Query" && value instanceof LuaTable && value.empty()) {
+        return { ok: true, value: [] };
+      }
       return { ok: true, value: await luaValueToJS(value, sf) };
     }
 

@@ -46,6 +46,7 @@ describe("what a script can read", () => {
       .toEqual({ ok: true, value: [] });
     expect(await runLua("query[[ from p = lifeloop.people() limit 0 ]]", host))
       .toEqual({ ok: true, value: [] });
+    expect(await runLua("{}", host)).toEqual({ ok: true, value: {} });
     host.cleanup();
   });
 

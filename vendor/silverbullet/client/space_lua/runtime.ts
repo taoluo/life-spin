@@ -694,7 +694,6 @@ export class LuaTable implements ILuaSettable, ILuaGettable {
   private otherKeys: Map<any, any> | null;
   // When tables are used as arrays, we use a native JavaScript array for that
   private arrayPart: any[];
-  private readonly arrayOrigin: boolean;
 
   // Numeric type metadata at storage boundaries (lazily allocated)
   private stringKeyTypes: Map<string, NumericType> | null = null;
@@ -703,7 +702,6 @@ export class LuaTable implements ILuaSettable, ILuaGettable {
 
   constructor(init?: any[] | Record<string, any>) {
     // For efficiency and performance reasons we pre-allocate these (modern JS engines are very good at optimizing this)
-    this.arrayOrigin = Array.isArray(init);
     this.arrayPart = Array.isArray(init) ? init : [];
     this.stringKeys = init && !Array.isArray(init) ? init : {};
     this.otherKeys = null;
@@ -1242,7 +1240,7 @@ export class LuaTable implements ILuaSettable, ILuaGettable {
   }
 
   toJS(sf = LuaStackFrame.lostFrame): Record<string, any> | any[] {
-    if (this.arrayOrigin || this.length > 0) {
+    if (this.length > 0) {
       return this.toJSArray(sf);
     }
     return this.toJSObject(sf);
