@@ -1,5 +1,5 @@
 export { Store, SCHEMA_VERSION, assertRuntime, type PageRecord } from "./store.ts";
-export { indexVault, markdownFiles, isVaultMarkdownPath, pageNameOf, type IndexResult } from "./indexer.ts";
+export { indexVault, markdownFiles, markdownFilesSync, isVaultMarkdownPath, pageNameOf, type IndexResult } from "./indexer.ts";
 export { extractLiveItems, extractObjects, pageMetaFor, pageObject, type LifeloopObject } from "./extract.ts";
 export { setConfig, resetConfig, type PathLookup } from "./compat/syscalls.ts";
 export * from "./query.ts";

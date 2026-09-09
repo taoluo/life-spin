@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname, relative, resolve, sep } from "node:path";
 import {
-  Store, indexVault, markdownFiles, isVaultMarkdownPath, pageNameOf, extractObjects, pageMetaFor,
+  Store, indexVault, markdownFiles, markdownFilesSync, isVaultMarkdownPath, pageNameOf, extractObjects, pageMetaFor,
   type Vault, NodeVault, pathOf, DEFAULT_CYCLE, type CycleStates,
 } from "@lifeloop/semantic-core";
 
@@ -126,7 +126,13 @@ export class WorkspaceVault implements Vault {
   }
 
   list(): string[] {
-    return this.paths();
+    const paths = new Set(markdownFilesSync(this.root));
+    for (const document of vscode.workspace.textDocuments) {
+      if (document.isClosed || document.languageId !== "markdown") continue;
+      const path = relative(this.root, document.uri.fsPath).split(sep).join("/");
+      if (isVaultMarkdownPath(path)) paths.add(path);
+    }
+    return [...paths].sort();
   }
 }
 

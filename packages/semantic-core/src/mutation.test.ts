@@ -130,6 +130,81 @@ test("a later forward write cannot replace state changed during an earlier effec
   expect(vault.read("B.md")).toBe("B-third");
 });
 
+test("a refused replacement never owns an identical third-party after-state", async () => {
+  class RefusingVault extends MemoryVault {
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "B.md") {
+        await this.write(path, after!);
+        return false;
+      }
+      return super.writeIfUnchanged(path, before, after);
+    }
+  }
+  const vault = new RefusingVault(new Map([
+    ["A.md", "A-before"], ["B.md", "B-before"], ["C.md", "C-before"],
+  ]));
+  const cs = changeSet("false replacement CAS");
+  for (const name of ["A", "B", "C"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("A.md")).toBe("A-before");
+  expect(vault.read("B.md")).toBe("B-after");
+  expect(vault.read("C.md")).toBe("C-before");
+});
+
+test("a final refused effect cannot claim success from matching bytes", async () => {
+  class RefusingVault extends MemoryVault {
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "B.md") {
+        await this.write(path, after!);
+        return false;
+      }
+      return super.writeIfUnchanged(path, before, after);
+    }
+  }
+  const vault = new RefusingVault(new Map([
+    ["A.md", "A-before"], ["B.md", "B-before"],
+  ]));
+  const cs = changeSet("false final CAS");
+  for (const name of ["A", "B"]) {
+    cs.expected.set(`${name}.md`, `${name}-before`);
+    cs.writes.set(`${name}.md`, `${name}-after`);
+  }
+
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("A.md")).toBe("A-before");
+  expect(vault.read("B.md")).toBe("B-after");
+});
+
+test("a refused deletion never recreates a file deleted by another writer", async () => {
+  class RefusingVault extends MemoryVault {
+    override async writeIfUnchanged(path: string, before: string | null, after: string | null) {
+      if (path === "B.md" && after === null) {
+        await this.remove(path);
+        return false;
+      }
+      return super.writeIfUnchanged(path, before, after);
+    }
+  }
+  const vault = new RefusingVault(new Map([
+    ["A.md", "A-before"], ["B.md", "B-before"], ["D.md", "D-before"],
+  ]));
+  const cs = changeSet("false deletion CAS");
+  cs.expected.set("A.md", "A-before");
+  cs.expected.set("B.md", "B-before");
+  cs.expected.set("D.md", "D-before");
+  cs.writes.set("A.md", "A-after");
+  cs.removes.push("B.md", "D.md");
+
+  expect(await apply(vault, cs)).toMatchObject({ ok: false, reason: "unknown" });
+  expect(vault.read("A.md")).toBe("A-before");
+  expect(vault.exists("B.md")).toBe(false);
+  expect(vault.read("D.md")).toBe("D-before");
+});
+
 test("a third-party edit survives while rollback is suspended", async () => {
   let entered!: () => void;
   let resume!: () => void;

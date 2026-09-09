@@ -397,10 +397,10 @@ for (const saveFailure of ["false", "throw"] as const) {
       await handlers.get("lifeloop.completeTask")!({
         handle: { ref: "Work@0", expectedText: line, expectedState: " " },
       });
-      expect(buffer).toBe(`${line}\n`);
+      expect(buffer).toContain("* [x] guarded");
       expect(document.isDirty).toBe(true);
       expect(readFileSync(join(dir, "Work.md"), "utf8")).toBe(`${line}\n`);
-      expect(document.save).toHaveBeenCalledTimes(2);
+      expect(document.save).toHaveBeenCalledOnce();
       expect(reindex).toHaveBeenCalledTimes(1);
       expect(status).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledOnce();

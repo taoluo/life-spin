@@ -18,6 +18,8 @@ export interface Vault {
   durableEquals?(path: string, content: string | null): boolean | undefined;
   /** Atomically replace the expected live value, or return false without writing. */
   writeIfUnchanged?(path: string, before: string | null, after: string | null): Promise<boolean>;
+  /** Positive capability receipt for checked deletion; absence means unsupported. */
+  readonly supportsCheckedDeletion?: true;
   /**
    * Async, because one implementation cannot be otherwise.
    *
@@ -84,6 +86,7 @@ export class NodeVault implements Vault {
 /** An in-memory vault, for tests that assert what was and was not written. */
 export class MemoryVault implements Vault {
   readonly root = "/memory";
+  readonly supportsCheckedDeletion = true;
   constructor(private readonly files = new Map<string, string>()) {}
 
   static of(files: Record<string, string>): MemoryVault {

@@ -112,6 +112,9 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
       );
     }
   }
+  if (cs.removes.length && vault.supportsCheckedDeletion !== true) {
+    return refuse("unknown", `'${cs.description}' requires checked deletion before any writes`);
+  }
 
   /**
    * All or nothing, and it now means it.
@@ -134,20 +137,26 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
   if (effects.length && !vault.writeIfUnchanged) {
     return refuse("unknown", `'${cs.description}' requires a vault with checked writes`);
   }
-  const written: string[] = [];
+  const written: typeof effects = [];
+  let attempted: typeof effects[number] | undefined;
+  let explicitlyRefused = false;
 
   try {
     for (const effect of effects) {
       for (const [path, before] of cs.expected) {
         const own = effects.find((candidate) => candidate.path === path);
-        const expected = written.includes(path) ? (own ? own.after : before) : before;
+        const expected = written.some((step) => step.path === path) ? (own ? own.after : before) : before;
         const now = vault.exists(path) ? vault.read(path) : null;
         if (now !== expected) throw new Error(`${path} changed during '${cs.description}'`);
       }
+      attempted = effect;
       if (!await vault.writeIfUnchanged!(effect.path, effect.before, effect.after)) {
+        attempted = undefined;
+        explicitlyRefused = true;
         throw new Error(`${effect.path} changed during '${cs.description}'`);
       }
-      written.push(effect.path);
+      written.push(effect);
+      attempted = undefined;
     }
   } catch (error) {
     const read = () => effects.map((step) => {
@@ -161,7 +170,8 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
       try { return vault.durableEquals?.(step.path, content) === true; } catch { return false; }
     };
     const observed = read();
-    if (observed.every((step) => step.current === step.after) &&
+    const allAttempted = !explicitlyRefused && written.length + (attempted ? 1 : 0) === effects.length;
+    if (allAttempted && observed.every((step) => step.current === step.after) &&
         effects.every((step) => durablyEquals(step, step.after))) {
       return { ok: true, changed: effects.map((step) => step.path), value: undefined };
     }
@@ -170,11 +180,11 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
       return refuse("unknown", `${(error as Error).message}; authoritative reread found no applied changes`);
     }
     if (observed.every((step) => step.current === step.before || step.current === step.after)) {
-      for (const step of [...observed].reverse()) {
+      for (const owned of [...written].reverse()) {
         let current: string | null | undefined;
-        try { current = vault.exists(step.path) ? vault.read(step.path) : null; } catch { continue; }
-        if (current !== step.after) continue;
-        try { await vault.writeIfUnchanged?.(step.path, step.after, step.before); }
+        try { current = vault.exists(owned.path) ? vault.read(owned.path) : null; } catch { continue; }
+        if (current !== owned.after) continue;
+        try { await vault.writeIfUnchanged?.(owned.path, owned.after, owned.before); }
         catch { /* reconciled below */ }
       }
       if (read().every((step) => step.current === step.before) &&
@@ -188,7 +198,7 @@ export async function apply(vault: Vault, cs: ChangeSet): Promise<Success | Refu
     );
   }
 
-  return { ok: true, changed: written, value: undefined };
+  return { ok: true, changed: written.map((step) => step.path), value: undefined };
 }
 
 // ---------------------------------------------------------------------------

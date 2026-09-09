@@ -29,10 +29,9 @@ export class Range {
 }
 export class Selection extends Range {}
 export class WorkspaceEdit {
-  edits: { uri: any; range?: any; content: string; create?: boolean; version?: number }[] = [];
+  edits: { uri: any; range?: any; content: string; create?: boolean }[] = [];
   replace(uri: any, range: any, content: string): void {
-    const document = workspace.textDocuments.find((entry) => entry.uri?.fsPath === uri.fsPath);
-    this.edits.push({ uri, range, content, version: document?.version });
+    this.edits.push({ uri, range, content });
   }
   createFile(uri: any, options?: { contents?: Uint8Array }): void {
     this.edits.push({
@@ -106,13 +105,17 @@ export const workspace = {
   onDidRenameFiles: () => ({ dispose: () => {} }),
   onDidChangeConfiguration: () => ({ dispose: () => {} }),
   applyEdit: async (edit: WorkspaceEdit) => {
+    const versions = new Map(edit.edits.map((entry) => [entry,
+      workspace.textDocuments.find((candidate) => candidate.uri?.fsPath === entry.uri.fsPath)?.version]));
+    await Promise.resolve();
     for (const entry of edit.edits) {
       if (entry.create) {
         if (existsSync(entry.uri.fsPath)) return false;
         continue;
       }
       const document = workspace.textDocuments.find((candidate) => candidate.uri?.fsPath === entry.uri.fsPath);
-      if (document && entry.version !== undefined && document.version !== entry.version) return false;
+      const version = versions.get(entry);
+      if (document && version !== undefined && document.version !== version) return false;
     }
     for (const entry of edit.edits) {
       if (entry.create) {

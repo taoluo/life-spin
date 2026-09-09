@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { extractObjects, pageMetaFor, type LifeloopObject } from "./extract.ts";
@@ -33,6 +33,21 @@ export async function markdownFiles(root: string): Promise<string[]> {
     }
   };
   await walk(root);
+  return out.sort();
+}
+
+/** Current on-disk Markdown inventory for synchronous authority checks. */
+export function markdownFilesSync(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || SKIP.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".md")) out.push(relative(root, full).split(sep).join("/"));
+    }
+  };
+  walk(root);
   return out.sort();
 }
 
