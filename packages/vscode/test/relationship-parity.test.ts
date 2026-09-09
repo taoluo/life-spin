@@ -146,6 +146,13 @@ const assertRendered = (
     ? (/<tbody>([\s\S]*?)<\/tbody>/.exec(rendered)?.[1].match(/<tr(?:\s|>)/g) ?? []).length
     : Math.max(0, rendered.split("\n").filter((line) => line.startsWith("| ")).length - 2);
   expect(rows).toBe(wanted.length);
+  let identityAt = -1;
+  for (const row of wanted) {
+    const cell = renderedCell(String(row[entry.renderIdentity]), html);
+    const next = rendered.indexOf(cell, identityAt + 1);
+    expect(next).toBeGreaterThan(identityAt);
+    identityAt = next;
+  }
   for (const value of cells) {
     if (wanted.some((row) => Object.values(row).some((cell) => String(cell) === value))) {
       expect(rendered).toContain(renderedCell(value, html));
