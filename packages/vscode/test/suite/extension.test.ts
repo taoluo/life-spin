@@ -1,6 +1,7 @@
 import * as assert from "node:assert";
 import * as path from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 
 /**
@@ -47,17 +48,110 @@ async function until(what: string, check: () => boolean | Promise<boolean>, time
   assert.fail(`timed out waiting for: ${what}`);
 }
 
+const g1Person = "People/G1 Alice (50%)";
+const g1Journal = "Journal/2001-01-02";
+const g1Work = "Scratch/G1 Work";
+const g1Files = {
+  [g1Person]: "---\r\ntags: person\r\n---\r\n# G1 Alice (50%)\r\n",
+  [g1Journal]: `😀\r\n\r\n* G1 numeric meeting [[${g1Person}]] [interaction: meeting]\r\n* G1 anchored call [[${g1Person}]] [interaction: call] $g1-call\r\n`,
+  [g1Work]: `😀\r\n\r\n* [ ] G1 follow-up [[${g1Person}]] $g1-followup\r\n* [ ] G1 meeting [[${g1Person}]] [event: "g1-event"] $g1-event\r\n`,
+  "Scratch/G1 Ordinary@anchor": "# Literal at filename\r\n",
+  "Scratch/G1 Ordinary": "😀\r\n* ordinary anchor $anchor\r\n",
+  "Scratch/G1 Literal Source": "[[Scratch/G1 Ordinary@anchor]]\r\n",
+};
+
+function assertG1Unchanged(): void {
+  for (const [page, content] of Object.entries(g1Files)) {
+    assert.strictEqual(readPage(page), content, `fixture changed: ${page}`);
+    const open = vscode.workspace.textDocuments.find(d => d.uri.fsPath === pageUri(page).fsPath);
+    if (open) assert.strictEqual(open.getText(), content, `fixture buffer changed: ${page}`);
+  }
+  for (const page of [`${g1Journal}@g1-call`, `${g1Journal}@6`, `${g1Work}@g1-followup`, `${g1Work}@g1-event`]) {
+    assert.ok(!existsSync(pageUri(page).fsPath), `navigation created a placeholder: ${page}`);
+  }
+}
+
+/** Follow the actual provider result, not a test-constructed destination. */
+async function followG1PersonLink(document: vscode.TextDocument): Promise<void> {
+  await vscode.extensions.getExtension("vscode.markdown-language-features")!.activate();
+  const links = await vscode.commands.executeCommand<vscode.DocumentLink[]>("vscode.executeLinkProvider", document.uri, 100);
+  const personLink = links?.find(link => document.getText(link.range).includes("G1%20Alice"));
+  assert.ok(personLink?.target, `no resolved Person link: ${JSON.stringify(links)}`);
+  const target = personLink.target;
+  if (target.scheme === "command") {
+    const args = JSON.parse(decodeURIComponent(target.query));
+    assert.ok(Array.isArray(args), "invalid provider command arguments");
+    await vscode.commands.executeCommand(target.path, ...args);
+  } else {
+    assert.strictEqual(target.scheme, "file");
+    await vscode.commands.executeCommand("vscode.open", target);
+  }
+  await until("Person link opens the exact escaped filename", () =>
+    vscode.window.activeTextEditor?.document.uri.fsPath === pageUri(g1Person).fsPath);
+}
+
+async function followG1Source(document: vscode.TextDocument, ref: string, page: string, offset: number): Promise<void> {
+  const marker = `[[${ref}]]`;
+  const at = document.getText().indexOf(marker);
+  assert.ok(at >= 0, `missing source link ${marker}: ${document.getText()}`);
+  const position = document.positionAt(at + 3);
+  const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+    "vscode.executeDefinitionProvider", document.uri, position);
+  const destination = await vscode.workspace.openTextDocument(pageUri(page));
+  assert.ok(definitions?.length, `no definition for ${marker}`);
+  for (const definition of definitions) {
+    assert.strictEqual(("uri" in definition ? definition.uri : definition.targetUri).fsPath, destination.uri.fsPath);
+    const range = "range" in definition ? definition.range : definition.targetSelectionRange;
+    assert.ok(range, `definition has no target range: ${JSON.stringify(definition)}`);
+    assert.strictEqual(destination.offsetAt(range.start), offset, `wrong live CRLF/UTF-16 offset for ${marker}`);
+  }
+  const editor = await vscode.window.showTextDocument(document);
+  editor.selection = new vscode.Selection(position, position);
+  // Consume provider output through VS Code's native navigation command. This
+  // qualifies target/range handling, not the focus-dependent F12 keybinding.
+  const locations = definitions.map(d => "targetUri" in d
+    ? new vscode.Location(d.targetUri, d.targetSelectionRange ?? d.targetRange) : d);
+  await vscode.commands.executeCommand("editor.action.goToLocations", document.uri, position, locations, "goto");
+  await until(`native definition navigation for ${marker}`, () => {
+    const active = vscode.window.activeTextEditor;
+    return active?.document.uri.fsPath === destination.uri.fsPath && active.document.offsetAt(active.selection.active) === offset;
+  });
+}
+
 suite("LifeLoop in a real VS Code", () => {
   suiteSetup(async function () {
     this.timeout(60_000);
     const extension = vscode.extensions.getExtension("lifeloop.lifeloop-vscode");
     assert.ok(extension, "extension not found");
     await extension.activate();
+    if (process.env.LIFELOOP_TEST_FOAM) {
+      const foam = vscode.extensions.getExtension("foam.foam-vscode");
+      assert.ok(foam, "Foam not installed in isolated test profile");
+      assert.strictEqual(foam.packageJSON.version, "0.44.6");
+      await foam.activate();
+      assert.ok(foam.isActive, "G1 requires active Foam before the common cases");
+    }
+    for (const [page, content] of Object.entries(g1Files)) {
+      assert.ok(!existsSync(pageUri(page).fsPath), `G1 fixture collision: ${page}`);
+      mkdirSync(path.dirname(pageUri(page).fsPath), { recursive: true });
+      writeFileSync(pageUri(page).fsPath, content);
+    }
+    await vscode.commands.executeCommand("lifeloop.reindex");
     // Indexing is deliberately backgrounded, so wait for it rather than assume.
     await until("commands registered", () => true, 1000);
   });
 
   test("activates and registers its commands", async () => {
+    const extension = vscode.extensions.getExtension("lifeloop.lifeloop-vscode")!;
+    const activatedPath = realpathSync(extension.extensionPath);
+    const entry = path.resolve(activatedPath, extension.packageJSON.main);
+    const entrySha256 = createHash("sha256").update(readFileSync(entry)).digest("hex");
+    if (process.env.LIFELOOP_TEST_EXTENSION_PATH) {
+      assert.strictEqual(activatedPath, realpathSync(process.env.LIFELOOP_TEST_EXTENSION_PATH));
+      assert.ok(process.env.LIFELOOP_TEST_ENTRY_SHA256, "packaged qualification requires the frozen entry digest");
+    }
+    if (process.env.LIFELOOP_TEST_ENTRY_SHA256) assert.strictEqual(entrySha256, process.env.LIFELOOP_TEST_ENTRY_SHA256);
+    console.log(`G1 activated entry: ${JSON.stringify({ path: activatedPath, entry, entrySha256, version: extension.packageJSON.version, foam: !!process.env.LIFELOOP_TEST_FOAM })}`);
     const commands = await vscode.commands.getCommands(true);
     if (!process.env.LIFELOOP_TEST_FOAM) assert.strictEqual(vscode.extensions.getExtension("foam.foam-vscode"), undefined);
     for (const name of [
@@ -66,9 +160,132 @@ suite("LifeLoop in a real VS Code", () => {
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
       "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
+      "lifeloop.openQueryResult",
     ]) {
       assert.ok(commands.includes(name), `missing command ${name}`);
     }
+  });
+
+  test("G1: real query results navigate Person, numeric and anchored CRLF sources", async () => {
+    try {
+      await vscode.commands.executeCommand("lifeloop.openQueryResult", `interactions\nperson: ${g1Person}\nfields: ref, people`);
+      const result = vscode.window.activeTextEditor!.document;
+      assert.strictEqual(result.uri.scheme, "untitled");
+      assert.strictEqual(result.languageId, "markdown");
+      assert.match(result.getText(), /^# interactions\n/);
+      const numeric = g1Files[g1Journal].indexOf("* G1 numeric");
+      await followG1PersonLink(result);
+      await followG1Source(result, `${g1Journal}@${numeric}`, g1Journal, numeric);
+      await followG1Source(result, `${g1Journal}@g1-call`, g1Journal, g1Files[g1Journal].indexOf("$g1-call"));
+      await vscode.commands.executeCommand("lifeloop.openQueryResult", `person-context\nperson: ${g1Person}\nfields: person, openFollowupRefs`);
+      const context = vscode.window.activeTextEditor!.document;
+      assert.strictEqual(context.uri.scheme, "untitled");
+      await followG1PersonLink(context);
+      await followG1Source(context, `${g1Work}@g1-followup`, g1Work, g1Files[g1Work].indexOf("$g1-followup"));
+      await followG1Source(context, `${g1Work}@g1-event`, g1Work, g1Files[g1Work].indexOf("$g1-event"));
+    } finally { assertG1Unchanged(); }
+  });
+
+  test("G1: successful Brief uses the registered command and read-only Calendar boundary", async () => {
+    assert.strictEqual(process.platform, "darwin", "successful native Calendar qualification requires macOS");
+    const childProcess = require("node:child_process");
+    const originalExecFile = childProcess.execFile;
+    const calls: string[] = [];
+    const forbidden: string[] = [];
+    const calendarName = vscode.workspace.getConfiguration("lifeloop").get("calendarName", "Calendar");
+    childProcess.execFile = (file: string, args: string[], options: unknown, callback: Function) => {
+      if (file !== "osascript") return originalExecFile(file, args, options, callback);
+      return { stdin: { end(script: string) {
+        const probe = args.join("\0") === ["-l", "AppleScript", "-", "Calendar"].join("\0") &&
+          script.trim() === 'on run argv\n      tell application "System Events" to return (exists process (item 1 of argv)) as string\n    end run';
+        const read = args.join("\0") === ["-l", "AppleScript", "-", calendarName, "g1-event"].join("\0") &&
+          script.includes("every event of c whose uid is (theUid as string)") &&
+          script.includes("set calName to item 1 of argv") &&
+          !/\b(make|delete|launch)\b|set\s+(summary|start date|end date|location)\s+of/i.test(script);
+        if (!probe && !read) forbidden.push(JSON.stringify({ args, script }));
+        calls.push(probe ? "probe" : read ? "read" : "forbidden");
+        const output = probe ? "true" : ["g1-event", "G1 qualified meeting", "2001-01-03 10:00", "2001-01-03 11:00", "G1 Room"].join("\u001f") + "\u001d";
+        queueMicrotask(() => callback(probe || read ? null : new Error("unexpected AppleScript denied by G1"), output, ""));
+      } } };
+    };
+    try {
+      const source = await vscode.workspace.openTextDocument(pageUri(g1Work));
+      const editor = await vscode.window.showTextDocument(source);
+      const position = source.positionAt(source.getText().indexOf("* [ ] G1 meeting") + 3);
+      editor.selection = new vscode.Selection(position, position);
+      await vscode.commands.executeCommand("lifeloop.preMeetingBrief");
+      assert.deepStrictEqual(forbidden, [], "Brief attempted an unapproved Calendar operation");
+      assert.deepStrictEqual(calls, ["probe", "read"]);
+      const brief = vscode.window.activeTextEditor!.document;
+      assert.strictEqual(brief.uri.scheme, "untitled");
+      assert.strictEqual(brief.languageId, "markdown");
+      assert.match(brief.getText(), /^# Pre-meeting Brief\n/);
+      assert.match(brief.getText(), /G1 qualified meeting/);
+      assert.match(brief.getText(), /Open follow-ups: 2/);
+      await followG1PersonLink(brief);
+      await followG1Source(brief, `${g1Journal}@6`, g1Journal, 6);
+      await followG1Source(brief, `${g1Journal}@g1-call`, g1Journal, g1Files[g1Journal].indexOf("$g1-call"));
+      await followG1Source(brief, `${g1Work}@g1-followup`, g1Work, g1Files[g1Work].indexOf("$g1-followup"));
+      await followG1Source(brief, `${g1Work}@g1-event`, g1Work, g1Files[g1Work].indexOf("$g1-event"));
+    } finally {
+      childProcess.execFile = originalExecFile;
+      assertG1Unchanged();
+    }
+  });
+
+  test("G1: literal @ filename takes precedence over the SB anchor", async () => {
+    try {
+      const document = await vscode.workspace.openTextDocument(pageUri("Scratch/G1 Literal Source"));
+      const position = new vscode.Position(0, 12);
+      let definitions: (vscode.Location | vscode.LocationLink)[] = [];
+      await until("literal @ definition providers settle", async () => {
+        definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+          "vscode.executeDefinitionProvider", document.uri, position) ?? [];
+        return !process.env.LIFELOOP_TEST_FOAM || definitions.length > 0;
+      });
+      const targets = definitions.map(d => ("uri" in d ? d.uri : d.targetUri).fsPath);
+      assert.ok(!targets.includes(pageUri("Scratch/G1 Ordinary").fsPath), "LifeLoop stole an ordinary @ filename");
+      if (process.env.LIFELOOP_TEST_FOAM) {
+        assert.ok(targets.includes(pageUri("Scratch/G1 Ordinary@anchor").fsPath), JSON.stringify(definitions));
+        const editor = await vscode.window.showTextDocument(document);
+        editor.selection = new vscode.Selection(position, position);
+        const locations = definitions.map(d => "targetUri" in d
+          ? new vscode.Location(d.targetUri, d.targetSelectionRange ?? d.targetRange) : d);
+        await vscode.commands.executeCommand("editor.action.goToLocations", document.uri, position, locations, "goto");
+        await until("native literal @ navigation", () => vscode.window.activeTextEditor?.document.uri.fsPath === pageUri("Scratch/G1 Ordinary@anchor").fsPath);
+      } else assert.deepStrictEqual(targets, [], "ordinary wiki navigation belongs to Foam");
+    } finally { assertG1Unchanged(); }
+  });
+
+  test("G1: completion acceptance replaces the full canonical Person value", async () => {
+    try {
+      for (const [value, cursor] of [["People/G1", 9], ["People/G1 Al", 12], ["People/G1 Al stale suffix", 12]] as const) {
+        const before = `\`\`\`lifeloop\ninteractions\nperson: ${value}\n\`\`\`\n`;
+        const expected = `\`\`\`lifeloop\ninteractions\nperson: ${g1Person}\n\`\`\`\n`;
+        const document = await vscode.workspace.openTextDocument({ content: before, language: "markdown" });
+        const editor = await vscode.window.showTextDocument(document);
+        const position = new vscode.Position(2, "person: ".length + cursor);
+        editor.selection = new vscode.Selection(position, position);
+        let item: vscode.CompletionItem | undefined;
+        await until(`canonical Person completion for ${value}`, async () => {
+          const completions = await vscode.commands.executeCommand<vscode.CompletionList>("vscode.executeCompletionItemProvider", document.uri, position);
+          item = completions?.items.find(i => (typeof i.label === "string" ? i.label : i.label.label) === g1Person);
+          return !!item;
+        });
+        assert.ok(item);
+        assert.ok(item.range instanceof vscode.Range, "expected a full replacement range");
+        assert.strictEqual(document.getText(item.range), value);
+        // Apply the real provider item in the real editor. This qualifies its
+        // full replacement semantics, not suggestion-widget focus/selection.
+        assert.strictEqual(typeof item.insertText, "string");
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, item.range, item.insertText as string);
+        assert.ok(await vscode.workspace.applyEdit(edit), `completion edit refused for ${value}`);
+        assert.strictEqual(document.getText(), expected);
+        await vscode.commands.executeCommand("lifeloop.openQueryResult", document.getText().split("\n").slice(1, 3).join("\n"));
+        assert.match(vscode.window.activeTextEditor!.document.getText(), /G1 numeric meeting/);
+      }
+    } finally { assertG1Unchanged(); }
   });
 
   test("registers the tree views", async () => {
