@@ -57,6 +57,34 @@ function taskHandle(value: unknown): TaskCommandHandle | null {
     : null;
 }
 
+/** Capture one live task line as the guarded input every task command accepts. */
+export function taskTargetAt(
+  lifeloop: LifeLoop,
+  document: vscode.TextDocument,
+  line: number,
+): TaskTarget | null {
+  if (document.languageId !== "markdown") return null;
+  const sourceLine = document.lineAt(line);
+  const state = TASK_MARKER.exec(sourceLine.text)?.[2];
+  if (state === undefined) return null;
+  const page = lifeloop.pageNameOfUri(document.uri);
+  const offset = document.offsetAt(sourceLine.range.start);
+  const indexed = indexedTask(lifeloop, page, offset);
+  return {
+    handle: {
+      ref: indexed?.ref ?? `${page}@${offset}`,
+      expectedText: sourceLine.text,
+      expectedState: state,
+      capturedAt: new Date().toISOString(),
+    },
+    page,
+    offset,
+    line: sourceLine.text,
+    name: taskNameFromLine(sourceLine.text) ?? "",
+    task: indexed?.task,
+  };
+}
+
 /** Resolve an actionable task from a signed tree row or the active cursor. */
 export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTarget | null {
   if (input?.handle !== undefined) {
@@ -77,24 +105,5 @@ export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTar
   }
 
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "markdown") return null;
-  const sourceLine = editor.document.lineAt(editor.selection.active.line);
-  const state = TASK_MARKER.exec(sourceLine.text)?.[2];
-  if (state === undefined) return null;
-  const page = lifeloop.pageNameOfUri(editor.document.uri);
-  const offset = editor.document.offsetAt(sourceLine.range.start);
-  const indexed = indexedTask(lifeloop, page, offset);
-  return {
-    handle: {
-      ref: indexed?.ref ?? `${page}@${offset}`,
-      expectedText: sourceLine.text,
-      expectedState: state,
-      capturedAt: new Date().toISOString(),
-    },
-    page,
-    offset,
-    line: sourceLine.text,
-    name: taskNameFromLine(sourceLine.text) ?? "",
-    task: indexed?.task,
-  };
+  return editor ? taskTargetAt(lifeloop, editor.document, editor.selection.active.line) : null;
 }

@@ -3,7 +3,7 @@ import { assertRuntime } from "@lifeloop/semantic-core";
 import { LifeLoop } from "./workspace.ts";
 import { TodayView, ProjectsView, InboxView, LinkedTasksView, MentionsView, PersonContextView } from "./views.ts";
 import {
-  publishDiagnostics, documentSymbols, definitions,
+  applyDiagnosticFix, codeActions, publishDiagnostics, documentSymbols, definitions,
 } from "./retrieval.ts";
 import { register } from "./commands.ts";
 import { registerApple } from "./apple.ts";
@@ -66,6 +66,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
     vscode.languages.registerHoverProvider(markdown, hovers(() => lifeloop)),
     vscode.languages.registerCompletionItemProvider(markdownText, queryCompletions(() => lifeloop), ":", ","),
     vscode.languages.registerDefinitionProvider(markdownText, definitions(lifeloop)),
+    vscode.languages.registerCodeActionsProvider(markdownText, codeActions(lifeloop)),
+    vscode.commands.registerCommand("lifeloop.applyDiagnosticFix", applyDiagnosticFix),
   );
   registerQueryCommands(() => lifeloop, context);
   registerLua(() => lifeloop, context);

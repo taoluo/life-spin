@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { definitions, relationshipDiagnostics } from "../src/retrieval.ts";
+import {
+  applyDiagnosticFix, codeActions, definitions, relationshipDiagnostics,
+} from "../src/retrieval.ts";
 import { LifeLoop } from "../src/workspace.ts";
 import * as vscode from "./vscode-mock.ts";
 
@@ -134,6 +136,70 @@ describe("narrow definitions", () => {
       const target = await provider.provideDefinition(document, { line: 2, character: 15 });
       expect(target.uri.fsPath).toBe(join(dir, "People/Alice.md"));
       expect(await provider.provideDefinition(document, { line: 4, character: 3 })).toBeUndefined();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("command-only code actions", () => {
+  test("offers guarded task commands and refreshes Person eligibility", async () => {
+    const line = '* [ ] Meet [[People/Alice]] [event: "E1"]';
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "Work.md": `${line}\n`,
+    });
+    const document = documentOf(`${line}\n`, join(dir, "Work.md"));
+    const provider = codeActions(lifeloop) as any;
+    try {
+      const actions = await provider.provideCodeActions(
+        document, new vscode.Range(0, 0, 0, line.length), { diagnostics: [] },
+      );
+      expect(actions.map((action: any) => action.title)).toEqual(expect.arrayContaining([
+        "Complete", "Toggle Waiting", "Toggle Someday", "Set Deadline", "Set Scheduled",
+        "Log Interaction", "Open Pre-meeting Brief",
+      ]));
+      expect(actions.every((action: any) =>
+        action.edit instanceof vscode.WorkspaceEdit && action.edit.edits.length === 0 &&
+        action.command?.arguments?.[0]?.handle?.expectedText === line)).toBe(true);
+
+      const changedPerson = {
+        ...documentOf("# no longer a Person\n", join(dir, "People/Alice.md")),
+        isDirty: true, isClosed: false,
+      };
+      vscode.workspace.textDocuments = [changedPerson as any];
+      lifeloop.noteSourceChange();
+      const refreshed = await provider.provideCodeActions(
+        document, new vscode.Range(0, 0, 0, line.length), { diagnostics: [] },
+      );
+      expect(refreshed.map((action: any) => action.title)).not.toContain("Log Interaction");
+      expect(refreshed.map((action: any) => action.title)).not.toContain("Open Pre-meeting Brief");
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("offers only canonical case fixes and rejects stale receipts", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "Query.md": "" });
+    const text = "```lifeloop\ninteractions\nPerson: People/Alice\nfields: DATE\n```\n";
+    const document = documentOf(text, join(dir, "Query.md"));
+    const diagnostics = relationshipDiagnostics(lifeloop, text, "Query", true);
+    const provider = codeActions(lifeloop) as any;
+    const actions = await provider.provideCodeActions(
+      document, new vscode.Range(0, 0, 4, 3), { diagnostics },
+    );
+    const replace = vi.spyOn(vscode.workspace, "applyEdit");
+    vi.spyOn(vscode.workspace, "openTextDocument").mockResolvedValue(document as any);
+    try {
+      expect(actions.map((action: any) => action.title)).toEqual([
+        "Change to person", "Change to date",
+      ]);
+      expect(actions.every((action: any) =>
+        action.kind === vscode.CodeActionKind.QuickFix &&
+        action.edit instanceof vscode.WorkspaceEdit && action.edit.edits.length === 0 &&
+        action.command?.command === "lifeloop.applyDiagnosticFix")).toBe(true);
+
+      const receipt = actions[0].command.arguments[0];
+      expect(await applyDiagnosticFix({ ...receipt, version: 0 })).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+      expect(await applyDiagnosticFix(receipt)).toBe(true);
+      expect((replace.mock.calls[0][0] as any).edits[0].content).toBe("person");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

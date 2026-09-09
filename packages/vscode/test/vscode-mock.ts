@@ -26,7 +26,8 @@ export class Range {
 }
 export class Selection extends Range {}
 export class WorkspaceEdit {
-  replace(_uri: any, _range: any, _content: string): void {}
+  edits: { uri: any; range: any; content: string }[] = [];
+  replace(uri: any, range: any, content: string): void { this.edits.push({ uri, range, content }); }
 }
 export class Location { constructor(public uri: any, public range: any) {} }
 export class DocumentSymbol {
@@ -49,6 +50,11 @@ export class CompletionItem {
 export class Diagnostic {
   constructor(public range: any, public message: string, public severity?: DiagnosticSeverity) {}
 }
+export class CodeAction {
+  edit?: WorkspaceEdit; command?: any; diagnostics?: Diagnostic[];
+  constructor(public title: string, public kind?: any) {}
+}
+export const CodeActionKind = { QuickFix: "quickfix" };
 export class TreeItem {
   description?: string; tooltip?: any; iconPath?: any; contextValue?: string; command?: any;
   constructor(public label: string, public collapsibleState?: TreeItemCollapsibleState) {}
@@ -63,7 +69,7 @@ export class EventEmitter<T> {
   dispose() { this.handlers = []; }
 }
 export const Uri = {
-  file: (fsPath: string) => ({ fsPath, toString: () => `file://${fsPath}` }),
+  file: (fsPath: string) => ({ scheme: "file", fsPath, toString: () => `file://${fsPath}` }),
   parse: (value: string) => ({ scheme: value.split(":")[0], toString: () => value }),
 };
 export const workspace = {
@@ -86,7 +92,7 @@ export const workspace = {
   onDidCreateFiles: () => ({ dispose: () => {} }),
   onDidRenameFiles: () => ({ dispose: () => {} }),
   onDidChangeConfiguration: () => ({ dispose: () => {} }),
-  applyEdit: async () => true,
+  applyEdit: async (_edit: any) => true,
   openTextDocument: async () => ({}),
 };
 export const window = {
@@ -112,6 +118,7 @@ export const languages = {
   registerDocumentLinkProvider: () => ({ dispose: () => {} }),
   registerCompletionItemProvider: () => ({ dispose: () => {} }),
   registerDefinitionProvider: () => ({ dispose: () => {} }),
+  registerCodeActionsProvider: () => ({ dispose: () => {} }),
   registerReferenceProvider: () => ({ dispose: () => {} }),
   createDiagnosticCollection: () => {
     const map = new Map<string, any[]>();

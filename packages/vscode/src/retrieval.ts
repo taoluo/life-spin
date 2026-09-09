@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
 import {
-  birthday, cadence, pageDate, pageMetaFor, pageObject, pathOf, people,
+  birthday, cadence, directPersonLinks, pageDate, pageMetaFor, pageObject, pathOf, people,
   projectionNames, projections, relationshipDate, relationshipProjectionNames, resolveRef,
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import { findLocatedQueryFences, type QueryToken } from "./query-language.ts";
+import { taskTargetAt } from "./task-target.ts";
 
 // Only LifeLoop semantic diagnostics and SB special refs live here. Foam owns generic PKM.
 
@@ -180,6 +181,151 @@ export function relationshipDiagnostics(
     }
   }
   return found;
+}
+
+type FixToken = QueryToken & { role: "projection" | "option" | "field"; replacement: string };
+
+const canonicalSpelling = (values: readonly string[], value: string): string | undefined =>
+  values.find((candidate) => candidate !== value && candidate.toLowerCase() === value.toLowerCase());
+
+/** Tokens whose replacement is uniquely determined by the relationship contract. */
+function fixTokens(text: string): FixToken[] {
+  const found: FixToken[] = [];
+  for (const fence of findLocatedQueryFences(text)) {
+    const projection = fence.query.projection;
+    if (!projection) continue;
+    const projectionFix = canonicalSpelling(relationshipProjectionNames, projection.text);
+    if (projectionFix) {
+      found.push({ ...projection, role: "projection", replacement: projectionFix });
+      continue;
+    }
+    if (!(relationshipProjectionNames as readonly string[]).includes(projection.text)) continue;
+    const name = projection.text as RelationshipProjectionName;
+    const keys = [...(projections[name].allowedArgs ?? []), "fields", "limit"].map(String);
+    for (const option of fence.query.options) {
+      const keyFix = canonicalSpelling(keys, option.key.text);
+      if (keyFix) found.push({ ...option.key, role: "option", replacement: keyFix });
+      if (option.key.text !== "fields") continue;
+      const fields = (projections[name].fields ?? []).map(String);
+      for (const field of option.fields) {
+        const fieldFix = canonicalSpelling(fields, field.text);
+        if (fieldFix) found.push({ ...field, role: "field", replacement: fieldFix });
+      }
+    }
+  }
+  return found;
+}
+
+type DiagnosticFix = {
+  uri: vscode.Uri;
+  range: vscode.Range;
+  version: number;
+  expectedText: string;
+  token: Pick<FixToken, "role" | "from" | "to" | "text">;
+  replacement: string;
+};
+
+const emptyCommandAction = (
+  title: string,
+  command: string,
+  argument: unknown,
+  kind?: vscode.CodeActionKind,
+): vscode.CodeAction => {
+  const action = new vscode.CodeAction(title, kind);
+  action.edit = new vscode.WorkspaceEdit();
+  action.command = { title, command, arguments: [argument] };
+  return action;
+};
+
+/** Task commands plus deterministic relationship-spelling fixes; never an eager edit. */
+export function codeActions(lifeloop: LifeLoop): vscode.CodeActionProvider {
+  return {
+    async provideCodeActions(document, range, context) {
+      const text = document.getText();
+      const actions: vscode.CodeAction[] = [];
+      for (const token of fixTokens(text)) {
+        const diagnostics = context.diagnostics.filter((item) =>
+          document.offsetAt(item.range.start) === token.from && document.offsetAt(item.range.end) === token.to);
+        if (!diagnostics.length || token.to < document.offsetAt(range.start) || token.from > document.offsetAt(range.end)) continue;
+        const tokenRange = new vscode.Range(positionAt(text, token.from), positionAt(text, token.to));
+        const receipt: DiagnosticFix = {
+          uri: document.uri,
+          range: tokenRange,
+          version: document.version,
+          expectedText: token.text,
+          token: { role: token.role, from: token.from, to: token.to, text: token.text },
+          replacement: token.replacement,
+        };
+        const action = emptyCommandAction(
+          `Change to ${token.replacement}`, "lifeloop.applyDiagnosticFix", receipt, vscode.CodeActionKind.QuickFix,
+        );
+        action.diagnostics = diagnostics;
+        actions.push(action);
+      }
+
+      if (document.uri.scheme !== "file") return actions;
+      try { await lifeloop.currentTaskStates(); } catch { return actions; }
+      let target;
+      try { target = taskTargetAt(lifeloop, document, range.start.line); } catch { return actions; }
+      if (!target?.task) return actions;
+      const input = { handle: target.handle };
+      const taskAction = (title: string, command: string) =>
+        actions.push(emptyCommandAction(title, command, input));
+      taskAction(target.task.done === true ? "Reopen" : "Complete",
+        target.task.done === true ? "lifeloop.reopenTask" : "lifeloop.completeTask");
+      taskAction("Toggle Waiting", "lifeloop.toggleWaiting");
+      taskAction("Toggle Someday", "lifeloop.toggleSomeday");
+      taskAction("Set Deadline", "lifeloop.setDeadline");
+      taskAction("Set Scheduled", "lifeloop.setScheduled");
+      const linkedPeople = directPersonLinks(lifeloop.store, target.task);
+      if (linkedPeople.length) {
+        taskAction("Log Interaction", "lifeloop.logInteraction");
+        if ([...target.line.matchAll(/\[event:\s*"[^"\r\n]+"\]/g)].length === 1) {
+          taskAction("Open Pre-meeting Brief", "lifeloop.preMeetingBrief");
+        }
+      }
+      return actions;
+    },
+  };
+}
+
+const isFix = (value: unknown): value is DiagnosticFix => {
+  if (!value || typeof value !== "object") return false;
+  const fix = value as any;
+  const token = fix.token;
+  const start = fix.range?.start;
+  const end = fix.range?.end;
+  return typeof fix.uri?.toString === "function" && Number.isInteger(fix.version) && fix.version >= 0 &&
+    typeof fix.expectedText === "string" && typeof fix.replacement === "string" &&
+    token && ["projection", "option", "field"].includes(token.role) &&
+    Number.isInteger(token.from) && Number.isInteger(token.to) && token.from >= 0 && token.to >= token.from &&
+    typeof token.text === "string" && Number.isInteger(start?.line) && start.line >= 0 &&
+    Number.isInteger(start?.character) && start.character >= 0 && Number.isInteger(end?.line) && end.line >= 0 &&
+    Number.isInteger(end?.character) && end.character >= 0;
+};
+
+/** Revalidate every diagnostic receipt before applying its one deterministic replacement. */
+export async function applyDiagnosticFix(input: unknown): Promise<boolean> {
+  const stale = () => {
+    void vscode.window.showWarningMessage("LifeLoop: that diagnostic changed; nothing was edited");
+    return false;
+  };
+  if (!isFix(input)) return stale();
+  const document = await vscode.workspace.openTextDocument(input.uri);
+  if (document.languageId !== "markdown" || document.version !== input.version) return stale();
+  const text = document.getText();
+  if (document.offsetAt(input.range.start) !== input.token.from ||
+      document.offsetAt(input.range.end) !== input.token.to ||
+      text.slice(input.token.from, input.token.to) !== input.expectedText ||
+      input.expectedText !== input.token.text) return stale();
+  const current = fixTokens(text).find((token) =>
+    token.role === input.token.role && token.from === input.token.from && token.to === input.token.to &&
+    token.text === input.token.text && token.replacement === input.replacement);
+  if (!current) return stale();
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(document.uri, input.range, input.replacement);
+  if (!(await vscode.workspace.applyEdit(edit))) return stale();
+  return true;
 }
 
 /** Explicit SB navigation: Foam's ordinary click can offer to create page@anchor. */

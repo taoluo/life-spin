@@ -150,7 +150,7 @@ async function openTaskProject(lifeloop: LifeLoop, target: TaskTarget): Promise<
   if (page) await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
 }
 
-function activePerson(lifeloop: LifeLoop, input?: Pick<Node, "page">): string | null {
+function activePerson(lifeloop: LifeLoop, input?: { page?: string }): string | null {
   const page = input?.page ?? (vscode.window.activeTextEditor?.document.languageId === "markdown"
     ? lifeloop.pageNameOfUri(vscode.window.activeTextEditor.document.uri) : undefined);
   return page && people(lifeloop.store).some((candidate) => candidate.ref === page) ? page : null;
@@ -200,7 +200,19 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
   });
 
-  on("lifeloop.logInteraction", async (input?: Pick<Node, "page">) => {
+  on("lifeloop.logInteraction", async (input?: TaskTargetInput) => {
+    if (input?.handle) {
+      const target = taskTarget(lifeloop, input);
+      if (!target?.task) {
+        void vscode.window.showWarningMessage("LifeLoop: that task changed; no interaction was logged");
+        return;
+      }
+      const linkedPeople = directPersonLinks(lifeloop.store, target.task);
+      if (!linkedPeople.length) return;
+      const event = exactEventBinding(target.line);
+      await recordInteraction(lifeloop, linkedPeople, event ? "meeting" : undefined, target, event);
+      return;
+    }
     const person = activePerson(lifeloop, input);
     if (!person) { void vscode.window.showWarningMessage("LifeLoop: open a page tagged `person`"); return; }
     await recordInteraction(lifeloop, [person]);
