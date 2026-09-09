@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  applyDiagnosticFix, codeActions, definitions, relationshipDiagnostics,
+  applyDiagnosticFix, codeActions, definitions, documentSymbols, relationshipDiagnostics,
   relationshipHovers,
 } from "../src/retrieval.ts";
 import { LifeLoop } from "../src/workspace.ts";
@@ -260,4 +260,23 @@ describe("relationship hover", () => {
       expect(cadence).toContain("due");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
+});
+
+test("Journal symbols include counted and excluded Interactions at live ranges", async () => {
+  const text = "😀\r\n* Coffee [[People/Alice]] [interaction: coffee]\r\n* Empty [interaction: \"\"]\r\n";
+  const { lifeloop, dir } = await workspaceWith({
+    "People/Alice.md": "---\ntags: person\n---\n",
+    "Journal/2026-09-09.md": text,
+  });
+  const document = documentOf(text, join(dir, "Journal/2026-09-09.md"));
+  try {
+    const symbols = await (documentSymbols(lifeloop) as any).provideDocumentSymbols(document);
+    expect(symbols.map((symbol: any) => [symbol.name, symbol.detail])).toEqual([
+      ["coffee", "counted Interaction"],
+      ["(empty Interaction)", expect.stringContaining("empty Interaction kind")],
+    ]);
+    expect(symbols.map((symbol: any) => text.slice(
+      document.offsetAt(symbol.selectionRange.start), document.offsetAt(symbol.selectionRange.end),
+    ))).toEqual(["[interaction: coffee]", '[interaction: ""]']);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });

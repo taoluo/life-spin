@@ -701,13 +701,14 @@ export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvid
   return {
     provideDocumentSymbols(document) {
       const page = lifeloop.pageNameOfUri(document.uri);
+      const text = document.getText();
       const tasks = lifeloop.store
         .objects("task")
         .filter((t) => t.page === page && t.inComment !== true);
 
-      return tasks.map((task) => {
+      const taskSymbols = tasks.map((task) => {
         const [from] = (task.range as [number, number] | undefined) ?? [0, 0];
-        const start = document.positionAt(Math.min(from, document.getText().length));
+        const start = document.positionAt(Math.min(from, text.length));
         const range = document.lineAt(start.line).range;
         const symbol = new vscode.DocumentSymbol(
           String(task.name ?? "").trim() || "(empty task)",
@@ -721,6 +722,27 @@ export function documentSymbols(lifeloop: LifeLoop): vscode.DocumentSymbolProvid
         );
         return symbol;
       });
+
+      let journal = page.startsWith("Journal/");
+      try {
+        journal ||= (pageObject(text, pageMetaFor(page)).itags as string[] | undefined)?.includes("journal") === true;
+      } catch { /* malformed frontmatter is not a Journal declaration */ }
+      const interactionSymbols = journal ? locatedInteractions(lifeloop, text, page).map((interaction) => {
+        const range = new vscode.Range(
+          positionAt(text, interaction.lineFrom), positionAt(text, interaction.lineTo),
+        );
+        const selection = new vscode.Range(
+          positionAt(text, interaction.attribute.from), positionAt(text, interaction.attribute.to),
+        );
+        return new vscode.DocumentSymbol(
+          interaction.kind || "(empty Interaction)",
+          interaction.reasons.length ? `excluded · ${interaction.reasons.join("; ")}` : "counted Interaction",
+          vscode.SymbolKind.Event,
+          range,
+          selection,
+        );
+      }) : [];
+      return [...taskSymbols, ...interactionSymbols];
     },
   };
 }
