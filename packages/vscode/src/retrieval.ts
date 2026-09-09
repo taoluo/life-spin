@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import {
-  birthday, cadence, directPersonLinks, pageDate, pageMetaFor, pageObject, pathOf, people,
-  projectionNames, projections, relationshipDate, relationshipProjectionNames, resolveRef,
+  birthday, cadence, day, directPersonLinks, nextBirthday, pageDate, pageMetaFor, pageObject,
+  pathOf, people, personContext, projectionNames, projections, relationshipDate,
+  relationshipProjectionNames, resolveRef, TASK_MARKER,
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
@@ -37,6 +38,50 @@ const exactPerson = (lifeloop: LifeLoop, person: string): boolean => {
     return (page.itags as string[] | undefined)?.includes("person") === true;
   } catch { return false; }
 };
+
+type LocatedInteraction = {
+  attribute: QueryToken;
+  value: QueryToken;
+  kind: string;
+  lineFrom: number;
+  lineTo: number;
+  reasons: string[];
+};
+
+/** One live classifier shared by diagnostics, hover, and symbols. */
+function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): LocatedInteraction[] {
+  let date: string | null = null;
+  if (page) {
+    try { date = pageDate(pageObject(text, pageMetaFor(page))); } catch { /* invalid page metadata */ }
+  }
+  const queryBodies = findLocatedQueryFences(text).map((fence) => [fence.bodyFrom, fence.bodyTo] as const);
+  const found: LocatedInteraction[] = [];
+  for (const match of text.matchAll(/\[interaction:\s*(?:"([^"\r\n]*)"|([^\]\r\n]*))\]/g)) {
+    if (queryBodies.some(([from, to]) => match.index! >= from && match.index! < to)) continue;
+    const lineFrom = text.lastIndexOf("\n", Math.max(0, match.index! - 1)) + 1;
+    const newline = text.indexOf("\n", match.index!);
+    const lineTo = newline < 0 ? text.length : newline - (text[newline - 1] === "\r" ? 1 : 0);
+    const line = text.slice(lineFrom, lineTo);
+    if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) continue;
+    const raw = match[1] ?? match[2] ?? "";
+    const valueFrom = match.index! + (match[1] !== undefined
+      ? match[0].indexOf('"') + 1
+      : match[0].indexOf(":") + 1 + (match[0].slice(match[0].indexOf(":") + 1).match(/^\s*/)?.[0].length ?? 0));
+    const people = [...line.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)]
+      .map((link) => link[1].trim()).filter((person) => exactPerson(lifeloop, person));
+    const reasons = [
+      ...(!raw.trim() ? ["empty Interaction kind is excluded"] : []),
+      ...(!date ? ["Interaction is excluded because the page has no trustworthy Journal date"] : []),
+      ...(!people.length ? ["Interaction is excluded because it has no direct Person link"] : []),
+    ];
+    found.push({
+      attribute: { text: match[0], from: match.index!, to: match.index! + match[0].length },
+      value: { text: raw, from: valueFrom, to: valueFrom + raw.length },
+      kind: raw.trim(), lineFrom, lineTo, reasons,
+    });
+  }
+  return found;
+}
 
 /** LifeLoop-owned definitions only: query Person values and explicit SB refs. */
 export function definitions(lifeloop: LifeLoop): vscode.DefinitionProvider {
@@ -162,25 +207,107 @@ export function relationshipDiagnostics(
       }
     }
 
-    const date = pageObjectValue ? pageDate(pageObjectValue) : null;
-    for (const match of text.matchAll(/\[interaction:\s*(?:"([^"\r\n]*)"|([^\]\r\n]*))\]/g)) {
-      const lineStart = text.lastIndexOf("\n", Math.max(0, match.index! - 1)) + 1;
-      const lineEnd = text.indexOf("\n", match.index!);
-      const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).replace(/\r$/, "");
-      if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) continue;
-      const raw = match[1] ?? match[2] ?? "";
-      const valueFrom = match.index! + (match[1] !== undefined
-        ? match[0].indexOf('"') + 1
-        : match[0].indexOf(":") + 1 + (match[0].slice(match[0].indexOf(":") + 1).match(/^\s*/)?.[0].length ?? 0));
-      const value = { text: raw, from: valueFrom, to: valueFrom + raw.length };
-      if (!raw.trim()) { info(value, "empty Interaction kind is excluded"); continue; }
-      if (!date) info(value, "Interaction is excluded because the page has no trustworthy Journal date");
-      const linked = [...line.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)]
-        .map((link) => link[1].trim()).some((person) => exactPerson(lifeloop, person));
-      if (!linked) info(value, "Interaction is excluded because it has no direct Person link");
+    for (const interaction of locatedInteractions(lifeloop, text, page)) {
+      for (const reason of interaction.reasons) info(interaction.value, reason);
     }
   }
   return found;
+}
+
+const frontmatterValue = (text: string, field: string): QueryToken | undefined => {
+  const frontmatter = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0];
+  if (!frontmatter) return undefined;
+  const match = new RegExp(`^${field}:\\s*(.*?)\\s*$`, "m").exec(frontmatter);
+  if (!match) return undefined;
+  const from = match.index + match[0].indexOf(match[1]);
+  return { text: match[1], from, to: from + match[1].length };
+};
+
+const markdown = (value: string, range: vscode.Range): vscode.Hover => {
+  const contents = new vscode.MarkdownString(value);
+  contents.isTrusted = false;
+  contents.supportHtml = false;
+  return new vscode.Hover(contents, range);
+};
+
+const escaped = (value: string): string => value.replace(/([\\`*_[\]<>#])/g, "\\$1");
+
+/** LifeLoop-owned relationship semantics only; query and ordinary link hover stay elsewhere. */
+export function relationshipHovers(lifeloop: LifeLoop): vscode.HoverProvider {
+  return {
+    provideHover(document, position) {
+      const text = document.getText();
+      const offset = document.offsetAt(position);
+      if (findLocatedQueryFences(text).some((fence) => offset >= fence.bodyFrom && offset <= fence.bodyTo) ||
+          [...text.matchAll(/\[\[[^\]]+\]\]/g)].some((link) =>
+            offset >= link.index! && offset < link.index! + link[0].length)) return undefined;
+
+      let page: string | undefined;
+      try { page = lifeloop.pageNameOfUri(document.uri); } catch { /* untitled */ }
+      const interaction = locatedInteractions(lifeloop, text, page).find((entry) =>
+        offset >= entry.attribute.from && offset < entry.attribute.to);
+      if (interaction) {
+        const range = new vscode.Range(
+          positionAt(text, interaction.attribute.from), positionAt(text, interaction.attribute.to),
+        );
+        return markdown(interaction.reasons.length
+          ? `**Interaction excluded:** ${interaction.reasons.map(escaped).join("; ")}.`
+          : `**Interaction:** ${escaped(interaction.kind)} counts as an Interaction.`, range);
+      }
+
+      if (page) {
+        let livePage;
+        try { livePage = pageObject(text, pageMetaFor(page)); } catch { livePage = undefined; }
+        if (livePage && (livePage.itags as string[] | undefined)?.includes("person")) {
+          const born = frontmatterValue(text, "birthday");
+          if (born && offset >= born.from && offset <= born.to) {
+            const value = birthday(born.text);
+            const next = value ? nextBirthday(value, day()) : undefined;
+            if (next) {
+              return markdown(`**Birthday:** ${escaped(value!)} · next ${next}`,
+                new vscode.Range(positionAt(text, born.from), positionAt(text, born.to)));
+            }
+          }
+          const cadenceToken = frontmatterValue(text, "contact-every");
+          if (cadenceToken && offset >= cadenceToken.from && offset <= cadenceToken.to && lifeloop.indexIsSettled()) {
+            const days = cadence(cadenceToken.text);
+            const context = days ? personContext(lifeloop.store, page) : null;
+            if (context && context.cadenceDays === days) {
+              const last = context.lastInteraction?.date ?? "none recorded";
+              const reconnect = context.reconnectOn ?? "none yet";
+              const due = !context.lastInteraction || (context.reconnectOn !== undefined && context.reconnectOn <= day());
+              return markdown(
+                `**Contact cadence:** ${days} days  \nLast explicit interaction: ${last}  \nReconnect: ${reconnect} · ${due ? "due" : "not due"}`,
+                new vscode.Range(positionAt(text, cadenceToken.from), positionAt(text, cadenceToken.to)),
+              );
+            }
+          }
+        }
+      }
+
+      if (!lifeloop.indexIsSettled() || document.uri.scheme !== "file") return undefined;
+      const line = document.lineAt(position.line).text;
+      const marker = TASK_MARKER.exec(line);
+      const inMarker = marker && position.character >= marker[1].length - 1 &&
+        position.character < marker[0].length;
+      const inAttribute = [...line.matchAll(/\[[A-Za-z][\w-]*:\s*(?:"[^"\r\n]*"|[^\]\r\n]*)\]/g)]
+        .some((attribute) => position.character >= attribute.index! &&
+          position.character < attribute.index! + attribute[0].length);
+      if (!inMarker && !inAttribute) return undefined;
+      let target;
+      try { target = taskTargetAt(lifeloop, document, position.line); } catch { return undefined; }
+      if (!target?.task) return undefined;
+      const direct = directPersonLinks(lifeloop.store, target.task);
+      const personPages = new Set(people(lifeloop.store).map((person) => String(person.ref)));
+      const inherited = [...new Set(((target.task.ilinks as string[] | undefined) ?? [])
+        .filter((person) => personPages.has(person) && !direct.includes(person)))];
+      const range = document.lineAt(position.line).range;
+      return markdown(
+        `**Task relationships**  \nDirect People: ${direct.map(escaped).join(", ") || "none"}  \nInherited-only People: ${inherited.map(escaped).join(", ") || "none"}`,
+        range,
+      );
+    },
+  };
 }
 
 type FixToken = QueryToken & { role: "projection" | "option" | "field"; replacement: string };

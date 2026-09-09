@@ -101,7 +101,7 @@ export const birthday = (value: unknown): string | undefined => {
   return relationshipDate(date) ? raw : undefined;
 };
 
-const nextBirthday = (value: string, from: string): string | undefined => {
+export const nextBirthday = (value: string, from: string): string | undefined => {
   const monthDay = value.slice(-5);
   let year = Number(from.slice(0, 4));
   // A leap-day birthday may need to skip several years; it never moves to Feb 28.

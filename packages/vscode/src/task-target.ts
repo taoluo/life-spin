@@ -30,9 +30,10 @@ type IndexedTask = { task: LifeloopObject; ref: string };
 export function taskSourceRef(text: string, page: string, task: LifeloopObject): string {
   const ref = String(task.ref);
   const numeric = /^(.*)@(\d+)$/.exec(ref);
-  return numeric
-    ? `${numeric[1]}@${originalSourceOffset(text, Number(numeric[2]))}`
-    : `${page}@${ref}`;
+  if (!numeric) return `${page}@${ref}`;
+  const from = originalSourceOffset(text, Number(numeric[2]));
+  const lineStart = text.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+  return `${numeric[1]}@${lineStart}`;
 }
 
 function indexedTask(lifeloop: LifeLoop, page: string, offset: number): IndexedTask | undefined {
@@ -41,7 +42,9 @@ function indexedTask(lifeloop: LifeLoop, page: string, offset: number): IndexedT
   const task = tasks.universe(lifeloop.store).find((candidate) => {
     if (candidate.page !== page) return false;
     const from = (candidate.range as [number, number] | undefined)?.[0];
-    return from !== undefined && originalSourceOffset(text, from) === offset;
+    if (from === undefined) return false;
+    const liveFrom = originalSourceOffset(text, from);
+    return text.lastIndexOf("\n", Math.max(0, liveFrom - 1)) + 1 === offset;
   });
   if (!task) return undefined;
   return { task, ref: taskSourceRef(text, page, task) };

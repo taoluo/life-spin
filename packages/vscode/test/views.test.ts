@@ -235,6 +235,18 @@ describe("task command admission", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("uses the live line start for an indented numeric task", async () => {
+    const line = "  * [ ] nested task";
+    const text = `* context\n${line}\n`;
+    const offset = text.indexOf(line);
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": text });
+    try {
+      expect(taskTarget(lifeloop, { handle: {
+        ref: `Work@${offset}`, expectedText: line, expectedState: " ",
+      } })).toMatchObject({ page: "Work", offset, line });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("allows a unique anchored task to relocate in CRLF text", async () => {
     const line = '* [ ] anchored $task [deadline: "2020-01-01"]';
     const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\r\n` });

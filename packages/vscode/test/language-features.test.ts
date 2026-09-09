@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyDiagnosticFix, codeActions, definitions, relationshipDiagnostics,
+  relationshipHovers,
 } from "../src/retrieval.ts";
 import { LifeLoop } from "../src/workspace.ts";
 import * as vscode from "./vscode-mock.ts";
@@ -200,6 +201,63 @@ describe("command-only code actions", () => {
       expect(replace).not.toHaveBeenCalled();
       expect(await applyDiagnosticFix(receipt)).toBe(true);
       expect((replace.mock.calls[0][0] as any).edits[0].content).toBe("person");
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("relationship hover", () => {
+  test("shows direct and inherited People only on task syntax and fails closed when stale", async () => {
+    const line = "  * [ ] Follow up [[People/Bob]] [deadline: \"2026-09-10\"]";
+    const text = `* Context [[People/Alice]]\n${line}\n`;
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\n---\n",
+      "People/Bob.md": "---\ntags: person\n---\n",
+      "Work.md": text,
+    });
+    const document = documentOf(text, join(dir, "Work.md"));
+    const provider = relationshipHovers(lifeloop) as any;
+    try {
+      const task = await provider.provideHover(document, { line: 1, character: 5 });
+      expect(task.contents.value).toContain("Direct People: People/Bob");
+      expect(task.contents.value).toContain("Inherited-only People: People/Alice");
+      expect(await provider.provideHover(document, { line: 1, character: 28 })).toBeUndefined();
+
+      vscode.workspace.textDocuments = [{
+        ...documentOf("# no longer a Person\n", join(dir, "People/Bob.md")),
+        isDirty: true, isClosed: false,
+      } as any];
+      lifeloop.noteSourceChange();
+      expect(await provider.provideHover(document, { line: 1, character: 5 })).toBeUndefined();
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("explains live Interaction, birthday, and cadence semantics", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "People/Alice.md": "---\ntags: person\ncontact-every: 30d\n---\n",
+      "People/Leap.md": "---\ntags: person\nbirthday: 02-29\n---\n",
+      "Journal/2026-08-01.md": "* Call [[People/Alice]] [interaction: call]\n",
+      "Journal/2026-09-09.md": "* Coffee [[People/Alice]] [interaction: coffee]\n* Empty [interaction: \"\"]\n",
+    });
+    const provider = relationshipHovers(lifeloop) as any;
+    try {
+      const journalText = lifeloop.vault.read("Journal/2026-09-09.md");
+      const journal = documentOf(journalText, join(dir, "Journal/2026-09-09.md"));
+      expect((await provider.provideHover(journal, { line: 0, character: 42 })).contents.value)
+        .toContain("counts as an Interaction");
+      expect((await provider.provideHover(journal, { line: 1, character: 24 })).contents.value)
+        .toContain("empty Interaction kind");
+
+      const leapText = lifeloop.vault.read("People/Leap.md");
+      const leap = documentOf(leapText, join(dir, "People/Leap.md"));
+      expect((await provider.provideHover(leap, { line: 2, character: 12 })).contents.value)
+        .toContain("2028-02-29");
+
+      const aliceText = lifeloop.vault.read("People/Alice.md");
+      const alice = documentOf(aliceText, join(dir, "People/Alice.md"));
+      const cadence = (await provider.provideHover(alice, { line: 2, character: 18 })).contents.value;
+      expect(cadence).toContain("30 days");
+      expect(cadence).toContain("2026-09-09");
+      expect(cadence).toContain("due");
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
