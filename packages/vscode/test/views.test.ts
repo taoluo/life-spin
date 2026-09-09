@@ -190,6 +190,17 @@ describe("task command admission", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("admits a live guarded task before the index catches up", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": "" });
+    const line = "* [ ] newly opened";
+    try {
+      await lifeloop.vault.write("Work.md", `${line}\n`);
+      expect(taskTarget(lifeloop, { handle: {
+        ref: "Work@0", expectedText: line, expectedState: " ",
+      } })).toMatchObject({ page: "Work", offset: 0, line, task: undefined });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("requires all three handle receipts at runtime", async () => {
     const line = "* [ ] guarded";
     const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });

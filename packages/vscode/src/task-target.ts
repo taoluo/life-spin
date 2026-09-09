@@ -97,8 +97,9 @@ export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTar
     if (!handle) return null;
     const source = resolveHandle(lifeloop.vault, handle);
     if ("ok" in source) return null;
+    const numeric = /@(\d+)$/.exec(handle.ref);
+    if (numeric && Number(numeric[1]) !== source.lineStart) return null;
     const indexed = indexedTask(lifeloop, source.page, source.lineStart);
-    if (!indexed || indexed.ref !== handle.ref) return null;
     return {
       handle,
       page: source.page,
@@ -106,7 +107,7 @@ export function taskTarget(lifeloop: LifeLoop, input?: TaskTargetInput): TaskTar
       offset: source.lineStart,
       line: source.line,
       name: taskNameFromLine(source.line) ?? "",
-      task: indexed.task,
+      task: indexed?.ref === handle.ref ? indexed.task : undefined,
     };
   }
 
