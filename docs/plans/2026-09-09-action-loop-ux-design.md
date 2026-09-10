@@ -2,6 +2,7 @@
 
 Status: proposed design; implementation and qualification are not implied.
 Date: 2026-09-09. Source baseline: `064b987` (`vscode-implementation`).
+Revision: ownership and delivery-boundary clarification; no implementation claims added.
 
 ## 1. 目标与分工
 
@@ -17,7 +18,8 @@ Date: 2026-09-09. Source baseline: `064b987` (`vscode-implementation`).
 | 日程时间、全天事件、重复实例、位置、attendees | Calendar；LifeLoop 使用有限读取和已承诺同步字段 |
 | 手机 capture 与 pending note | Apple Notes bridge；沿用现有正文导入、所有权转移及冲突规则 |
 | 任务与关系的持久事实 | Markdown；SQLite 与生成视图可重建 |
-| 同步 baseline / unresolved state | 现有 bridge 状态；属于操作安全数据，不是可随索引清理的业务数据库 |
+| 同步 baseline / conflict / suspended binding | 目标由共享 bridge state 持有；是操作安全数据，不能随索引清理；当前 workspace-state 实现需要迁移 |
+| UI 展示、选择位置、最近运行摘要 | VS Code workspace state；不作为同步决策或解除暂停的 authority |
 
 本文补充 [relationship data surfaces](2026-09-09-relationship-data-surfaces.md)，不替换其
 直接参与人链接、History Sufficiency Rule 和 Markdown authority 契约。
@@ -43,7 +45,7 @@ Date: 2026-09-09. Source baseline: `064b987` (`vscode-implementation`).
 | A3 | Contextual Task Actions | 已有主要动作；统一状态、binding 与能力判断，补齐入口覆盖 | P0 |
 | A4 | Selection / scroll / focus | 在现有 TreeView 中保持连续性，验收宿主实际能力 | P0 |
 | A5 | Actionable refusals | 将现有失败原因映射到安全恢复入口 | P0 |
-| A6 | External Sync / report / Resolve | 复用现有 sync 与 resolver；补持久可见性及范围准确性 | P0 |
+| A6 | External Sync / report / Resolve | 复用 sync/resolver；修正共享状态归属，补持久可见性 | P0 + G2/G3 |
 | B1 | Link / Add Context | 已有 Link Project；扩展为选择确切已有 Project / Person / Note | P1 |
 | B2 | Waiting → Next Action | 组合完成、清除本地 Waiting、创建后续行动和改期 | P1 |
 | B3 | Capture Selected Text + Source | 复用 Capture；先支持 VS Code 编辑器选区和可获得的来源 | P1 |
@@ -58,6 +60,8 @@ Date: 2026-09-09. Source baseline: `064b987` (`vscode-implementation`).
 | C3 | Project closure checks | Complete / Archive 前显示未完事项及 bindings | P2 |
 | C4 | Project resumption brief | 只读聚合现有任务、明确日期事实与上下文 | P2，独立验收 |
 | C5 | Pre-meeting / Relationship resurfacing | 复用已有 restricted Brief / Person Context；检查事实、缺失数据与入口 | P2 |
+| C6 | Review period facts | 现有 Review 内展示有明确日期的 completion / Interaction facts | P2 |
+| C7 | Minimal Resume Cue | 可选一句 next-step + source；复用项目 Markdown / Capture Here | P2，可选 |
 | D1 | Today read-only Calendar Agenda | 新增范围读取，独立日历语义验收 | P3，独立验收 |
 | D2 | Recent Actions + Narrow Undo | 当前会话内、有限 Markdown 操作；逐个证明可安全反转 | P3，独立验收 |
 | D3 | Create Project from Task | 单独设计命名复合 mutation，不能把 Attach Page 自动当成 Create Project | P3，独立验收 |
@@ -65,6 +69,20 @@ Date: 2026-09-09. Source baseline: `064b987` (`vscode-implementation`).
 
 P0/P1 可以先交付。P2/P3 不应拖住高频路径；D4 不是本轮完成条件。
 Calendar Agenda 是新的受限范围读取，不自动扩大 Calendar 写入或 attendee 推断能力。
+
+### Delivery priority 与 release gates
+
+P0–P3 表示工作流交付顺序，不表示缺陷严重程度。以下 correctness gates 独立适用于所有批次：
+
+| Gate | 阻断条件 | 影响范围 |
+|---|---|---|
+| G1 Source / mutation | 错误对象写入、stale/ambiguous 校验缺失、破坏无关正文 | 所有依赖该写入路径的功能 |
+| G2 Sync authority | baseline 或暂停状态丢失后仍写入、并发执行者使用不同 truth、持久化失败却报成功 | 受影响 provider 的 sync / Resolve |
+| G3 External effects | 危险覆盖、未经核实重试、创建后绑定失败且补偿结果无法定位 | 受影响的外部写入功能 |
+
+Selection/focus continuity 是高频 UX 验收项，不因列为 P0 就等同于数据安全 blocker。
+独立 Inbox/只读功能可在自身 gates 通过后交付；不能以其他功能通过掩盖不安全路径，
+受影响路径必须修复或明确禁用。Agenda、Undo、Create Project 的资格条件仍单独验收。
 
 ## 4. 共用正确性契约
 
@@ -92,6 +110,25 @@ Calendar 创建后绑定失败仍须按现有所有权契约补偿；无法确�
 - 直接 exact Person links 才能作为参与人依据；继承 Person links 仅提供上下文或待确认建议。
 - 普通 mention 不计为 Interaction；没有明确日期不伪造历史。
 - 新增动作需要回答历史问题时，采用最小 domain Markdown 事实；不记录推测性 analytics 事件。
+
+### 4.3 Sync state ownership
+
+共享 bridge 层拥有 baseline、未解决 conflict 和 suspended binding 的读写规则；所有同步执行者
+（手动、autoSync，以及未来可能加入的 CLI）使用同一权威状态与写入准入机制。
+VS Code 仍是唯一用户 conflict resolver，但决定能否写入不能只存在于 VS Code UI 的 Map 中。
+
+当前 observations、Notes baseline 和 conflict 主要保存在 `apple.ts` 的 workspace state；
+autoSync 调用同一 VS Code sync 入口，当前未发现 CLI sync 入口。这是目标契约与存储实现的 gap，
+不是已证明发生了 CLI/autoSync 状态分裂。部分 observations 更新未等待持久化，迁移时必须处理失败语义。
+
+共享状态必须按 vault 与确切 provider/binding 身份隔离，不放入可删除重建的 index.sqlite。
+先迁移现有状态并验证，再切换 authority；不能让新旧存储同时决定写入。
+缺失、损坏或矛盾的 baseline 不得被默认为首次同步并覆盖任一侧，必须暂停相关写入并报告。
+外部效果已发生但状态持久化失败时保留不确定性，重新核实后才能继续，不宣布完整成功。
+
+共享文件本身不提供并发安全。首版允许只支持一个同步执行者，其他窗口/进程明确拒绝竞争执行；
+具体存储和准入实现须在实施时验证，不引入后台 service、分布式协调或自动接管机制。
+清理 UI 摘要或重建索引不改变暂停状态；任何新入口在遵守这些规则前不得启用外部同步写入。
 
 ## 5. P0：高频步骤与信任
 
@@ -138,8 +175,8 @@ Tree item identity 应与来源关联，不能随 label 或日期变化。保留
 各自契约；某一 provider 不可用不应谎报全体成功。已有自动同步策略可以复用，本轮不新建 scheduler。
 
 现有 `apple.ts` 持久化 conflict 记录并写 Output Channel；这不能证明全部 report 能跨重启存续。
-目标是在现有 workspace state 中保留最近一次运行摘要和仍未解决的异常，每个受影响 binding 合并当前状态，
-不建无限历史日志。至少包含时间、provider、pulled/pushed/refused/conflict/missing/unknown/compensation 结果、
+目标是 workspace state 只保留最近一次运行摘要和展示缓存；仍未解决的异常及写入暂停依据来自共享 bridge state，
+每个受影响 binding 合并当前状态，不建无限历史日志。至少包含时间、provider、pulled/pushed/refused/conflict/missing/unknown/compensation 结果、
 可定位来源和下一步。正常流水在 Output Channel 展示，未解决异常在重启后仍可发现。
 除现有 resolver 必要数据外不把私人正文复制到报告；删除报告不应删除 binding 或解除安全暂停。
 
@@ -233,6 +270,28 @@ Resumption brief 使用项目文字、open tasks、Waiting、已明确日期的 
 Pre-meeting / Person Context 复用已有实现：只读显示 last Interaction、open follow-ups、相关项目和有出处的 context。
 没有 exact Person/event 关联时不猜 attendee；事件读取失败不妨碍查看 Markdown facts，并明确标出缺失。
 
+### C6. Facts in this review period
+
+在现有 Review 增加所选期间的 completion facts 与有明确 Journal 日期的 Interactions，复用已有查询。
+每项可回到来源；遵守 C2 的历史完整性限制，不把当前完成记录描述为完整事件流水。
+默认标题为 `Facts in this review period`，展示实际日期范围。
+只有上一份 Review 有可验证的时间边界时才可称为 `since last review`，不能以最后打开页面的时间代替。
+
+New tasks 和 processed Inbox 暂不纳入“期间新增/处理”计数，除非存在可靠创建/处理日期或可比较快照。
+文件 mtime、SQLite 首次发现时间、当前 Processed 区域不能证明这些历史事件。
+本轮不为了补齐栏目添加 created/processed metadata、通用事件日志或独立 Activity Dashboard。
+
+### C7. Minimal Resume Cue（可选）
+
+暂停工作时可选写一句 next-step，并附确切 task/page source；优先用现有 Capture Here 写入项目普通 Markdown。
+已有明确 next action 时直接复用，不重复要求填写。恢复项目时可展示用户显式选择的 cue/source，
+但普通文字不是自动推断出的下一行动。找不到明确 cue 时保留 C4 的事实 brief，不建设自动文本识别规则。
+
+Cue 保存工作记忆；A2 Inbox Resume 保存处理位置，二者不共享写入凭据。
+打开旧 source 后需重新读取和验证；链接漂移不能变成猜测写入。取消 cue 不阻止暂停项目，
+保存失败应说明 cue 未保存；不承诺暂停与 cue 写入是跨页面原子事务。
+不新增 session entity、session_id、窗口布局、独立 workspace manager 或必填 summary。
+
 ## 8. P3 与独立资格条件
 
 ### D1. Read-only Agenda
@@ -252,6 +311,12 @@ Pre-meeting / Person Context 复用已有实现：只读显示 last Interaction�
 旧 receipt 不能跳过重新验证。完成一个反转后重新索引；不能证明安全的项仅提供 Open Source。
 普通编辑继续用 VS Code Undo；不纳入外部创建/同步、跨页面搬迁或复合流程。
 
+LifeLoop Undo 只作为受支持 semantic command 的显式反转入口，不接管原生快捷键或绕过宿主 Undo 栈。
+同一结果不能重复反转：原生 Undo、Redo 或其他编辑使 receipt 失效后，旧 LifeLoop Undo 不再可执行；
+即使正文后来恢复相同，也不能仅凭文本相等恢复旧凭据。使用现有版本校验，不建设两套通用 Undo 历史。
+LifeLoop Undo 改变的正文也会进入宿主编辑历史，应测试后续原生 Undo/Redo 的正常行为。
+本地反转不承诺撤回已执行的外部同步；不能证明外部影响边界时不提供 LifeLoop Undo。
+
 ### D3–D4. 项目创建与已有事件关联
 
 Create Project 必须单独落实名称/位置选择、expected absence、原任务保留、链接/子树处理和取消/失败契约。
@@ -269,7 +334,8 @@ recurring master 与 instance 区别、删除重建检测，以及绑定前双�
 | `packages/vscode/src/views.ts` | 稳定节点、局部刷新、facts 与 source/context 展示 |
 | `packages/semantic-core/src/contract.ts` 及现有查询模块 | 复用 named projections；缺少具体选择规则时增加共享查询 |
 | `packages/semantic-core/src/mutations/` | 复用日期、状态、capture、Inbox、页面/Interaction mutation；新增操作保留 guards |
-| `packages/vscode/src/apple.ts` | 集中 sync/report/Resolve UI 与现有 workspace state |
+| `packages/vscode/src/apple.ts` | 集中 sync/report/Resolve UI；workspace state 仅作展示，读取共享 bridge authority |
+| `packages/apple-bridge/src/` | 共用 baseline/conflict/suspension 与写入准入；从现有 workspace state 迁移，具体存储实现待验证 |
 | `packages/apple-bridge/src/calendar.ts` | 仅 D1 所需的范围读取与事件语义，不扩张默认写入范围 |
 
 UI 与 CLI 的同名语义必须一致；UI-only selection/scroll 不需要扩成 CLI feature。
@@ -289,10 +355,12 @@ UI 与 CLI 的同名语义必须一致；UI-only selection/scroll 不需要扩�
 | Tree/Review | 完成首/中/末项、过滤后节点消失、展开/selection/focus、冻结快照不变、从快照操作必须重新验证 |
 | Capture provenance | 多行/Markdown 特殊文本、dirty/untitled buffer、无选区、来源移动后不按旧位置写入 |
 | Logbook/Brief | 无完成日期、重开、范围边界、无日期 context、mtime 不作事实、缺失 event/Person 不推断 |
+| Review period / Resume Cue | 无上次 Review 边界、缺少创建/处理日期、索引重建不生成假历史、cue 取消/失败、已有 next action、旧 source 漂移 |
 | Wrap-up/closure | 中途取消、后一步失败不重复 Interaction、project 确认时关联项变化、不自动触碰外部对象 |
 | Sync/Resolve/report | 单边变更、双边收敛/分歧、baseline 不明、missing/recreated object、stale resolution、recurring Reminder、rich Notes 限制、补偿失败、重启后异常可见 |
+| Sync authority | 手动/autoSync 使用同一状态、多窗口竞争执行被拒绝、vault/provider 隔离、旧状态迁移矛盾、持久化失败、删除 UI 缓存/重建索引不能解除暂停；未来 CLI 启用前复用这些验收 |
 | Agenda | 跨日、全天、DST、时区、recurring exception、空结果 vs 读取失败/过期、无隐式绑定或写入 |
-| Narrow Undo | 后续编辑、绑定/政策变化、过期 receipt、反转失败、会话结束失效、不覆盖其他内容 |
+| Narrow Undo | 后续编辑、绑定/政策变化、过期 receipt、反转失败、会话结束失效、不覆盖其他内容、原生 Undo/Redo 与 semantic Undo 交错、正文恢复相同不复活旧 receipt、外部效果不被误称撤销 |
 
 每批先跑相关 targeted tests，收敛后跑 `npm run verify`。
 涉及 UI/宿主行为时分别运行 task-only VS Code 与 VS Code + Foam gates；涉及打包时运行 packaged gate。
@@ -305,9 +373,10 @@ Reminders 测完成及 recurrence 特例；Calendar 测受管 title、补偿/冲
 
 | 批次 | 可交付标准 |
 |---|---|
+| Release gates | 各已启用路径通过适用的 G1–G3；未通过路径不交付，不能用 UX 验收或 fake-only 证据替代宿主资格 |
 | P0 | 改期、处理恢复、任务动作与拒绝恢复可用；刷新连续性有真实宿主证据；未解决 sync 异常跨重启可见 |
 | P1 | Context、Waiting、选区 Capture、Next Action、Review 和 backlog 共用现有语义；无新增业务状态 |
-| P2 | Wrap-up、Logbook、closure 和受限 briefs 各自通过反例；未知历史明确呈现 |
+| P2 | Wrap-up、Logbook、closure、受限 briefs 和期间事实通过反例；未知历史明确呈现；Resume Cue 可选且不阻断交付 |
 | P3 | Agenda/Undo/Create Project 各自资格单独报告；未满足条件的项保持 deferred，不影响前面批次 |
 
 实施时按小而完整的功能里程碑验证和提交，更新 capability/support 文档。
@@ -318,6 +387,9 @@ Reminders 测完成及 recurrence 特例；Calendar 测受管 title、补偿/冲
 本轮不做 generic Dashboard / Kanban / editable database builder、health score、复杂 priority/energy/effort metadata、
 Goal hierarchy/OKR、recurrence/habits engine、generic CRM database、独立 Recent Activity subsystem、
 semantic-search platform 或新 plugin/runtime framework。也不为满足本文而扩建全面 SB parity。
+
+Natural-language dates 暂缓。Tomorrow / Next week / Pick Date 先覆盖确定性输入；
+只有真实使用证明仍有明显 friction，才评估有明确语言、歧义确认和时区边界的窄 NLP，不默认添加解析依赖。
 
 普通表格、图表、搜索、文件与笔记编辑继续优先采用 Foam/VS Code/现成扩展。
 只有具体、反复出现的工作流不足才能重新开启这些范围；“未来可用”不足以成为实现理由。
