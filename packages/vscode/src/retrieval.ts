@@ -463,6 +463,7 @@ export function codeActions(lifeloop: LifeLoop): vscode.CodeActionProvider {
       taskAction("Toggle Someday", "lifeloop.toggleSomeday");
       taskAction("Set Deadline", "lifeloop.setDeadline");
       taskAction("Quick Reschedule", "lifeloop.quickReschedule");
+      taskAction("Add Progress / Resume Cue", "lifeloop.addTaskNote");
       const linkedPeople = directPersonLinks(lifeloop.store, target.task);
       if (linkedPeople.length) {
         taskAction("Log Interaction", "lifeloop.logInteraction");

@@ -125,6 +125,50 @@ test("Explain Task reports bounded Today reasons from the refreshed task", async
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Capture Selection keeps focus and writes a source snapshot into the Inbox", async () => {
+  const text = "before\nselected\ntext\nafter\n";
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": text });
+  const handlers = registered(lifeloop);
+  const selection = {
+    isEmpty: false,
+    start: new vscode.Position(1, 0),
+    end: new vscode.Position(3, 0),
+  };
+  const document = {
+    uri: vscode.Uri.file(join(dir, "Work.md")), languageId: "markdown", fileName: join(dir, "Work.md"),
+    isDirty: true, isClosed: false,
+    getText: (range?: unknown) => range ? "selected\ntext\n" : text,
+  };
+  vscode.workspace.textDocuments = [document as any];
+  vscode.window.activeTextEditor = { document, selection } as any;
+  const shown = vi.spyOn(vscode.window, "showTextDocument");
+  try {
+    await handlers.get("lifeloop.captureSelection")!();
+    expect(lifeloop.vault.read("Inbox.md")).toContain(
+      "* Captured selection\n  > selected\n  > text\n  Source: [[Work]] · lines 2-3 · unsaved snapshot",
+    );
+    expect(vscode.window.activeTextEditor?.document).toBe(document);
+    expect(shown).not.toHaveBeenCalled();
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Add Progress records one guarded child without completing the task", async () => {
+  const line = "* [ ] parent";
+  const { lifeloop, dir } = await workspaceWith({
+    "Work.md": `${line}\n  * [ ] child\n`,
+  });
+  const handlers = registered(lifeloop);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "progress")) as any);
+  vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("tested the parser" as any);
+  try {
+    await handlers.get("lifeloop.addTaskNote")!(task(lifeloop, line));
+    expect(lifeloop.vault.read("Work.md")).toBe(
+      `${line}\n  * [ ] child\n  * Progress: tested the parser\n`,
+    );
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("Inbox processing skips within one pass, edits the next item, and resumes from pending content", async () => {
   const { lifeloop, dir } = await workspaceWith({
     "Inbox.md": "* first\n* second\n* third\n",

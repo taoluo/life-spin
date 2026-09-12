@@ -4,6 +4,7 @@ import {
 import type { Vault } from "../vault.ts";
 import { parseMarkdown } from "../../../../vendor/silverbullet/client/markdown_parser/parser.ts";
 import { collectNodesOfType } from "../../../../vendor/silverbullet/plug-api/lib/tree.ts";
+import { itemAt } from "./outline.ts";
 
 const MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\[\]\r\n]+)(\].*)$/;
 
@@ -256,6 +257,37 @@ export async function setTaskName(
   const cs = changeSet(`rename ${handle.ref}`);
   cs.expected.set(source.path, source.text);
   cs.writes.set(source.path, replaceLine(source.text, source.lineStart, source.lineEnd, line));
+  return applied(vault, cs, { line });
+}
+
+/** Append one ordinary Markdown child recording progress or the next resume cue. */
+export async function appendTaskNote(
+  vault: Vault,
+  handle: SourceHandle,
+  kind: "progress" | "next",
+  note: string,
+): Promise<MutationResult<{ line: string }>> {
+  const value = note.trim();
+  if (!value || /[\r\n]/.test(value)) return refuse("invalid", "task note must be one line");
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  if (!MARKER.test(source.line)) return refuse("stale", `${handle.ref} is not a task line`);
+
+  const eol = source.text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.text.split(/\r?\n/);
+  const lineNumber = source.text.slice(0, source.lineStart).split(/\r?\n/).length - 1;
+  const item = itemAt(lines, lineNumber);
+  if (!item) return refuse("stale", `${handle.ref} is no longer a list item`);
+  const label = kind === "progress" ? "Progress" : "Next";
+  const line = `${" ".repeat(item.indent + 2)}* ${label}: ${value}`;
+  if (lines.slice(item.line + 1, item.end).some((candidate) => candidate.trim() === line.trim())) {
+    return refuse("stale", `${handle.ref} already records that ${label.toLowerCase()}`);
+  }
+
+  lines.splice(item.end, 0, line);
+  const cs = changeSet(`append ${label.toLowerCase()} to ${handle.ref}`);
+  cs.expected.set(source.path, source.text);
+  cs.writes.set(source.path, lines.join(eol));
   return applied(vault, cs, { line });
 }
 

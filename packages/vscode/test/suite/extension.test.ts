@@ -155,10 +155,10 @@ suite("LifeLoop in a real VS Code", () => {
     const commands = await vscode.commands.getCommands(true);
     if (!process.env.LIFELOOP_TEST_FOAM) assert.strictEqual(vscode.extensions.getExtension("foam.foam-vscode"), undefined);
     for (const name of [
-      "lifeloop.capture", "lifeloop.captureHere", "lifeloop.processInbox", "lifeloop.openToday",
+      "lifeloop.capture", "lifeloop.captureHere", "lifeloop.captureSelection", "lifeloop.processInbox", "lifeloop.openToday",
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
-      "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.explainTask",
+      "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.explainTask", "lifeloop.addTaskNote",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
       "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
       "lifeloop.openQueryResult",
@@ -442,6 +442,47 @@ suite("LifeLoop in a real VS Code", () => {
       await document.save();
     } finally {
       (vscode.window as any).showInputBox = original;
+    }
+  });
+
+  test("Capture Selection records provenance and keeps the source editor active", async () => {
+    const config = vscode.workspace.getConfiguration("lifeloop");
+    const sourceUri = pageUri("Scratch/SelectionSource");
+    const inboxUri = pageUri("Scratch/SelectionInbox");
+    writeFileSync(sourceUri.fsPath, "before\nselected context\nafter\n");
+    const document = await vscode.workspace.openTextDocument(sourceUri);
+    const editor = await vscode.window.showTextDocument(document);
+    editor.selection = new vscode.Selection(1, 0, 1, "selected context".length);
+    try {
+      await config.update("inboxPage", "Scratch/SelectionInbox", vscode.ConfigurationTarget.Workspace);
+      await vscode.commands.executeCommand("lifeloop.captureSelection");
+      assert.strictEqual(vscode.window.activeTextEditor?.document.uri.fsPath, sourceUri.fsPath);
+      assert.match(readFileSync(inboxUri.fsPath, "utf8"),
+        /Captured selection\n  > selected context\n  Source: \[\[Scratch\/SelectionSource\]\] · line 2/);
+    } finally {
+      await config.update("inboxPage", undefined, vscode.ConfigurationTarget.Workspace);
+    }
+  });
+
+  test("Add Progress appends an ordinary guarded child without completing the task", async () => {
+    const uri = pageUri("Scratch/TaskProgress");
+    const line = "* [ ] parent";
+    writeFileSync(uri.fsPath, `${line}\n  * [ ] child\n`);
+    await vscode.commands.executeCommand("lifeloop.reindex");
+    const quickPick = vscode.window.showQuickPick;
+    const inputBox = vscode.window.showInputBox;
+    try {
+      (vscode.window as any).showQuickPick = async (items: any[]) =>
+        items.find((item) => item.id === "progress");
+      (vscode.window as any).showInputBox = async () => "verified the edge case";
+      await vscode.commands.executeCommand("lifeloop.addTaskNote", {
+        handle: { ref: "Scratch/TaskProgress@0", expectedText: line, expectedState: " " },
+      });
+      assert.strictEqual(readFileSync(uri.fsPath, "utf8"),
+        `${line}\n  * [ ] child\n  * Progress: verified the edge case\n`);
+    } finally {
+      (vscode.window as any).showQuickPick = quickPick;
+      (vscode.window as any).showInputBox = inputBox;
     }
   });
 

@@ -1,6 +1,9 @@
 import { expect, test, describe } from "vitest";
 import { MemoryVault } from "../vault.ts";
-import { setTaskState, stampCompletion, toggleParked, setTaskAttribute, setTaskName, cycleTaskState } from "./tasks.ts";
+import {
+  setTaskState, stampCompletion, toggleParked, setTaskAttribute, setTaskName,
+  cycleTaskState, appendTaskNote,
+} from "./tasks.ts";
 import { capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask } from "./inbox.ts";
 import { setProjectStatus, attachPageToTask, patchFrontmatter } from "./pages.ts";
 
@@ -46,6 +49,25 @@ test("renaming fails closed when metadata splits the visible title", async () =>
   expect(await setTaskName(vault, { ref: "Work@0", expectedText: text.trimEnd() }, "Remote"))
     .toMatchObject({ ok: false });
   expect(vault.read("Work.md")).toBe(text);
+});
+
+test("task progress and resume cues share one guarded ordinary Markdown path", async () => {
+  const text = "* [ ] parent\r\n  * [ ] child\r\n* [ ] sibling\r\n";
+  const vault = MemoryVault.of({ "Work.md": text });
+  const handle = { ref: "Work@0", expectedText: "* [ ] parent", expectedState: " " };
+
+  expect(await appendTaskNote(vault, handle, "progress", "checked the failing case"))
+    .toMatchObject({ ok: true });
+  expect(vault.read("Work.md")).toBe(
+    "* [ ] parent\r\n  * [ ] child\r\n  * Progress: checked the failing case\r\n* [ ] sibling\r\n",
+  );
+  const current = { ...handle, expectedText: "* [ ] parent" };
+  expect(await appendTaskNote(vault, current, "next", "rerun the focused test"))
+    .toMatchObject({ ok: true });
+  const beforeDuplicate = vault.snapshot();
+  expect(await appendTaskNote(vault, current, "next", "rerun the focused test"))
+    .toMatchObject({ ok: false, reason: "stale" });
+  unchanged(vault, beforeDuplicate);
 });
 
 describe("ticking a task", () => {

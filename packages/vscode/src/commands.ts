@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
-  capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask, setTaskState, toggleParked, moveItem,
+  capture, captureItem, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask,
+  setTaskState, toggleParked, moveItem, appendTaskNote,
   setTaskAttribute, setProjectStatus, attachPageToTask, freezeReview,
   PROJECT_STATES, review, week, day,
   readTemplate, builtinReviewTemplate, createFromTemplate,
@@ -251,6 +252,37 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     );
   });
 
+  on("lifeloop.captureSelection", async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      await vscode.commands.executeCommand("lifeloop.capture");
+      return;
+    }
+    const document = editor.document;
+    const selected = document.getText(editor.selection).replaceAll("\r\n", "\n");
+    if (!selected.trim()) {
+      await vscode.commands.executeCommand("lifeloop.capture");
+      return;
+    }
+    let source: string;
+    try {
+      source = `[[${lifeloop.pageNameOfUri(document.uri)}]]`;
+    } catch {
+      source = document.uri.scheme === "untitled"
+        ? document.fileName
+        : vscode.workspace.asRelativePath(document.uri, false);
+    }
+    const first = editor.selection.start.line + 1;
+    const last = editor.selection.end.character === 0 && editor.selection.end.line > editor.selection.start.line
+      ? editor.selection.end.line
+      : editor.selection.end.line + 1;
+    const range = first === last ? `line ${first}` : `lines ${first}-${last}`;
+    const quote = selected.replace(/\n$/, "").split("\n").map((line) => `  > ${line}`).join("\n");
+    const item = `* Captured selection\n${quote}\n  Source: ${source} · ${range}${document.isDirty ? " · unsaved snapshot" : ""}`;
+    const page = lifeloop.config("inboxPage", "Inbox");
+    await refreshAndReport(await captureItem(lifeloop.vault, item, page), `captured selection to ${page}`);
+  });
+
   on("lifeloop.openInbox", async () => {
     const page = lifeloop.config("inboxPage", "Inbox");
     const result = await ensureInbox(lifeloop.vault, page);
@@ -483,6 +515,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         : [{ label: "$(calendar) Add to Calendar", id: "calendar" }]),
       { label: "$(calendar) Set Deadline", id: "deadline" },
       { label: "$(calendar) Quick Reschedule", id: "reschedule" },
+      { label: "$(note) Add Progress / Resume Cue", id: "note" },
       { label: "$(question) Why here?", id: "why" },
       { label: `${target.line.includes("#waiting") ? "$(close) Clear" : "$(watch) Mark"} Waiting`, id: "waiting" },
       { label: `${target.line.includes("#someday") ? "$(close) Clear" : "$(archive) Mark"} Someday`, id: "someday" },
@@ -496,6 +529,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
     if (action.id === "brief") return vscode.commands.executeCommand("lifeloop.preMeetingBrief", target);
     if (action.id === "project") return openTaskProject(lifeloop, target);
+    if (action.id === "note") return vscode.commands.executeCommand("lifeloop.addTaskNote", target);
     if (action.id === "why") return vscode.commands.executeCommand("lifeloop.explainTask", target);
     if (action.id === "sync") return vscode.commands.executeCommand("lifeloop.syncExternal");
     if (action.id === "open-reminder" || action.id === "open-event") {
@@ -579,6 +613,34 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         "Open Source",
       );
       if (choice === "Open Source") await vscode.commands.executeCommand("lifeloop.revealTask", current);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
+  });
+
+  on("lifeloop.addTaskNote", async (input?: TaskTargetInput) => {
+    const at = taskTarget(lifeloop, input);
+    if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    const kind = await vscode.window.showQuickPick([
+      { label: "$(history) Progress", id: "progress" as const },
+      { label: "$(debug-step-over) Resume Cue", id: "next" as const },
+    ], { placeHolder: at.name || "Record on task" });
+    if (!kind) return;
+    const note = await vscode.window.showInputBox({
+      prompt: kind.id === "progress" ? "Progress made" : "Next step when you return",
+    });
+    if (!note) return;
+    try {
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current) {
+        void vscode.window.showWarningMessage("LifeLoop: that task changed; nothing was recorded");
+        return;
+      }
+      await refreshAndReport(
+        await appendTaskNote(lifeloop.vault, current.handle, kind.id, note),
+        kind.id === "progress" ? "recorded progress" : "saved resume cue",
+        current,
+      );
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
     }

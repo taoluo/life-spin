@@ -326,6 +326,7 @@ describe("command-only code actions", () => {
       );
       expect(actions.map((action: any) => action.title)).toEqual(expect.arrayContaining([
         "Complete", "Toggle Waiting", "Toggle Someday", "Set Deadline", "Quick Reschedule",
+        "Add Progress / Resume Cue",
         "Log Interaction", "Open Pre-meeting Brief",
       ]));
       expect(actions.every((action: any) =>

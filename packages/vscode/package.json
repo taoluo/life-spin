@@ -29,6 +29,10 @@
         "title": "LifeLoop: Capture Here"
       },
       {
+        "command": "lifeloop.captureSelection",
+        "title": "LifeLoop: Capture Selection with Source"
+      },
+      {
         "command": "lifeloop.openInbox",
         "title": "LifeLoop: Open Inbox"
       },
@@ -106,6 +110,10 @@
       {
         "command": "lifeloop.explainTask",
         "title": "LifeLoop: Explain Task"
+      },
+      {
+        "command": "lifeloop.addTaskNote",
+        "title": "LifeLoop: Add Progress / Resume Cue"
       },
       {
         "command": "lifeloop.peekSource",
@@ -322,6 +330,7 @@
         { "command": "lifeloop.reopenTask", "when": "false" },
         { "command": "lifeloop.revealTask", "when": "false" },
         { "command": "lifeloop.explainTask", "when": "false" },
+        { "command": "lifeloop.addTaskNote", "when": "false" },
         { "command": "lifeloop.peekSource", "when": "false" },
         { "command": "lifeloop.toggleWaiting", "when": "false" },
         { "command": "lifeloop.toggleSomeday", "when": "false" },
