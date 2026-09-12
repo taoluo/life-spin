@@ -158,7 +158,7 @@ suite("LifeLoop in a real VS Code", () => {
       "lifeloop.capture", "lifeloop.captureHere", "lifeloop.processInbox", "lifeloop.openToday",
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
-      "lifeloop.quickReschedule",
+      "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.explainTask",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
       "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
       "lifeloop.openQueryResult",

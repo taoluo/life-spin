@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 import {
-  today, upcoming, projectSignals, day, tasks, originalSourceOffset, TASK_MARKER,
+  today, upcoming, projectSignals, day, tasks,
   pending, openMentions, mentions, byPage,
   birthdaySignals, reconnectSignals, personContext, people,
   type LifeloopObject,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { taskSourceRef, type TaskCommandHandle } from "./task-target.ts";
+import { taskTargetFromIndexed, type TaskCommandHandle } from "./task-target.ts";
 
 /**
  * The views, and the invariant they exist to keep (I4).
@@ -40,37 +40,16 @@ function taskNode(
   showPage = true,
   reason?: string,
 ): Node {
+  const target = taskTargetFromIndexed(lifeloop, task);
   const page = String(task.page ?? "");
-  const [indexedFrom] = (task.range as [number, number] | undefined) ?? [0, 0];
-
-  // The receipt and label must describe the same indexed object. A live read here
-  // could sign a replacement task before reindexing. The JSON guard also refuses
-  // if another connection (CLI) updated the shared index after the task query.
-  const row = lifeloop.store.db.prepare(`
-    SELECT body FROM fts JOIN pages ON pages.id = fts.rowid
-    WHERE pages.path = ? AND EXISTS (
-      SELECT 1 FROM objects WHERE objects.page = pages.name
-      AND objects.tag = 'task' AND objects.ref = ? AND objects.json = ?
-    )
-  `).get(`${page}.md`, task.ref, JSON.stringify(task)) as { body: string } | undefined;
-  const text = row?.body ?? "";
-  const from = originalSourceOffset(text, indexedFrom);
-  const start = text.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
-  const end = text.indexOf("\n", from);
-  const line = text.slice(start, end === -1 ? text.length : end);
-
-  // Keep upstream index refs unchanged; mutation receipts address original text.
   const indexedRef = String(task.ref);
-  const ref = taskSourceRef(text, page, task);
-  const state = row ? TASK_MARKER.exec(line)?.[2] : undefined;
   const node = new Node(
     String(task.name ?? "").trim() || "(empty task)",
     vscode.TreeItemCollapsibleState.None,
     undefined,
-    state === undefined ? undefined :
-      { ref, expectedState: state, expectedText: line, capturedAt: new Date().toISOString() },
+    target?.handle,
     page,
-    from,
+    target?.offset,
   );
   node.id = indexedRef;
   if (node.handle) node.contextValue = "lifeloopTask";
@@ -82,7 +61,7 @@ function taskNode(
   if (!node.handle) bits.push("source action unavailable; use source commands");
   node.description = bits.join("  ·  ");
   node.tooltip = new vscode.MarkdownString(node.handle
-    ? `\`${line.trim()}\`\n\n_${page}_${reason ? `\n\nWhy: ${reason}` : ""}`
+    ? `\`${target!.line.trim()}\`\n\n_${page}_${reason ? `\n\nWhy: ${reason}` : ""}`
     : "Source action unavailable; open the source file and use cursor commands.");
   if (node.handle) node.command = {
     command: "lifeloop.revealTask",

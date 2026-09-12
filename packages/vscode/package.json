@@ -100,6 +100,14 @@
         "icon": "$(ellipsis)"
       },
       {
+        "command": "lifeloop.findTask",
+        "title": "LifeLoop: Find Task"
+      },
+      {
+        "command": "lifeloop.explainTask",
+        "title": "LifeLoop: Explain Task"
+      },
+      {
         "command": "lifeloop.peekSource",
         "title": "LifeLoop: Peek Source"
       },
@@ -313,6 +321,7 @@
         { "command": "lifeloop.completeTask", "when": "false" },
         { "command": "lifeloop.reopenTask", "when": "false" },
         { "command": "lifeloop.revealTask", "when": "false" },
+        { "command": "lifeloop.explainTask", "when": "false" },
         { "command": "lifeloop.peekSource", "when": "false" },
         { "command": "lifeloop.toggleWaiting", "when": "false" },
         { "command": "lifeloop.toggleSomeday", "when": "false" },

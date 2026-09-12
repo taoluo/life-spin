@@ -164,6 +164,7 @@ export const window = {
   onDidChangeActiveTextEditor: () => ({ dispose: () => {} }),
   showQuickPick: async () => undefined,
   showInputBox: async () => undefined,
+  showInformationMessage: async () => undefined,
   showWarningMessage: async (m: string) => { (window as any).lastWarning = m; },
   showErrorMessage: async (m: string) => { (window as any).lastError = m; },
   setStatusBarMessage: () => ({ dispose: () => {} }),

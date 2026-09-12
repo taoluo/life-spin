@@ -37,6 +37,11 @@ export type TodayBuckets = {
   waiting: LifeloopObject[];
 };
 
+export type TaskViewExplanation = {
+  included: boolean;
+  reasons: string[];
+};
+
 /**
  * Today: overdue / due today / scheduled today, **disjoint**, plus what you are
  * waiting on.
@@ -60,6 +65,60 @@ export function today(store: Store, date = day()): TodayBuckets {
   const due = take(actionable.filter((t) => t.deadline === date));
   const scheduled = take(actionable.filter((t) => t.scheduled === date));
   return { date, overdue, due, scheduled, waiting: tasks.parked(store) };
+}
+
+/** Explain only the two task predicates LifeLoop currently promises to users. */
+export function explainTask(
+  store: Store,
+  task: LifeloopObject,
+  view: "actionable" | "today",
+  date = day(),
+): TaskViewExplanation {
+  const same = (candidate: LifeloopObject) => candidate.ref === task.ref;
+  const parked = (["waiting", "someday"] as const).filter((tag) =>
+    (task.itags as string[] | undefined)?.includes(tag));
+  const direct = new Set((task.tags as string[] | undefined) ?? []);
+  const parkedReason = parked.map((tag) =>
+    `${direct.has(tag) ? "tagged" : "inherits"} #${tag}`);
+
+  if (view === "actionable") {
+    const included = tasks.actionable(store).some(same);
+    if (included) return { included, reasons: ["open and not parked"] };
+    if (task.inComment === true) return { included, reasons: ["inside a comment"] };
+    if (task.done === true) return { included, reasons: ["completed"] };
+    if (parkedReason.length) return { included, reasons: parkedReason };
+    return { included, reasons: ["not matched by the current actionable predicate"] };
+  }
+
+  const buckets = today(store, date);
+  if (buckets.overdue.some(same)) {
+    return { included: true, reasons: [`deadline ${String(task.deadline)} is before ${date}`] };
+  }
+  if (buckets.due.some(same)) {
+    return { included: true, reasons: [`deadline is ${date}`] };
+  }
+  if (buckets.scheduled.some(same)) {
+    return { included: true, reasons: [`scheduled for ${date}`] };
+  }
+  if (buckets.waiting.some(same)) {
+    return { included: true, reasons: parkedReason.length ? parkedReason : ["parked"] };
+  }
+  if (task.inComment === true) return { included: false, reasons: ["inside a comment"] };
+  if (task.done === true) return { included: false, reasons: ["completed"] };
+  if (parkedReason.length) return { included: false, reasons: parkedReason };
+
+  const reasons: string[] = [];
+  if (typeof task.deadline === "string") {
+    if (task.deadline > date) reasons.push(`deadline ${task.deadline} is after ${date}`);
+  } else {
+    reasons.push("no deadline on or before today");
+  }
+  if (typeof task.scheduled === "string") {
+    if (task.scheduled !== date) reasons.push(`scheduled for ${task.scheduled}, not ${date}`);
+  } else {
+    reasons.push(`not scheduled for ${date}`);
+  }
+  return { included: false, reasons };
 }
 
 export type UpcomingDay = { date: string; tasks: LifeloopObject[] };

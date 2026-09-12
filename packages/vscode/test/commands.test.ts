@@ -81,6 +81,50 @@ test("Quick Reschedule uses the explicit task, preserves deadline and Calendar, 
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Find Task searches status, source and context, then opens actions for the exact result", async () => {
+  const same = "* [ ] same";
+  const { lifeloop, dir } = await workspaceWith({
+    "A.md": `${same}\n`,
+    "B.md": `${same} [[People/Bob]] #waiting\n`,
+    "People/Bob.md": "---\ntags: person\n---\n",
+  });
+  const handlers = registered(lifeloop);
+  const shown = vi.spyOn(vscode.window, "showTextDocument")
+    .mockResolvedValue({ revealRange: vi.fn() } as any);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[], options: any) => {
+    if (options.placeHolder.startsWith("Find task")) {
+      expect(options).toMatchObject({ matchOnDescription: true, matchOnDetail: true });
+      expect(items.map((item) => item.description)).toEqual([
+        "actionable · A", "waiting · B",
+      ]);
+      expect(items[1].detail).toContain("People/Bob");
+      return items[1];
+    }
+    return items.find((item) => item.id === "source");
+  }) as any);
+  try {
+    await handlers.get("lifeloop.findTask")!();
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect((shown.mock.calls as any)[0][0].uri.fsPath).toBe(join(dir, "B.md"));
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Explain Task reports bounded Today reasons from the refreshed task", async () => {
+  const line = `* [ ] due [deadline: "${day()}"]`;
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+  const handlers = registered(lifeloop);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "today")) as any);
+  const info = vi.spyOn(vscode.window, "showInformationMessage");
+  try {
+    await handlers.get("lifeloop.explainTask")!(task(lifeloop, line));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining(`due is in Today: deadline is ${day()}`),
+      "Open Source",
+    );
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("Inbox processing skips within one pass, edits the next item, and resumes from pending content", async () => {
   const { lifeloop, dir } = await workspaceWith({
     "Inbox.md": "* first\n* second\n* third\n",

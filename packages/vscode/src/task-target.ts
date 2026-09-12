@@ -61,6 +61,42 @@ function taskHandle(value: unknown): TaskCommandHandle | null {
     : null;
 }
 
+/** Sign one exact indexed row against the source snapshot stored with that index revision. */
+export function taskTargetFromIndexed(lifeloop: LifeLoop, task: LifeloopObject): TaskTarget | null {
+  const page = String(task.page ?? "");
+  const [indexedFrom] = (task.range as [number, number] | undefined) ?? [0, 0];
+  const row = lifeloop.store.db.prepare(`
+    SELECT body FROM fts JOIN pages ON pages.id = fts.rowid
+    WHERE pages.path = ? AND EXISTS (
+      SELECT 1 FROM objects WHERE objects.page = pages.name
+      AND objects.tag = 'task' AND objects.ref = ? AND objects.json = ?
+    )
+  `).get(`${page}.md`, task.ref, JSON.stringify(task)) as { body: string } | undefined;
+  if (!row) return null;
+
+  const sourceText = row.body;
+  const from = originalSourceOffset(sourceText, indexedFrom);
+  const offset = sourceText.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+  const end = sourceText.indexOf("\n", from);
+  const line = sourceText.slice(offset, end === -1 ? sourceText.length : end);
+  const state = TASK_MARKER.exec(line)?.[2];
+  if (state === undefined) return null;
+  return {
+    handle: {
+      ref: taskSourceRef(sourceText, page, task),
+      expectedState: state,
+      expectedText: line,
+      capturedAt: new Date().toISOString(),
+    },
+    page,
+    sourceText,
+    offset,
+    line,
+    name: taskNameFromLine(line) ?? "",
+    task,
+  };
+}
+
 /** Capture one live task line as the guarded input every task command accepts. */
 export function taskTargetAt(
   lifeloop: LifeLoop,

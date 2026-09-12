@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { Store, indexVault } from "./index.ts";
-import { today, upcoming, week, review, projectSignals, shift } from "./projections.ts";
+import { today, upcoming, week, review, projectSignals, shift, explainTask } from "./projections.ts";
 import { MemoryVault } from "./vault.ts";
 import { freezeReview } from "./mutations/review.ts";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
@@ -49,6 +49,35 @@ describe("Today", () => {
     const t = today(store, "2026-09-08");
     expect(t.overdue).toHaveLength(0);
     expect(t.waiting.map((x) => x.name)).toEqual(["parked"]);
+    store.close();
+  });
+
+  test("explains bounded Today and actionable membership from the shared predicates", async () => {
+    const store = await vaultWith({
+      "Notes.md": [
+        '* [ ] due [deadline: "2026-09-08"]',
+        "* [ ] parent #waiting",
+        "  * [ ] inherited",
+        '* [ ] later [deadline: "2026-09-20"]',
+        "* [x] done",
+        "",
+      ].join("\n"),
+    });
+    const byName = (name: string) => store.objects("task").find((task) => task.name === name)!;
+
+    expect(explainTask(store, byName("due"), "today", "2026-09-08")).toEqual({
+      included: true, reasons: ["deadline is 2026-09-08"],
+    });
+    expect(explainTask(store, byName("inherited"), "actionable", "2026-09-08")).toEqual({
+      included: false, reasons: ["inherits #waiting"],
+    });
+    expect(explainTask(store, byName("later"), "today", "2026-09-08")).toEqual({
+      included: false,
+      reasons: ["deadline 2026-09-20 is after 2026-09-08", "not scheduled for 2026-09-08"],
+    });
+    expect(explainTask(store, byName("done"), "actionable", "2026-09-08")).toEqual({
+      included: false, reasons: ["completed"],
+    });
     store.close();
   });
 });
