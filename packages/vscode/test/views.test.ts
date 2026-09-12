@@ -59,6 +59,24 @@ describe("Today view", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("shows a session Now separately without adding it to Today", async () => {
+    const line = "* [ ] unscheduled focus";
+    const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+    try {
+      const target = taskTarget(lifeloop, {
+        handle: { ref: "Work@0", expectedText: line, expectedState: " " },
+      })!;
+      lifeloop.setNowTarget({
+        handle: target.handle, page: target.page, offset: target.offset, name: target.name,
+      });
+      const nodes = new TodayView(lifeloop).getChildren();
+      expect(nodes.map((node) => node.label)).toEqual(["Now  (1)"]);
+      expect(nodes[0].children?.[0]).toMatchObject({
+        label: "unscheduled focus", page: "Work", contextValue: "lifeloopTask",
+      });
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("says so when nothing is due, rather than showing empty sections", async () => {
     const { lifeloop, dir } = await workspaceWith({ "Work.md": "* [ ] someday thing\n" });
     const nodes = new TodayView(lifeloop).getChildren();

@@ -169,6 +169,35 @@ test("Add Progress records one guarded child without completing the task", async
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Now uses the explicit task, returns while valid, and refuses source drift", async () => {
+  const a = "* [ ] task A";
+  const b = "* [ ] task B";
+  const { lifeloop, dir } = await workspaceWith({ "A.md": `${a}\n`, "B.md": `${b}\n` });
+  const handlers = registered(lifeloop);
+  const bDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(join(dir, "B.md")) as any);
+  vscode.window.activeTextEditor = { document: bDocument, selection: { active: new vscode.Position(0, 0) } } as any;
+  const shown = vi.spyOn(vscode.window, "showTextDocument").mockResolvedValue({ revealRange: vi.fn() } as any);
+  const warning = vi.spyOn(vscode.window, "showWarningMessage");
+  try {
+    await handlers.get("lifeloop.setNow")!({
+      handle: { ref: "A@0", expectedText: a, expectedState: " " },
+    });
+    expect(lifeloop.nowTarget()).toMatchObject({ page: "A", name: "task A" });
+    await handlers.get("lifeloop.returnToNow")!();
+    expect((shown.mock.calls as any)[0][0].uri.fsPath).toBe(join(dir, "A.md"));
+
+    await lifeloop.vault.write("A.md", "* [ ] changed\n");
+    await handlers.get("lifeloop.returnToNow")!();
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      "LifeLoop: the Now task changed or moved; choose it again", "Find Task", "Clear Now",
+    );
+
+    await handlers.get("lifeloop.clearNow")!();
+    expect(lifeloop.nowTarget()).toBeUndefined();
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("Inbox processing skips within one pass, edits the next item, and resumes from pending content", async () => {
   const { lifeloop, dir } = await workspaceWith({
     "Inbox.md": "* first\n* second\n* third\n",

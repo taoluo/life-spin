@@ -6,7 +6,7 @@ import {
   type LifeloopObject,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
-import { taskTargetFromIndexed, type TaskCommandHandle } from "./task-target.ts";
+import { taskTarget, taskTargetFromIndexed, type TaskCommandHandle } from "./task-target.ts";
 
 /**
  * The views, and the invariant they exist to keep (I4).
@@ -111,12 +111,32 @@ abstract class BaseProvider implements vscode.TreeDataProvider<Node> {
 export class TodayView extends BaseProvider {
   protected roots(): Node[] {
     const t = today(this.lifeloop.store, day());
-    const nodes = [
+    const nodes: Node[] = [];
+    const now = this.lifeloop.nowTarget();
+    if (now) {
+      const current = taskTarget(this.lifeloop, now);
+      const node = new Node(
+        current?.name || now.name || "Current task",
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        current?.handle,
+        now.page,
+        now.offset,
+      );
+      if (current) node.contextValue = "lifeloopTask";
+      node.iconPath = new vscode.ThemeIcon(current ? "target" : "warning");
+      node.description = current ? now.page : `${now.page} · source changed`;
+      node.tooltip = current ? `Now: ${current.line.trim()}` : "Now source changed; choose the task again";
+      node.command = { command: "lifeloop.returnToNow", title: "Return to Now" };
+      const currentSection = section("Now", [node], "target");
+      if (currentSection) nodes.push(currentSection);
+    }
+    nodes.push(...[
       section("Overdue", t.overdue.map((x) => taskNode(this.lifeloop, x, true, `deadline ${x.deadline} is before today`)), "flame"),
       section("Due today", t.due.map((x) => taskNode(this.lifeloop, x, true, "deadline is today")), "calendar"),
       section("Scheduled", t.scheduled.map((x) => taskNode(this.lifeloop, x, true, "scheduled for today")), "clock"),
       section("Waiting", t.waiting.map((x) => taskNode(this.lifeloop, x, true, "task or inherited context is tagged #waiting")), "watch"),
-    ].filter((n): n is Node => n !== null);
+    ].filter((n): n is Node => n !== null));
 
     const days = upcoming(this.lifeloop.store, day(), this.lifeloop.config("upcomingDays", 14));
     const later = days.map((d) =>

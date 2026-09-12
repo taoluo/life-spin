@@ -5,6 +5,7 @@ import {
   Store, indexVault, markdownFiles, markdownFilesSync, isVaultMarkdownPath, pageNameOf, extractObjects, pageMetaFor,
   type Vault, NodeVault, pathOf, DEFAULT_CYCLE, type CycleStates,
 } from "@lifeloop/semantic-core";
+import type { SessionTaskHint } from "./task-target.ts";
 
 /**
  * The vault, the store, and the one thing that keeps them honest.
@@ -148,6 +149,7 @@ export class LifeLoop {
   private sourceRevision = 0;
   private indexedRevision = -1;
   private readonly changed = new vscode.EventEmitter<void>();
+  private now: SessionTaskHint | undefined;
   readonly onDidChange = this.changed.event;
 
   private constructor(readonly root: string, dbPath: string) {
@@ -375,6 +377,15 @@ export class LifeLoop {
   }
 
   notifyChanged(): void {
+    this.changed.fire();
+  }
+
+  nowTarget(): SessionTaskHint | undefined {
+    return this.now;
+  }
+
+  setNowTarget(target?: SessionTaskHint): void {
+    this.now = target;
     this.changed.fire();
   }
 

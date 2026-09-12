@@ -26,6 +26,8 @@ export type TaskTarget = {
   task?: LifeloopObject;
 };
 
+export type SessionTaskHint = Pick<TaskTarget, "handle" | "page" | "offset" | "name">;
+
 type IndexedTask = { task: LifeloopObject; ref: string };
 
 export function taskSourceRef(text: string, page: string, task: LifeloopObject): string {

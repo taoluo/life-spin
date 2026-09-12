@@ -159,6 +159,7 @@ suite("LifeLoop in a real VS Code", () => {
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
       "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.explainTask", "lifeloop.addTaskNote",
+      "lifeloop.setNow", "lifeloop.returnToNow", "lifeloop.clearNow",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
       "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
       "lifeloop.openQueryResult",
@@ -523,6 +524,22 @@ suite("LifeLoop in a real VS Code", () => {
     } finally {
       (vscode.window as any).showQuickPick = original;
     }
+  });
+
+  test("Now keeps the explicit target, returns to it, and clears session state", async () => {
+    const targetUri = pageUri("Scratch/NowTarget");
+    const otherUri = pageUri("Scratch/NowOther");
+    const line = "* [ ] current target";
+    writeFileSync(targetUri.fsPath, `${line}\n`);
+    writeFileSync(otherUri.fsPath, "* [ ] active editor task\n");
+    await vscode.commands.executeCommand("lifeloop.reindex");
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(otherUri));
+
+    const input = { handle: { ref: "Scratch/NowTarget@0", expectedText: line, expectedState: " " } };
+    await vscode.commands.executeCommand("lifeloop.setNow", input);
+    await vscode.commands.executeCommand("lifeloop.returnToNow");
+    assert.strictEqual(vscode.window.activeTextEditor?.document.uri.fsPath, targetUri.fsPath);
+    await vscode.commands.executeCommand("lifeloop.clearNow");
   });
 
   test("Process Inbox continues with the next item after each success", async () => {

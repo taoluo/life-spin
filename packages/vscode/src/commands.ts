@@ -499,8 +499,12 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     const event = exactEventBinding(target.line);
     const done = target.task?.done === true;
     const linkedPeople = target.task ? directPersonLinks(lifeloop.store, target.task) : [];
+    const now = lifeloop.nowTarget();
+    const isNow = now?.handle.ref === target.handle.ref &&
+      now.handle.expectedText === target.handle.expectedText;
     const action = await vscode.window.showQuickPick([
       { label: done ? "$(circle-outline) Reopen" : "$(check) Complete", id: done ? "reopen" : "complete" },
+      { label: isNow ? "$(close) Clear Now" : "$(target) Set as Now", id: isNow ? "clear-now" : "set-now" },
       ...(linkedPeople.length ? [{ label: "$(comment-discussion) Log Interaction", id: "interaction" }] : []),
       ...(reminder
         ? [{ label: "$(sync) Sync Reminder", id: "sync" }, { label: "$(link-external) Open Reminders", id: "open-reminder" }, { label: "$(debug-disconnect) Detach Reminder", id: "detach-reminder" }]
@@ -529,6 +533,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
     if (action.id === "brief") return vscode.commands.executeCommand("lifeloop.preMeetingBrief", target);
     if (action.id === "project") return openTaskProject(lifeloop, target);
+    if (action.id === "set-now") return vscode.commands.executeCommand("lifeloop.setNow", target);
+    if (action.id === "clear-now") return vscode.commands.executeCommand("lifeloop.clearNow");
     if (action.id === "note") return vscode.commands.executeCommand("lifeloop.addTaskNote", target);
     if (action.id === "why") return vscode.commands.executeCommand("lifeloop.explainTask", target);
     if (action.id === "sync") return vscode.commands.executeCommand("lifeloop.syncExternal");
@@ -590,6 +596,54 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
     }
+  });
+
+  on("lifeloop.setNow", async (input?: TaskTargetInput) => {
+    const at = taskTarget(lifeloop, input);
+    if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    try {
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current?.task) {
+        void vscode.window.showWarningMessage("LifeLoop: that task changed; Now was not set");
+        return;
+      }
+      lifeloop.setNowTarget({
+        handle: current.handle, page: current.page, offset: current.offset, name: current.name,
+      });
+      vscode.window.setStatusBarMessage(`LifeLoop: Now — ${current.name}`, 3000);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
+  });
+
+  on("lifeloop.returnToNow", async () => {
+    const now = lifeloop.nowTarget();
+    if (!now) {
+      const choice = await vscode.window.showInformationMessage("LifeLoop: no Now task in this session", "Find Task");
+      if (choice === "Find Task") await vscode.commands.executeCommand("lifeloop.findTask");
+      return;
+    }
+    try {
+      const current = await refreshTaskTarget(lifeloop, now);
+      if (current) {
+        await vscode.commands.executeCommand("lifeloop.revealTask", current);
+        return;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        "LifeLoop: the Now task changed or moved; choose it again",
+        "Find Task", "Clear Now",
+      );
+      if (choice === "Find Task") await vscode.commands.executeCommand("lifeloop.findTask");
+      if (choice === "Clear Now") lifeloop.setNowTarget();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
+  });
+
+  on("lifeloop.clearNow", () => {
+    if (!lifeloop.nowTarget()) return;
+    lifeloop.setNowTarget();
+    vscode.window.setStatusBarMessage("LifeLoop: Now cleared", 3000);
   });
 
   on("lifeloop.explainTask", async (input?: TaskTargetInput) => {

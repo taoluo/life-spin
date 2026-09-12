@@ -116,6 +116,18 @@
         "title": "LifeLoop: Add Progress / Resume Cue"
       },
       {
+        "command": "lifeloop.setNow",
+        "title": "LifeLoop: Set Task as Now"
+      },
+      {
+        "command": "lifeloop.returnToNow",
+        "title": "LifeLoop: Return to Now"
+      },
+      {
+        "command": "lifeloop.clearNow",
+        "title": "LifeLoop: Clear Now"
+      },
+      {
         "command": "lifeloop.peekSource",
         "title": "LifeLoop: Peek Source"
       },
