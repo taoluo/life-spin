@@ -5,8 +5,7 @@ import {
 } from "@lifeloop/semantic-core";
 import {
   Reminders, Calendar, Notes, appAvailable, syncReminders, boundTasks, bindReminder, bindCalendar,
-  planImport, applyImport, syncCalendar, type ObservationStore, type Observation, type ImportState,
-  type CalendarObservationStore, type CalendarObservation,
+  planImport, applyImport, syncCalendar, type Observation, type ImportState, type CalendarObservation,
   resolveCalendarConflict, resolveNoteConflict, resolveReminderConflict,
   type CalendarEvent,
   type CalendarExactRead,
@@ -79,37 +78,44 @@ export function renderPreMeetingBrief(
  */
 
 /** Observations live in workspace state — derived, and safe to lose. */
-class WorkspaceObservations implements ObservationStore {
-  private static readonly KEY = "lifeloop.reminderObservations";
-  constructor(private readonly memento: vscode.Memento) {}
+class WorkspaceObservationMap<T> {
+  private readonly cache: Record<string, T>;
+  private pending = Promise.resolve();
+  private persistenceError: unknown;
 
-  private all(): Record<string, Observation> {
-    return this.memento.get<Record<string, Observation>>(WorkspaceObservations.KEY, {});
-  }
-  get(id: string) { return this.all()[id]; }
-  set(id: string, observation: Observation) {
-    void this.memento.update(WorkspaceObservations.KEY, { ...this.all(), [id]: observation });
-  }
-  delete(id: string) {
-    const { [id]: _drop, ...rest } = this.all();
-    void this.memento.update(WorkspaceObservations.KEY, rest);
-  }
-}
-
-class WorkspaceCalendarObservations implements CalendarObservationStore {
-  private static readonly KEY = "lifeloop.calendarObservations";
-  private readonly cache: Record<string, CalendarObservation>;
-  constructor(private readonly memento: vscode.Memento) {
-    this.cache = memento.get(WorkspaceCalendarObservations.KEY, {});
+  constructor(
+    private readonly memento: vscode.Memento,
+    private readonly key: string,
+  ) {
+    this.cache = { ...memento.get<Record<string, T>>(key, {}) };
   }
   get(id: string) { return this.cache[id]; }
-  set(id: string, value: CalendarObservation) {
+  set(id: string, value: T) {
     this.cache[id] = value;
-    void this.memento.update(WorkspaceCalendarObservations.KEY, this.cache);
+    this.persist();
   }
   delete(id: string) {
     delete this.cache[id];
-    void this.memento.update(WorkspaceCalendarObservations.KEY, this.cache);
+    this.persist();
+  }
+  private persist(): void {
+    const snapshot = { ...this.cache };
+    this.pending = this.pending.then(async () => {
+      try {
+        await this.memento.update(this.key, snapshot);
+        this.persistenceError = undefined;
+      } catch (error) {
+        this.persistenceError = error;
+      }
+    });
+  }
+  async flush(): Promise<void> {
+    await this.pending;
+    if (this.persistenceError) {
+      const detail = this.persistenceError instanceof Error
+        ? this.persistenceError.message : String(this.persistenceError);
+      throw new Error(`could not persist ${this.key}: ${detail}`);
+    }
   }
 }
 
@@ -211,8 +217,8 @@ export async function openPreMeetingBrief(
 export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionContext): void {
   const on = (name: string, handler: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(name, handler));
-  const observations = new WorkspaceObservations(context.workspaceState);
-  const calendarObservations = new WorkspaceCalendarObservations(context.workspaceState);
+  const observations = new WorkspaceObservationMap<Observation>(context.workspaceState, "lifeloop.reminderObservations");
+  const calendarObservations = new WorkspaceObservationMap<CalendarObservation>(context.workspaceState, "lifeloop.calendarObservations");
   const notesKey = "lifeloop.noteObservations";
   const conflictsKey = "lifeloop.syncConflicts";
   const conflicts = new Map(
@@ -222,6 +228,20 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
   context.subscriptions.push(audit);
   const persistConflicts = () => context.workspaceState.update(conflictsKey, [...conflicts.values()]);
   const auditLine = (message: string) => audit.appendLine(`${new Date().toISOString()}  ${message}`);
+  const flushForResolution = async (
+    label: string,
+    store: { flush(): Promise<void> },
+  ): Promise<boolean> => {
+    try {
+      await store.flush();
+      return true;
+    } catch (error) {
+      auditLine(`${label} failed: ${(error as Error).message}`);
+      audit.show(true);
+      void vscode.window.showErrorMessage(`LifeLoop: ${label} failed — ${(error as Error).message}`);
+      return false;
+    }
+  };
   const importState: ImportState = {
     lastImported: new Map(Object.entries(context.workspaceState.get<Record<string, { text: string; modified: string }>>(notesKey, {}))),
   };
@@ -329,6 +349,7 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
             JSON.stringify(await lifeloop.currentTaskStates()) === JSON.stringify(taskStates),
           onRecurring: (task) => recurring.push(task.name),
         });
+        await observations.flush();
         if (report.completed.length) parts.push(`${report.completed.length} completed`);
         if (report.reopened.length) parts.push(`${report.reopened.length} reopened`);
         if (report.pushed.length) parts.push(`${report.pushed.length} reminders pushed`);
@@ -358,6 +379,7 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
           calendarName: lifeloop.config("calendarName", "Calendar"),
           observations: calendarObservations,
         });
+        await calendarObservations.flush();
         for (const uid of report.settled) conflicts.delete(`calendar:${uid}`);
         if (report.pulled.length) parts.push(`${report.pulled.length} calendar titles pulled`);
         if (report.pushed.length) parts.push(`${report.pushed.length} calendar titles pushed`);
@@ -372,10 +394,6 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         refusals.push(...report.refused);
         await lifeloop.reindex();
       }
-      vscode.window.setStatusBarMessage(
-        `LifeLoop: ${parts.length ? parts.join(", ") : "nothing to do"}`, 5000,
-      );
-
       // Visible and harmless beats invisible and harmless: otherwise someone waits
       // for a completion that will never arrive.
       if (recurring.length) {
@@ -389,6 +407,9 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         vscode.window.showWarningMessage(`LifeLoop: ${refusal.ref} — ${refusal.message}`);
       }
       await persistConflicts();
+      vscode.window.setStatusBarMessage(
+        `LifeLoop: ${parts.length ? parts.join(", ") : "nothing to do"}`, 5000,
+      );
       if (conflicts.size) {
         const action = await vscode.window.showWarningMessage(
           `LifeLoop: ${conflicts.size} external sync conflict(s) need attention; both versions were kept.`,
@@ -398,7 +419,16 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         if (action === "Show Log") audit.show(true);
       }
     } catch (error) {
-      vscode.window.showErrorMessage(`LifeLoop: sync failed — ${(error as Error).message}`);
+      const persistence = await Promise.allSettled([observations.flush(), calendarObservations.flush()]);
+      const original = (error as Error).message;
+      const extra = persistence.find((result) => result.status === "rejected");
+      const extraMessage = extra?.status === "rejected"
+        ? (extra.reason instanceof Error ? extra.reason.message : String(extra.reason)) : undefined;
+      const message = extraMessage && extraMessage !== original
+        ? `${original}; ${extraMessage}` : original;
+      auditLine(`sync failed: ${message}`);
+      audit.show(true);
+      vscode.window.showErrorMessage(`LifeLoop: sync failed — ${message}`);
     }
   });
 
@@ -431,13 +461,13 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         auditLine(`Notes conflict ${conflict.id}: ${conflict.reason}`);
       }
       if (result.conflicts.length) bits.push(`${result.conflicts.length} conflicts`);
-      vscode.window.setStatusBarMessage(`LifeLoop: Notes ${bits.join(", ")}`, 5000);
       for (const refusal of result.refused) {
         void vscode.window.showWarningMessage(
           `LifeLoop: Apple Note ${refusal.id} ${refusal.action} failed — ${refusal.message}`,
         );
       }
       await persistConflicts();
+      vscode.window.setStatusBarMessage(`LifeLoop: Notes ${bits.join(", ")}`, 5000);
       if (result.conflicts.length) {
         const action = await vscode.window.showWarningMessage(
           `LifeLoop: ${result.conflicts.length} Notes conflict(s); both versions were kept.`,
@@ -447,6 +477,8 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         if (action === "Show Log") audit.show(true);
       }
     } catch (error) {
+      auditLine(`Notes sync failed: ${(error as Error).message}`);
+      audit.show(true);
       vscode.window.showErrorMessage(`LifeLoop: import failed — ${(error as Error).message}`);
     }
   });
@@ -485,6 +517,7 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         expectedLocal: item.local, expectedRemote: item.remote,
         observations: calendarObservations,
       });
+      if (!(await flushForResolution("Calendar conflict resolution", calendarObservations))) return;
     } else if (item.kind === "reminder") {
       if (!(await requireApp("Reminders"))) return;
       const at = item.ref.lastIndexOf("@");
@@ -494,6 +527,7 @@ export function registerApple(lifeloop: LifeLoop, context: vscode.ExtensionConte
         expectedLocal: item.local, expectedRemote: item.remote,
         observations,
       });
+      if (!(await flushForResolution("Reminder conflict resolution", observations))) return;
     } else {
       if (!(await requireApp("Notes"))) return;
       const folder = lifeloop.config("notesFolder", "LifeLoop Inbox");

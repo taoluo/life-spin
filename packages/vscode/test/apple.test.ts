@@ -31,13 +31,17 @@ afterEach(() => {
 });
 
 /** Exercise public command registration while keeping every Apple effect fake. */
-function appleCommands(lifeloop: LifeLoop) {
+function appleCommands(
+  lifeloop: LifeLoop,
+  beforeUpdate?: (key: string, value: unknown) => Promise<void>,
+) {
   const handlers = new Map<string, (...args: any[]) => unknown>();
   vi.spyOn(vscode.commands, "registerCommand").mockImplementation(((name: string, handler: any) => {
     handlers.set(name, handler);
     return { dispose() {} };
   }) as any);
-  (vscode.window as any).createOutputChannel = vi.fn(() => ({ appendLine: vi.fn(), dispose() {} }));
+  const audit = { appendLine: vi.fn(), show: vi.fn(), dispose() {} };
+  (vscode.window as any).createOutputChannel = vi.fn(() => audit);
   const state: Record<string, unknown> = {
     "lifeloop.reminderObservations": { R0: { localName: "keep" } },
     "lifeloop.calendarObservations": { E0: { localName: "keep", remoteSummary: "keep" } },
@@ -45,7 +49,10 @@ function appleCommands(lifeloop: LifeLoop) {
     "lifeloop.syncConflicts": [{ kind: "calendar", id: "E0", ref: "Other@0", reason: "keep" }],
   };
   const before = structuredClone(state);
-  const update = vi.fn(async (key: string, value: unknown) => { state[key] = value; });
+  const update = vi.fn(async (key: string, value: unknown) => {
+    await beforeUpdate?.(key, value);
+    state[key] = structuredClone(value);
+  });
   const effects = [
     vi.spyOn(lifeloop.vault, "write"), vi.spyOn(lifeloop.vault, "remove"),
     vi.spyOn(vscode.workspace, "applyEdit"),
@@ -71,7 +78,7 @@ function appleCommands(lifeloop: LifeLoop) {
     subscriptions: [], workspaceState: { get: (key: string, fallback: unknown) => state[key] ?? fallback, update },
   } as any);
   return {
-    available, read, open, show,
+    available, read, open, show, audit, state, status, update,
     run: (name: string, input: unknown) => handlers.get(name)!(input),
     unchanged() {
       for (const effect of [...effects, batchRead, update, status]) expect(effect).not.toHaveBeenCalled();
@@ -83,6 +90,11 @@ function appleCommands(lifeloop: LifeLoop) {
     },
   };
 }
+
+const emptyReminderReport = () => ({
+  completed: [], reopened: [], pushed: [], pulled: [], marksCleared: [],
+  recurring: [], conflicts: [], refused: [], skipped: 0,
+});
 
 describe("restricted Pre-meeting Brief", () => {
   const line = '* [ ] Meet [[People/Alice]] [event: "E1"]';
@@ -223,6 +235,58 @@ describe("registered Apple command boundaries", () => {
   const snapshot = (lifeloop: LifeLoop) => Object.fromEntries(
     lifeloop.vault.list().map(path => [path, lifeloop.vault.read(path)]),
   );
+
+  test("sync serializes observation snapshots and waits before reporting success", async () => {
+    const task = '* [ ] One [reminder: "R1"]';
+    const { lifeloop, dir } = await workspaceWith(files(task));
+    let active = 0;
+    let maxActive = 0;
+    const command = appleCommands(lifeloop, async (key) => {
+      if (key !== "lifeloop.reminderObservations") return;
+      maxActive = Math.max(maxActive, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+    });
+    vi.mocked(bridge.syncReminders).mockImplementation(async ({ observations }: any) => {
+      observations.set("R1", { completed: false, modificationDate: "one", name: "One" });
+      expect(observations.get("R1")?.name).toBe("One");
+      observations.set("R2", { completed: false, modificationDate: "two", name: "Two" });
+      expect(observations.get("R2")?.name).toBe("Two");
+      return emptyReminderReport();
+    });
+    try {
+      await command.run("lifeloop.syncProjected", undefined);
+      expect(maxActive).toBe(1);
+      expect(command.state["lifeloop.reminderObservations"]).toMatchObject({
+        R0: { localName: "keep" }, R1: { name: "One" }, R2: { name: "Two" },
+      });
+      expect(command.status).toHaveBeenCalledWith("LifeLoop: nothing to do", 5000);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("sync reports observation persistence failure without claiming success", async () => {
+    const task = '* [ ] One [reminder: "R1"]';
+    const { lifeloop, dir } = await workspaceWith(files(task));
+    const command = appleCommands(lifeloop, async (key) => {
+      if (key === "lifeloop.reminderObservations") throw new Error("storage unavailable");
+    });
+    vi.mocked(bridge.syncReminders).mockImplementation(async ({ observations }: any) => {
+      observations.set("R1", { completed: false, modificationDate: "one", name: "One" });
+      return emptyReminderReport();
+    });
+    const error = vi.spyOn(vscode.window, "showErrorMessage");
+    try {
+      await command.run("lifeloop.syncProjected", undefined);
+      expect(command.status).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(
+        "sync failed — could not persist lifeloop.reminderObservations: storage unavailable",
+      ));
+      expect(command.audit.appendLine).toHaveBeenCalledWith(expect.stringContaining(
+        "sync failed: could not persist lifeloop.reminderObservations: storage unavailable",
+      ));
+      expect(command.audit.show).toHaveBeenCalledWith(true);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
 
   for (const reason of ["no binding", "empty binding", "duplicate binding", "no Person", "missing Person", "non-Person", "inherited only", "stale handle"] as const) {
     test(`Brief ${reason} refuses before capability and leaves all effects untouched`, async () => {
