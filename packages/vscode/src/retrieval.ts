@@ -462,7 +462,7 @@ export function codeActions(lifeloop: LifeLoop): vscode.CodeActionProvider {
       taskAction("Toggle Waiting", "lifeloop.toggleWaiting");
       taskAction("Toggle Someday", "lifeloop.toggleSomeday");
       taskAction("Set Deadline", "lifeloop.setDeadline");
-      taskAction("Set Scheduled", "lifeloop.setScheduled");
+      taskAction("Quick Reschedule", "lifeloop.quickReschedule");
       const linkedPeople = directPersonLinks(lifeloop.store, target.task);
       if (linkedPeople.length) {
         taskAction("Log Interaction", "lifeloop.logInteraction");

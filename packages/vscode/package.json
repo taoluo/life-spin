@@ -74,6 +74,10 @@
         "title": "LifeLoop: Set Scheduled"
       },
       {
+        "command": "lifeloop.quickReschedule",
+        "title": "LifeLoop: Quick Reschedule"
+      },
+      {
         "command": "lifeloop.attachPage",
         "title": "LifeLoop: Attach Page to Task"
       },

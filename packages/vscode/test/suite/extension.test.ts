@@ -158,6 +158,7 @@ suite("LifeLoop in a real VS Code", () => {
       "lifeloop.capture", "lifeloop.captureHere", "lifeloop.processInbox", "lifeloop.openToday",
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
+      "lifeloop.quickReschedule",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
       "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
       "lifeloop.openQueryResult",
@@ -456,6 +457,28 @@ suite("LifeLoop in a real VS Code", () => {
         handle: { ref: "Scratch/TaskActions@0", expectedText: line, expectedState: " " },
       });
       assert.match(readPage("Scratch/TaskActions"), /^\* \[x\] task action target/);
+    } finally {
+      (vscode.window as any).showQuickPick = original;
+    }
+  });
+
+  test("Quick Reschedule keeps the explicit Tree target when another editor is active", async () => {
+    const targetUri = pageUri("Scratch/RescheduleTarget");
+    const otherUri = pageUri("Scratch/RescheduleOther");
+    const line = '* [ ] target [deadline: "2099-12-31"] [event: "E1"]';
+    writeFileSync(targetUri.fsPath, `${line}\n`);
+    writeFileSync(otherUri.fsPath, "* [ ] other\n");
+    await vscode.commands.executeCommand("lifeloop.reindex");
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(otherUri));
+    const original = vscode.window.showQuickPick;
+    try {
+      (vscode.window as any).showQuickPick = async (items: any[]) => items[1];
+      await vscode.commands.executeCommand("lifeloop.quickReschedule", {
+        handle: { ref: "Scratch/RescheduleTarget@0", expectedText: line, expectedState: " " },
+      });
+      assert.match(readFileSync(targetUri.fsPath, "utf8"),
+        /^\* \[ \] target \[deadline: "2099-12-31"\] \[event: "E1"\] \[scheduled: "\d{4}-\d{2}-\d{2}"\]$/m);
+      assert.strictEqual(readFileSync(otherUri.fsPath, "utf8"), "* [ ] other\n");
     } finally {
       (vscode.window as any).showQuickPick = original;
     }

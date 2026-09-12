@@ -325,7 +325,7 @@ describe("command-only code actions", () => {
         document, new vscode.Range(0, 0, 0, line.length), { diagnostics: [] },
       );
       expect(actions.map((action: any) => action.title)).toEqual(expect.arrayContaining([
-        "Complete", "Toggle Waiting", "Toggle Someday", "Set Deadline", "Set Scheduled",
+        "Complete", "Toggle Waiting", "Toggle Someday", "Set Deadline", "Quick Reschedule",
         "Log Interaction", "Open Pre-meeting Brief",
       ]));
       expect(actions.every((action: any) =>

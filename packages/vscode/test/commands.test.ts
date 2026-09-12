@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { day } from "@lifeloop/semantic-core";
+import { day, pending, shift, week } from "@lifeloop/semantic-core";
 import { recordInteraction } from "../src/commands.ts";
 import { register as registerCommands } from "../src/commands.ts";
 import { taskTarget, type TaskTarget } from "../src/task-target.ts";
@@ -41,6 +41,74 @@ function registered(lifeloop: LifeLoop): Map<string, Function> {
   registerCommands(lifeloop, { subscriptions: [] } as any);
   return handlers;
 }
+
+test("Quick Reschedule uses the explicit task, preserves deadline and Calendar, and reports after refresh", async () => {
+  const a = '* [ ] A [deadline: "2026-09-20"] [event: "E1"]';
+  const b = "* [ ] B";
+  const { lifeloop, dir } = await workspaceWith({ "A.md": `${a}\n`, "B.md": `${b}\n` });
+  const handlers = registered(lifeloop);
+  const picked = vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) => {
+    expect(items.map((item) => item.label)).toEqual([
+      `$(calendar) Today — ${day()}`,
+      `$(calendar) Tomorrow — ${shift(day(), 1)}`,
+      `$(calendar) Next week — ${week(shift(day(), 7)).start}`,
+      "$(calendar) Pick date…",
+      "$(close) Clear scheduled",
+    ]);
+    return items[1];
+  }) as any);
+  const bDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(join(dir, "B.md")) as any);
+  vscode.window.activeTextEditor = { document: bDocument, selection: { active: new vscode.Position(0, 0) } } as any;
+  const status = vi.spyOn(vscode.window, "setStatusBarMessage");
+  const errors = vi.spyOn(vscode.window, "showErrorMessage");
+  const reindex = lifeloop.reindex.bind(lifeloop);
+  let calls = 0;
+  vi.spyOn(lifeloop, "reindex").mockImplementation(async (...args: any[]) => {
+    if (++calls === 2) throw new Error("refresh failed");
+    return reindex(...args);
+  });
+  try {
+    await handlers.get("lifeloop.quickReschedule")!({
+      handle: { ref: "A@0", expectedText: a, expectedState: " " },
+    });
+    expect(lifeloop.vault.read("A.md")).toBe(
+      `* [ ] A [deadline: "2026-09-20"] [event: "E1"] [scheduled: "${shift(day(), 1)}"]\n`,
+    );
+    expect(lifeloop.vault.read("B.md")).toBe(`${b}\n`);
+    expect(status).not.toHaveBeenCalled();
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("saved locally, but views did not refresh"));
+    expect(picked).toHaveBeenCalledTimes(1);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Inbox processing skips within one pass, edits the next item, and resumes from pending content", async () => {
+  const { lifeloop, dir } = await workspaceWith({
+    "Inbox.md": "* first\n* second\n* third\n",
+  });
+  const handlers = registered(lifeloop);
+  const revealRange = vi.fn();
+  const shown = vi.spyOn(vscode.window, "showTextDocument")
+    .mockResolvedValue({ revealRange } as any);
+  const choices = ["skip", "archive", "edit"];
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) => {
+    const id = choices.shift();
+    return items.find((item) => item.id === id);
+  }) as any);
+  try {
+    await handlers.get("lifeloop.processInbox")!();
+    expect(pending(lifeloop.vault.read("Inbox.md")).map((item) => item.text)).toEqual([
+      "* first", "* third",
+    ]);
+    expect(lifeloop.vault.read("Inbox.md")).toContain("## Processed\n\n* second");
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(revealRange).toHaveBeenCalledTimes(1);
+
+    vi.mocked(vscode.window.showQuickPick).mockImplementation((async (items: any[]) =>
+      items.find((item) => item.id === "archive")) as any);
+    await handlers.get("lifeloop.processInbox")!();
+    expect(pending(lifeloop.vault.read("Inbox.md"))).toEqual([]);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 describe("task-originated Log Interaction", () => {
   const line = '* [ ] Meet [[People/Alice]] and [[People/Bob]] [event: "E1"]';
