@@ -359,8 +359,16 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   });
 
   on("lifeloop.taskActions", async (input?: TaskTargetInput) => {
-    const target = taskTarget(lifeloop, input);
+    let target = taskTarget(lifeloop, input);
     if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    try {
+      await lifeloop.currentTaskStates();
+      target = taskTarget(lifeloop, target);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
+    if (!target) { void vscode.window.showWarningMessage("LifeLoop: that task changed; choose it again"); return; }
     const reminder = /\[reminder:\s*"([^"]+)"\]/.exec(target.line)?.[1];
     const event = exactEventBinding(target.line);
     const done = target.task?.done === true;

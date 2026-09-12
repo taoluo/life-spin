@@ -3,7 +3,8 @@ import { assertRuntime } from "@lifeloop/semantic-core";
 import { LifeLoop } from "./workspace.ts";
 import { TodayView, ProjectsView, InboxView, LinkedTasksView, MentionsView, PersonContextView } from "./views.ts";
 import {
-  applyDiagnosticFix, codeActions, publishDiagnostics, documentSymbols, definitions, relationshipHovers,
+  applyDiagnosticFix, codeActions, publishDiagnostics, publishDocumentDiagnostics,
+  documentSymbols, definitions, relationshipHovers,
 } from "./retrieval.ts";
 import { register } from "./commands.ts";
 import { registerApple } from "./apple.ts";
@@ -110,7 +111,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LifeLo
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.languageId !== "markdown") return;
       lifeloop!.noteSourceChange();
-      publishDiagnostics(lifeloop!, diagnostics, event.document);
+      publishDocumentDiagnostics(lifeloop!, diagnostics, event.document);
       clearTimeout(pendingReindex);
       pendingReindex = setTimeout(() => {
         void lifeloop!.touch(event.document.uri, event.document.getText()).catch((error) =>

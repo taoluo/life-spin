@@ -423,7 +423,7 @@ const emptyCommandAction = (
 /** Task commands plus deterministic relationship-spelling fixes; never an eager edit. */
 export function codeActions(lifeloop: LifeLoop): vscode.CodeActionProvider {
   return {
-    async provideCodeActions(document, range, context) {
+    provideCodeActions(document, range, context) {
       const text = document.getText();
       const actions: vscode.CodeAction[] = [];
       for (const token of fixTokens(text)) {
@@ -447,13 +447,16 @@ export function codeActions(lifeloop: LifeLoop): vscode.CodeActionProvider {
       }
 
       if (document.uri.scheme !== "file") return actions;
-      try { await lifeloop.currentTaskStates(); } catch { return actions; }
       let target;
       try { target = taskTargetAt(lifeloop, document, range.start.line); } catch { return actions; }
-      if (!target?.task) return actions;
+      if (!target) return actions;
       const input = { handle: target.handle };
       const taskAction = (title: string, command: string) =>
         actions.push(emptyCommandAction(title, command, input));
+      if (!lifeloop.indexIsSettled() || !target.task) {
+        taskAction("Task Actions", "lifeloop.taskActions");
+        return actions;
+      }
       taskAction(target.task.done === true ? "Reopen" : "Complete",
         target.task.done === true ? "lifeloop.reopenTask" : "lifeloop.completeTask");
       taskAction("Toggle Waiting", "lifeloop.toggleWaiting");
@@ -536,6 +539,17 @@ export async function openSbRef(lifeloop: LifeLoop): Promise<void> {
   const position = document.positionAt(source.offset);
   target.selection = new vscode.Selection(position, position);
   target.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+}
+
+/** Replace only one live document's lexical diagnostics while its index is stale. */
+export function publishDocumentDiagnostics(
+  lifeloop: LifeLoop,
+  collection: vscode.DiagnosticCollection,
+  document: vscode.TextDocument,
+): void {
+  let page: string | undefined;
+  try { page = lifeloop.pageNameOfUri(document.uri); } catch { /* untitled or outside the vault */ }
+  collection.set(document.uri, relationshipDiagnostics(lifeloop, document.getText(), page, false));
 }
 
 /** Task/project validation. Ordinary link diagnostics belong to Foam. */

@@ -310,7 +310,7 @@ describe("narrow definitions", () => {
 });
 
 describe("command-only code actions", () => {
-  test("offers guarded task commands and refreshes Person eligibility", async () => {
+  test("offers guarded task commands without reindexing in the provider hot path", async () => {
     const line = '* [ ] Meet [[People/Alice]] [event: "E1"]';
     const { lifeloop, dir } = await workspaceWith({
       "People/Alice.md": "---\ntags: person\n---\n",
@@ -318,6 +318,8 @@ describe("command-only code actions", () => {
     });
     const document = documentOf(`${line}\n`, join(dir, "Work.md"));
     const provider = codeActions(lifeloop) as any;
+    const currentTaskStates = vi.spyOn(lifeloop, "currentTaskStates");
+    const reindex = vi.spyOn(lifeloop, "reindex");
     try {
       const actions = await provider.provideCodeActions(
         document, new vscode.Range(0, 0, 0, line.length), { diagnostics: [] },
@@ -329,6 +331,8 @@ describe("command-only code actions", () => {
       expect(actions.every((action: any) =>
         action.edit instanceof vscode.WorkspaceEdit && action.edit.edits.length === 0 &&
         action.command?.arguments?.[0]?.handle?.expectedText === line)).toBe(true);
+      expect(currentTaskStates).not.toHaveBeenCalled();
+      expect(reindex).not.toHaveBeenCalled();
 
       const changedPerson = {
         ...documentOf("# no longer a Person\n", join(dir, "People/Alice.md")),
@@ -339,8 +343,9 @@ describe("command-only code actions", () => {
       const refreshed = await provider.provideCodeActions(
         document, new vscode.Range(0, 0, 0, line.length), { diagnostics: [] },
       );
-      expect(refreshed.map((action: any) => action.title)).not.toContain("Log Interaction");
-      expect(refreshed.map((action: any) => action.title)).not.toContain("Open Pre-meeting Brief");
+      expect(refreshed.map((action: any) => action.title)).toEqual(["Task Actions"]);
+      expect(currentTaskStates).not.toHaveBeenCalled();
+      expect(reindex).not.toHaveBeenCalled();
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -730,6 +735,7 @@ test("registered document-change callback suppresses derived reads across held i
   const errors = vi.spyOn(vscode.window, "showErrorMessage");
   const touched = vi.spyOn(lifeloop, "touch");
   const reindexed = vi.spyOn(lifeloop, "reindex");
+  const listed = vi.spyOn(lifeloop.vault, "list");
   const published = vi.fn();
   lifeloop.onDidChange(published);
   let release = () => {};
@@ -738,6 +744,8 @@ test("registered document-change callback suppresses derived reads across held i
     const change = (registeredChange.mock.calls.at(-1) as any)[0];
     const hover = (registeredHover.mock.calls[1] as any)[1];
     const collection = collections.mock.results[0].value;
+    const cleared = vi.spyOn(collection, "clear");
+    listed.mockClear();
     const diagnostics = () => collection.entries.find(([path]: [string, any[]]) =>
       path === document.uri.fsPath)?.[1] ?? [];
     const tokens = () => diagnostics().map((entry: any) => document.getText().slice(
@@ -764,6 +772,8 @@ test("registered document-change callback suppresses derived reads across held i
     expect(diagnostics()[0].severity).toBe(vscode.DiagnosticSeverity.Error);
     expect(touched).not.toHaveBeenCalled();
     expect(reindexed).not.toHaveBeenCalled();
+    expect(listed).not.toHaveBeenCalled();
+    expect(cleared).not.toHaveBeenCalled();
     expect(hover.provideHover(document, { line: 0, character: 3 })).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(400);
