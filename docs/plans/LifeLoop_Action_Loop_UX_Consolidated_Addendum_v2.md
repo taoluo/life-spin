@@ -3,8 +3,8 @@
 **Revision 2 — Editor-first · Native-first · Keyboard-complete**
 
 Status: **product direction plus the bounded implementation milestone in section 14; features outside that milestone remain proposed.**
-Revision date: **2026-09-12**.
-Current source baseline: `2d9010b` (`vscode-implementation`), verified on 2026-09-12. Historical source baseline: `064b987`.
+Revision date: **2026-09-13**.
+Current committed source baseline: `0febfe2` (`vscode-implementation`), audited against the 2026-09-13 working tree. Historical source baselines: `2d9010b`, `064b987`.
 
 ## 阅读入口
 
@@ -45,7 +45,7 @@ Current source baseline: `2d9010b` (`vscode-implementation`), verified on 2026-0
 | 后续 editor-first / VS Code UI 讨论 | 本次新增 V1–V10、W1 与 roadmap 决策 | 每一种宿主能力都必须实现 |
 | 第 17 节 VS Code / W3C 官方资料 | 核对可用技术路径与交互原则 | LifeLoop 的实际 API 兼容性、性能或医疗效果 |
 
-本次已在 `2d9010b` 核对 provider、命令、索引、临时文档和 Apple sync 调用链，并重新运行 `npm run verify`：856 tests passed，3 个需要运行中 SilverBullet client 的检查 skipped。没有重新运行真实 VS Code/Foam host gate、验证 extension package、迁移个人 vault 或连接真实 Apple 对象；这些旧证据不自动成为本轮证据。
+本次在 `0febfe2` 重新核对 provider、命令、索引、临时文档和 Apple sync 调用链，并对本轮相关的 command、Apple、view、language tests 建立 148 tests passed 基线。Language roadmap 中记录的整体验证和真实宿主结果属于其 named working-tree revision；不能自动证明本轮新增的 Capture recovery、Find return 或 V8。没有迁移个人 vault、读取个人 Calendar 事件或修改个人 Apple 对象。
 
 实施时若源码与基线不一致，应记录差异并修订对应需求，不得根据本文反推“已有实现”。术语、命令显示名称、候选模块名不等于已存在的 command ID、配置项或公共 API。
 
@@ -74,17 +74,22 @@ P0–P3 表示交付顺序，不表示数据安全严重程度。G1–G3 独立�
 
 实施前 delta audit 的当前结论如下。“已有”只表示代码基础；真实宿主资格仍单独记录。
 
-| 范围 | `2d9010b` 当前事实 | 近期处理 |
+| 范围 | `0febfe2` 与当前 working tree 事实 | 近期处理 |
 |---|---|---|
-| V1 Code Actions | 已有任务动作，但 provider 调用 `currentTaskStates()`，会触发全量 reindex | 修热路径并审计覆盖，不重建 provider |
-| V4 Hover / V5 diagnostics | 已有 task/relationship/query Hover、diagnostics 和部分 Quick Fix；输入时 diagnostics 仍遍历全 vault | 当前文档即时更新，索引收敛后全局校验 |
-| V6 navigation | 已有 Open/Peek Source 和 guarded target | 补目标/返回/键盘宿主验收 |
-| V8 derived documents | Query result 与 Brief 使用可编辑 `untitled:` Markdown；Foam 曾报告 provider 日志 | 独立 spike；不能称为已实现只读虚拟文档 |
-| A1 | 已有 Set Scheduled 日期输入 | 新增确定性快捷选择 |
-| A2 | 已有连续 Inbox processing | 增加本次遍历 Skip、Edit Source；首版不持久化处理游标 |
-| A3–A5 | Task Actions、SourceHandle 和多种拒绝已有基础 | 增量统一入口、反馈和焦点连续性 |
-| Find / Why / Capture Selection / Progress / Now | Find Task、完整 Why Not Here、选区 provenance、Progress/Resume Cue、Now 尚未形成完整入口 | 分成独立小切片，不相互阻塞 |
-| External sync authority | 手动与 autoSync 共用 VS Code 入口；无 CLI writer；部分 observation 更新未等待持久化 | 已启用路径先硬化，完整共享 authority 单独迁移 |
+| V1 Code Actions | provider 候选已不再调用 `currentTaskStates()` 或 eager reindex | 保留回归与真实宿主延迟审计，不重建 provider |
+| V2 managed-field completion | working tree 已实现 `scheduled` / `deadline` 字段名与 Today/Tomorrow 绝对日期补全 | 保持窄范围；状态值、binding、completion history 不进入普通文本补全 |
+| V4 Hover / V5 diagnostics | 已有 task/relationship/query Hover、diagnostics 和部分 Quick Fix；输入时先更新当前文档，索引 settle 后更新全局 | 保留 deletion/dependency、日志和宿主验收 |
+| V6 navigation | Open/Peek Source、guarded target、Find/Explain、Now 已有 | 补 Find 查询/选择的 session-only 返回 |
+| V8 derived documents | Query Result 与 Pre-meeting Brief 已使用 custom scheme/language 的只读 provider | 两条路径已通过 task-only/Foam gate；Review/Resolve 是否迁移按实际收益逐项决定 |
+| A1 | Quick Reschedule 已有 Today/Tomorrow/Next week/Pick/Clear | 审计真实键盘路径和连续反馈，不重复实现 |
+| A2 | Inbox 已有本次遍历 Skip、Edit Source 和连续处理 | 审计位置/取消/失败；首版不持久化处理游标 |
+| A3–A5 | Task Actions、SourceHandle、actionable refusals 和多种结果反馈已有 | 增量审计焦点、选择和来源/返回连续性 |
+| Find / Why / Capture Selection / Progress / Now | 各自已有 bounded implementation | 补普通 Capture 失败恢复和 Find return；其余做体验审计 |
+| B1/B7–B9 in-place loop | working tree 已实现 Add Related Link、page-scoped Project gap/actions、Live Review scopes/actions、手动 Backlog scopes 和 Find 可选连续预览 | 保持窄 membership、fresh guard 与连续选择；task-only 已补 Capture／Resume／Waiting／Review 连续性和 Open Related Page 完整键盘 K0，Foam 已补 Review／Find 连续性与窄窗口 K0 |
+| E8 daily planning | working tree 已实现 `pastScheduled`、Plan Today、在同一连续入口中复盘当天事实并规划明日，以及打开规划日期所在周 Focus 后返回原位置 | Focus/返回增量已有自动测试，并于 2026-09-14 在隔离 task-only/Foam 0.44.6 宿主复验正确周、picker/scope/选择保留与 0 Problems；不保存 Start/Stop、执行顺序或自动 rollover；此前 Foam 与 task-only 当前 build 已端到端验证晚间 scope 切换、取消、显式安排、刷新与返回，task-only 另验证单独 Plan Today 与简体拼音组合输入 |
+| C1/C3/C4/C6 | working tree 已实现 exact event task 的可选 Meeting Wrap-up、Project 关闭前窄事实检查、只读 Resumption 与只含可靠日期的 Review Period Facts | 不把 related link 当 membership，不声称完整事件历史，不自动清理任务或外部对象；task-only 已验证 Resumption、Closure 取消和 Review Period Facts，Meeting Wrap-up 仍待真实宿主 K0 |
+| External sync authority | 手动与 autoSync 共用 VS Code 入口；无 CLI writer；`0febfe2` 已串行并等待 observation persistence | 完整共享 authority 保持独立 migration |
+| D1 Agenda | EventKit 无数据 JXA 探针证明 range API 和所需字段可用；TCC/发布宿主资格未验证 | 不扩大现有 AppleScript；保持独立 spike |
 
 <a id="sec-1"></a>
 ## 1. 产品决策与交互架构
@@ -345,7 +350,7 @@ Area 仅使用已有可证明 convention；未有共享查询时仅提供页面�
 
 ### 6.1 E8 — 日计划、日终整理、重新开始
 
-三个入口是已有命令的短组合，不是 DailyPlan 对象或持久步骤引擎。可以跳过、暂停，不要求先清空 Inbox、完成昨日复盘或填写三个目标。
+入口是已有命令的短组合，不是 DailyPlan 对象或持久步骤引擎。可以跳过、暂停，不要求先清空 Inbox、完成昨日复盘或填写三个目标。晚间入口把**当天事实复盘与明日计划**放在同一次连续操作中；当天遗留项只有在用户明确选择后才安排到明日。
 
 日计划帮助查看期限、旧计划并选择当前承诺；收尾帮助保留/改期/停放/取消并可选留 cue；重新开始允许先处理真实期限和一件当前事项，其他 backlog 稍后整理。
 
@@ -422,6 +427,12 @@ Area 表示长期需要照顾的责任，Project 表示有限工作。Area 无�
 不覆盖 Foam 的 Wiki link、alias、page name 或普通路径补全。不对整篇 frontmatter 注册全局 YAML schema，不在不确定语法片段中强行建议。新字段键入未完成时不闪烁报错或反复改写输入。
 
 补全的 edit range 来自当前文档版本；源已变更的旧候选不能删除其他内容。IME、multi-cursor、CRLF、引号和特殊字符必须测试。候选过多时缩小范围，不借此创建 schema builder。
+
+当前 working-tree 切片只覆盖 `scheduled` / `deadline` 字段名和 Today/Tomorrow 绝对日期，
+并已通过 task-only 与 Foam 0.44.6 的注册、候选和替换范围检查。状态值、`completed`、
+`reminder`、`event` 继续由现有语义命令或外部 binding 流程管理。完整实现边界、证据与
+Semantic Selection 的“不新增 provider”结论见
+[`2026-09-12-language-feature.md`](./2026-09-12-language-feature.md)。
 
 ### 7.3 V3 — Snippets 与场景模板
 
@@ -726,7 +737,7 @@ Workspace Trust 是宿主保护机制，不是 LifeLoop 的所有权模型，也
 
 虚拟文档同样会出现在宿主文档事件中，因此索引和 provider 必须检查 scheme，而不是以“已经打开”判断为源文档。[VS7]
 
-当前 `openTextDocument({content})` 产生可编辑 `untitled:` document，不是只读虚拟文档；Foam 对这些 Markdown document 的 provider 日志仍是已知问题。V8 首次实施前只验证一个最小输出的 custom scheme/language、只读性、Foam 共存、Open Source、生命周期和不重复入库。首版不从生成行直接 mutation，也不预建通用派生文档平台。
+working tree 先以 Query Result 作为 V8 首切片，随后让 Pre-meeting Brief 复用同一条 LifeLoop 专用 scheme/language 与 `TextDocumentContentProvider` 路径。两者都是只读内存内容，关闭后释放，保留受限 source navigation，不进入 canonical index，也不从生成行 mutation。Review 和 Resolve 仍按各自现有入口工作；是否迁移必须逐项证明收益，不预建通用派生文档平台。
 
 试验时必须证明：打开 Brief/Review/diff、刷新 preview、反复关闭重开，不增加 canonical task/Interaction 数量。generated content 不产生新的跟进或完成事实。
 
@@ -806,17 +817,17 @@ UI 与 CLI 同名业务语义保持一致；UI-only focus、scroll、Now 和普�
 
 ### 14.2 切片 0：editor 热路径
 
-移除 Code Actions 的 eager reindex；输入时仅发布当前文档 diagnostics，索引 settle 后保留正确的全局校验。用 isolated representative vault 记录修改前后的 provider latency、reindex/扫描次数和重复计算。退出条件：provider 请求不触发 reindex、bridge、网络或 AI；mutation 的 SourceHandle/task-state/dirty-buffer guard 没有减少；旧 diagnostics 最终会在索引更新、删除或依赖变化后清理。
+Code Actions 的 eager reindex 和输入时全 vault diagnostics 已在当前实现中移除，保留 no-reindex 与当前文档回归。继续用 isolated representative vault 记录 provider latency、reindex/扫描次数；provider 请求不得触发 bridge、网络或 AI，mutation 的 SourceHandle/task-state/dirty-buffer guard 不得减少。删除、依赖变化后的全局 diagnostics 与真实宿主日志仍单独验收。
 
 ### 14.3 切片 1：已有高频操作
 
-按 A1–A5 和现有 V1/V4/V5/V6 基础，依次交付 Quick Reschedule、Inbox 本次遍历 Skip/Edit、Task Actions 覆盖、actionable refusals 和来源/返回连续性。每项只要求一个最短键盘路径和一个可发现入口。首版 Inbox Resume 重新从仍 pending 的内容开始，不把游标或正文写入 workspace state。
+Quick Reschedule、Inbox 本次遍历 Skip/Edit、Task Actions 和 actionable refusals 已有增量实现；本轮新增普通 Capture 失败正文恢复。每项只要求一个最短键盘路径和一个可发现入口，继续审计来源/返回、selection/scroll/focus 和快速连续操作。首版 Inbox Resume 重新从仍 pending 的内容开始，不把游标或正文写入 workspace state。
 
 退出条件：TreeView 明确选中任务 A、后台 editor 光标在 B 时只作用于 A；取消不写入；semantic mutation 只在 durable save 和必要索引刷新后报告成功；改期不改变 deadline/Calendar，并能说明仍由 deadline 命中。
 
 ### 14.4 切片 2：接住信息并找回
 
-分别交付 Find Task、有限 Today/actionable Why Here/Why Not Here、Capture Selection，以及共用普通 Markdown 路径的 Progress/Resume Cue。Find Task 直接使用 task index 和 QuickPick；Why 由共享 predicate/reason 产生；Capture provenance 首版使用 vault ref 或 workspace-relative source snapshot，不新增 schema。缺少安全多行/子树 mutation 时打开原文编辑。
+Find Task、有限 Today/actionable Why Here/Why Not Here、Capture Selection、Progress/Resume Cue 和 session-only Now 已有 bounded implementation。本轮给 Find Task 增加 session-only query/selection return；仍直接使用 task index 与原生 QuickPick，不建设搜索引擎。Why 继续由共享 predicate/reason 产生，Capture provenance 继续使用 vault ref 或 workspace-relative source snapshot，不新增 schema。
 
 退出条件：完成“工作中捕获 → 回到原任务 → 留下一步 → 切走 → Find Task 找回并继续”；不建设搜索引擎、规则引擎、历史平台或第二套编辑器。
 
@@ -826,13 +837,21 @@ UI 与 CLI 同名业务语义保持一致；UI-only focus、scroll、Now 和普�
 
 ### 14.6 独立线：Sync authority
 
-先修当前已启用路径的 observation 内存一致性、串行 awaited persistence 和失败报告；其证据只约束受影响 sync/Resolve，不阻塞纯本地 UX。完整 durable shared state、迁移、provider/vault 隔离和单写者准入另作 milestone。ObservationStore 的失败表达和调用链一起修改，不能只换存储位置。
+`0febfe2` 已修当前已启用路径的 observation 内存一致性、串行 awaited persistence 和失败报告；其证据只约束受影响 sync/Resolve，不阻塞纯本地 UX。完整 durable shared state、迁移、provider/vault 隔离和单写者准入另作 milestone。ObservationStore 的失败表达和调用链以后仍须一起修改，不能只换存储位置。
 
 ### 14.7 独立线与 roadmap
 
-V8 派生文档只在近期功能需要时先做一个最小 coexistence spike。Agenda、Narrow Undo、Create Project、完整 Context、Webview、timer、AI、deep link、Context Pack、跨工作区、E8/E9 和其余 C/D/W/X/R 项不进入上述切片退出条件；按证据分别合格、受限、Deferred 或放弃。
+V8 已实施 Query Result，并按实际 Foam 日志问题让 Pre-meeting Brief 复用同一只读路径；Project Preview／Resumption 与 Review Period Facts 也复用该路径，Review/Resolve 不随之自动迁移。E8 的 Plan Today 与“当天复盘＋明日计划”、Weekly Focus 模板、规划日期所在周的 Focus 返回入口、C1/C3/C4/C6 的窄版本已经进入 working tree；Focus 返回与合并后的 Project Preview 已有自动证据，并于 2026-09-14 在隔离 task-only/Foam 0.44.6 宿主复验正确周、两组结果、边界说明、来源返回与 0 Problems。此前 Plan Today、晚间组合入口、Project Resumption、Project Closure 和 Review Period Facts 已有当前 task-only 宿主证据，晚间组合入口另有 Foam 证据，Meeting Wrap-up 仍待独立真实宿主 K0。Agenda 的 EventKit range API 已通过无数据技术探针，但 TCC/发布宿主资格未通过，所以不进入产品实现。Narrow Undo、Create Project、完整 Context、Webview、timer、AI、deep link、Context Pack、跨工作区、E9 和其余未实施 D/W/X/R 项不进入上述切片退出条件。
 
-### 14.8 独立资格与能力矩阵
+### 14.8 切片 4：Project／Review 就地处理
+
+working tree 已完成以下 bounded implementation：active Project 只报告该项目页的 no-open、waiting-only 或 no-actionable 事实；Paused Project 不产生 action-gap；Projects 以稳定节点提供 Preview/Open/Add Next Action/Pause/Leave Unchanged，其中 Preview 复用只读 Resumption 查询并同时展示本页与跨页 related work；任务可向已有 Project/Person/Note 添加 direct related link，Task Actions 对已有 direct Person/Note link 条件显示 Open Related Page；Live Review 在一个 fresh-query QuickPick 中区分 Waiting/Someday，并允许用户进入 Unscheduled/Someday/Paused scopes；Find 提供可选、generation-guarded 的连续 selection preview。
+
+Project membership 仍是 `task.page === project`。Add Related Link 不改变 ownership，因此不会让跨页任务计入项目页 gap。Add Next Action 与 Pause 在执行时重新取得并验证 Project snapshot；Review 中每个 task mutation 继续使用 fresh guarded handle。Frozen Review 仍只导航，预览不构成 mutation authority。Review Period Facts 另用只读文档列出可靠 completion dates 与明确 dated interactions；无可靠时间戳的新任务和 Processed Inbox 明确省略。
+
+当前自动证据为 commands targeted 51 passed；本批三个相关测试文件合计 143 passed；`npm run verify` 为 65 files、910 passed、3 个 live SilverBullet checks skipped。新增回归覆盖 Plan Today 与前晚规划的正确周、Focus 后 query/selection 返回、Project Preview 的本页/跨页分组、Live Review 返回，以及 direct parked tag 移除后仍继承的提示。普通 VS Code 窗口仍使用较早安装清单，因此未作为证据；本批没有安装或发布扩展。2026-09-14 已改用 VS Code 1.136.1 的隔离 Extension Development Host 完成 task-only/Foam 0.44.6 K0：Focus 打开正确周并保留 planning picker/scope/选择，Project Preview 显示本页与跨页两组、membership 边界并返回来源；两种 profile Problems 均为 0，未出现 Foam provider error。Open Related Page 自动反例证明 TreeView/显式任务 A 不会退回后台编辑器 B，只列 A 的 direct Person/Note pages，并排除 Project 和 B 的链接；新增回归还证明 Task Actions 的候选菜单不等待 task-state refresh，真正执行 mutation 时仍重新验证。当前 task-only 与 Foam 0.44.6 GUI 均确认编辑器保持 B 时动作目标仍是 A，候选类型/完整路径正确，打开精确 Note 后返回 B，Problems 为 0。最新冷启动 task-only 使用完整键盘完成 Return 进入 related-page picker、Return 打开精确长路径 Note、Escape 取消和 `Ctrl+-` 返回；立即输入的完整 `Open Relat` 全部进入 QuickPick，没有前缀泄漏到 B。约 1000 px 的 Foam 窄窗口证据覆盖长标题／长路径辨识、预览和 Task Actions。后台 VS Code 1.136.1 integration runner 仍在扩展加载前因 AppKit `_RegisterApplication` `SIGABRT` 退出，crash report 没有 LifeLoop stack。最新 task-only 还验证 Capture、Capture Selection 和 Resume Cue 返回原编辑器并保留光标／选择，Waiting → Next Action 只写入明确父任务；Live Review 清除一个 Waiting 后保持 Waiting scope 并选择剩余相邻项。Foam 0.44.6 GUI 已验证 Live Review mutation 后保持 scope 并刷新、结果消失后选择相邻项、快速 Return/Escape、Find 键盘 preview 与取消后恢复 query/exact handle。Foam 与 task-only 当前 build 都端到端验证了晚间入口从当天 factual review 切到明日 constraints 与 backlog candidates，Escape 无写入返回，以及显式安排候选后刷新并回到同一编辑器，Problems 为 0。task-only 另验证单独 Plan Today scope/cancel、macOS 简体拼音逐键组合并接受“明天”、生成下周 Focus note、只读 Project Resumption/Review Period Facts，以及 closure facts 后取消保持 Project active。延迟到达的父 QuickPick hide 已修复并有回归测试。Meeting Wrap-up 与 managed-field suggestion widget 仍分别待独立 K0；它们不属于本轮通用能力验收的未完成项。
+
+### 14.9 独立资格与能力矩阵
 
 | 资格 | 判断方式 | 不能替代它的证据 |
 |---|---|---|

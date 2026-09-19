@@ -38,6 +38,7 @@ are not promised. No personal notes or templates are converted automatically.
 | [`WHY.md`](WHY.md) | why leave SilverBullet at all — including the case for not bothering |
 | [`COMPATIBILITY.md`](COMPATIBILITY.md) | which semantics are promised identical, and how that is proved |
 | [`ROADMAP.md`](ROADMAP.md) | the SilverBullet library's own scope |
+| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | user-friendly setup, tutorial, daily/weekly workflows and command reference |
 
 Phases 0 to 3 are implemented. Phase 4 (rich views) and Phase 5 (AI) are **future roadmap, not
 scheduled** — the expected outcome is that most of them never ship, and that is a success.
@@ -66,7 +67,7 @@ own assertions run against our copy** on every `npm test`.
 
 ```bash
 npm install
-npm run verify                      # typecheck, vendor integrity, schema pin, 856 tests (+ 3 live-SB skips)
+npm run verify                      # typecheck, vendor integrity, schema pin, 906 tests (+ 3 live-SB skips)
 npx tsx packages/cli/src/main.ts index  ~/vault
 npx tsx packages/cli/src/main.ts query  ~/vault today
 ```
@@ -122,7 +123,7 @@ development, open `packages/vscode` in VS Code and press F5.
 ### Testing
 
 ```bash
-npm test                  # 856 headless tests (+ 3 live-SB skips)
+npm test                  # 906 headless tests (+ 3 live-SB skips)
 npm run test:integration  # 22 tests inside a real VS Code (downloads it once)
 npm run test:foam         # 29 tests with Foam 0.44.6; folder rename remains unqualified
 npm run verify            # everything above, plus typecheck and the two guards

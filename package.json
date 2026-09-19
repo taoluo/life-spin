@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "demo:vault": "node scripts/create-demo-vault.mjs",
     "vendor:check": "node scripts/vendor-check.mjs",
     "vendor:sync": "node scripts/vendor-sync.mjs",
     "build": "node scripts/build-extension.mjs",
