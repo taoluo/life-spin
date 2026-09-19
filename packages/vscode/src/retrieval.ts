@@ -2,7 +2,8 @@ import * as vscode from "vscode";
 import {
   birthday, cadence, day, directPersonLinks, extractLiveItems, nextBirthday, originalSourceOffset,
   pageDate, pageMetaFor, pageObject, pathOf, people, personContext, projectionNames, projections, relationshipDate,
-  relationshipProjectionNames, resolveRef, TASK_MARKER, validPageName,
+  relationshipProjectionNames, resolveRef, shift, TASK_DATE_FIELDS, TASK_MARKER, validPageName,
+  type TaskDateField,
   type RelationshipProjectionName,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
@@ -74,6 +75,139 @@ const directAttributes = (item: ParseTree): ParseTree[] => {
   visit(item, true);
   return found;
 };
+
+const sourceBounds = (text: string, node: ParseTree): [number, number] => {
+  const from = originalSourceOffset(text, node.from ?? 0);
+  const parsedTo = node.to ?? node.from ?? 0;
+  const to = parsedTo <= (node.from ?? 0) ? from : originalSourceOffset(text, parsedTo - 1) + 1;
+  return [from, to];
+};
+
+/** Parse established Markdown structure after blanking only the unfinished fragment. */
+function managedTaskContext(
+  text: string,
+  fragmentFrom: number,
+  fragmentTo: number,
+  cursor: number,
+): { attributeNames: string[] } | null {
+  const sanitized = text.slice(0, fragmentFrom) + " ".repeat(fragmentTo - fragmentFrom) + text.slice(fragmentTo);
+  const tree = parseMarkdown(sanitized);
+  const probe = Math.max(fragmentFrom, cursor - 1);
+  const contains = (node: ParseTree, offset: number) => {
+    const [from, to] = sourceBounds(sanitized, node);
+    return offset >= from && offset < to;
+  };
+  if (["FencedCode", "InlineCode", "CommentBlock"].some((type) =>
+    deepNodesOfType(tree, type).some((node) => contains(node, probe)))) return null;
+
+  const task = deepNodesOfType(tree, "Task").find((node) => {
+    const [from, to] = sourceBounds(sanitized, node);
+    return fragmentFrom >= from && fragmentTo <= to;
+  });
+  if (!task) return null;
+  const state = findNodeOfType(task, "TaskState");
+  if (!state || sourceBounds(sanitized, state)[1] > fragmentFrom) return null;
+
+  return {
+    attributeNames: collectNodesOfType(task, "Attribute").flatMap((attribute) => {
+      const name = findNodeOfType(attribute, "AttributeName")?.children?.[0]?.text;
+      return typeof name === "string" ? [name.toLowerCase()] : [];
+    }),
+  };
+}
+
+const closingBracket = (line: string, cursor: number): number => {
+  const close = line.indexOf("]", cursor);
+  return close >= 0 && !line.slice(cursor, close).includes("[") ? close : -1;
+};
+
+const completionRange = (line: number, from: number, to: number) =>
+  new vscode.Range(new vscode.Position(line, from), new vscode.Position(line, to));
+
+/** Keep live diagnostics quiet while a managed attribute is still being typed. */
+const maskIncompleteManagedField = (text: string): string => text.replace(/[^\r\n]+/g, (line) => {
+  if (!TASK_MARKER.test(line)) return line;
+  const open = line.lastIndexOf("[");
+  if (open < 0 || line.indexOf("]", open) >= 0) return line;
+  const name = /^([A-Za-z][A-Za-z0-9-]*)(?:\s*:.*)?$/.exec(line.slice(open + 1))?.[1]?.toLowerCase();
+  if (!name || !TASK_DATE_FIELDS.some((field) => field.startsWith(name))) return line;
+  return line.slice(0, open) + " ".repeat(line.length - open);
+});
+
+/** Complete only user-authored LifeLoop task dates; business fields stay command-owned. */
+export function managedFieldCompletions(localDay: () => string = day): vscode.CompletionItemProvider {
+  return {
+    provideCompletionItems(document, position) {
+      if (document.languageId !== "markdown") return [];
+      const text = document.getText();
+      const line = document.lineAt(position.line).text;
+      if (position.character > line.length) return [];
+      const lineFrom = document.offsetAt(new vscode.Position(position.line, 0));
+      const cursor = lineFrom + position.character;
+      const prefix = line.slice(0, position.character);
+
+      const field = /\[([A-Za-z][A-Za-z0-9-]*)$/.exec(prefix);
+      if (field && field[1].length >= 2 && (field.index === 0 || line[field.index - 1] !== "[")) {
+        const open = field.index;
+        let nameTo = position.character;
+        while (/[A-Za-z0-9-]/.test(line[nameTo] ?? "")) nameTo++;
+        const close = closingBracket(line, nameTo);
+        if (close < 0 && line.indexOf("]", nameTo) >= 0) return [];
+        if (close >= 0 && /^\]\s*(?:\(|\[)/.test(line.slice(close))) return [];
+        const fragmentTo = close >= 0 ? close + 1 : position.character;
+        const context = managedTaskContext(text, lineFrom + open, lineFrom + fragmentTo, cursor);
+        if (!context) return [];
+
+        const partial = field[1].toLowerCase();
+        return TASK_DATE_FIELDS.filter((candidate) =>
+          candidate.startsWith(partial) && !context.attributeNames.includes(candidate))
+          .map((candidate) => {
+            const item = new vscode.CompletionItem(candidate, vscode.CompletionItemKind.Keyword);
+            const hasColon = /^\s*:/.test(line.slice(nameTo));
+            item.insertText = hasColon
+              ? candidate
+              : new vscode.SnippetString(`${candidate}: "$1"${close < 0 ? "]" : ""}`);
+            item.range = completionRange(position.line, open + 1, nameTo);
+            item.detail = "LifeLoop task date";
+            return item;
+          });
+      }
+
+      const open = prefix.lastIndexOf("[");
+      if (open < 0 || (open > 0 && line[open - 1] === "[")) return [];
+      const head = /^(scheduled|deadline)\s*:\s*/.exec(line.slice(open + 1, position.character));
+      if (!head) return [];
+      const typed = line.slice(open + 1 + head[0].length, position.character);
+      if (!/^(?:"?[0-9-]*)$/.test(typed)) return [];
+
+      const valueFrom = open + 1 + head[0].length;
+      let valueTo = position.character;
+      if (line[valueFrom] === "\"") {
+        const quote = line.indexOf("\"", valueFrom + 1);
+        if (quote >= 0) valueTo = quote + 1;
+      } else {
+        while (/[0-9-]/.test(line[valueTo] ?? "")) valueTo++;
+      }
+      const close = closingBracket(line, valueTo);
+      if (close < 0 && line.indexOf("]", valueTo) >= 0) return [];
+      const fragmentTo = close >= 0 ? close + 1 : position.character;
+      const context = managedTaskContext(text, lineFrom + open, lineFrom + fragmentTo, cursor);
+      const name = head[1] as TaskDateField;
+      if (!context || context.attributeNames.includes(name)) return [];
+
+      const today = localDay();
+      const dates = [["Today", today], ["Tomorrow", shift(today, 1)]] as const;
+      return dates.map(([label, date], index) => {
+        const item = new vscode.CompletionItem(`${label} — ${date}`, vscode.CompletionItemKind.Keyword);
+        item.insertText = `"${date}"${close < 0 ? "]" : ""}`;
+        item.range = completionRange(position.line, valueFrom, valueTo);
+        item.detail = `${name}: ${date}`;
+        item.sortText = String(index);
+        return item;
+      });
+    },
+  };
+}
 
 /** One live classifier shared by diagnostics, hover, and symbols. */
 function locatedInteractions(lifeloop: LifeLoop, text: string, page?: string): LocatedInteraction[] {
@@ -170,13 +304,14 @@ export function relationshipDiagnostics(
   page: string | undefined,
   includeIdentity: boolean,
 ): vscode.Diagnostic[] {
+  const parsedText = maskIncompleteManagedField(text);
   const found: vscode.Diagnostic[] = [];
   const error = (token: QueryToken, message: string) =>
     found.push(diagnostic(text, token, message, vscode.DiagnosticSeverity.Error));
   const info = (token: QueryToken, message: string) =>
     found.push(diagnostic(text, token, message, vscode.DiagnosticSeverity.Information));
 
-  for (const fence of findLocatedQueryFences(text)) {
+  for (const fence of findLocatedQueryFences(parsedText)) {
     const query = fence.query;
     if (!query.projection) continue;
     if (!projectionNames.includes(query.projection.text as any)) {
@@ -241,7 +376,7 @@ export function relationshipDiagnostics(
 
   if (page) {
     let pageObjectValue;
-    try { pageObjectValue = pageObject(text, pageMetaFor(page)); } catch { pageObjectValue = undefined; }
+    try { pageObjectValue = pageObject(parsedText, pageMetaFor(page)); } catch { pageObjectValue = undefined; }
     if (pageObjectValue && (pageObjectValue.itags as string[] | undefined)?.includes("person")) {
       for (const [field, valid] of [["birthday", birthday], ["contact-every", cadence]] as const) {
         if (pageObjectValue[field] === undefined || valid(pageObjectValue[field]) !== undefined) continue;
@@ -259,7 +394,7 @@ export function relationshipDiagnostics(
       }
     }
 
-    for (const interaction of locatedInteractions(lifeloop, text, page)) {
+    for (const interaction of locatedInteractions(lifeloop, parsedText, page)) {
       for (const reason of interaction.reasons) info(interaction.value, reason);
     }
   }

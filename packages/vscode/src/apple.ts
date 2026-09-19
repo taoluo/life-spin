@@ -208,8 +208,7 @@ export async function openPreMeetingBrief(
     source: (ref, page) => sourceLink(lifeloop, ref, page),
   });
   const open = options.open ?? (async (content: string) => {
-    const document = await vscode.workspace.openTextDocument({ content, language: "markdown" });
-    await vscode.window.showTextDocument(document, { preview: true });
+    await vscode.commands.executeCommand("lifeloop.openReadonlyResult", content, "pre-meeting");
   });
   await open(markdown);
 }

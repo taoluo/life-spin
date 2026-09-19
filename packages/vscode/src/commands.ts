@@ -1,19 +1,22 @@
 import * as vscode from "vscode";
 import {
   capture, captureItem, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask,
-  setTaskState, toggleParked, moveItem, appendTaskNote,
+  setTaskState, toggleParked, moveItem, appendTaskNote, appendTaskChild, setTaskName, addTaskLink,
   setTaskAttribute, setProjectStatus, attachPageToTask, freezeReview,
-  PROJECT_STATES, review, week, day,
-  readTemplate, builtinReviewTemplate, createFromTemplate,
+  PROJECT_STATES, review, dayReview, today, projectSignals, projectResumption, week, day,
+  readTemplate, builtinReviewTemplate, builtinWeeklyFocusTemplate, createFromTemplate,
   bakeAt, unbakeAt, updateBaked,
-  people, directPersonLinks, logInteraction, createReconnectTask, INTERACTION_KINDS, shift,
-  tasks, explainTask,
-  type InboxItem, type Refusal,
+  people, directPersonLinks, interactions, logInteraction, createReconnectTask, INTERACTION_KINDS, shift,
+  tasks, explainTask, backlog,
+  pageMetaFor, pageObject,
+  TASK_DATE_FIELDS, type TaskDateField,
+  type InboxItem, type Refusal, type LifeloopObject,
   type InteractionKind,
 } from "@lifeloop/semantic-core";
 import type { LifeLoop } from "./workspace.ts";
 import type { Node } from "./views.ts";
 import { openSbRef, scriptNamespaces } from "./retrieval.ts";
+import { sourceLink } from "./temporary-navigation.ts";
 import { evaluateToMarkdown } from "./lua.ts";
 import {
   refreshTaskTarget, taskTarget, taskTargetFromIndexed,
@@ -21,6 +24,7 @@ import {
 } from "./task-target.ts";
 
 type RecoveryTarget = Pick<TaskTarget, "page" | "offset">;
+type ProjectTargetInput = Pick<Node, "page"> & { preserveFocus?: boolean };
 
 /**
  * Every command goes through a named mutation (I5). None of them writes a file
@@ -59,6 +63,9 @@ const exactEventBinding = (line: string): string | undefined => {
   const matches = [...line.matchAll(/\[event:\s*"([^"\r\n]+)"\]/g)];
   return matches.length === 1 ? matches[0][1] : undefined;
 };
+
+const markdownText = (value: unknown): string =>
+  String(value ?? "").replace(/([\\`*_[\]<>#])/g, "\\$1");
 
 export async function recordInteraction(
   lifeloop: LifeLoop,
@@ -150,6 +157,19 @@ async function pickProject(lifeloop: LifeLoop): Promise<string | undefined> {
   return vscode.window.showQuickPick(projects, { placeHolder: "Which project?" });
 }
 
+function projectSnapshot(lifeloop: LifeLoop, page: string): { text: string; status: string; inheritedParked: string[] } | null {
+  let text: string;
+  try { text = lifeloop.vault.read(`${page}.md`); } catch { return null; }
+  const object = pageObject(text, pageMetaFor(page));
+  if (!(object.itags as string[] | undefined)?.includes("project")) return null;
+  return {
+    text,
+    status: typeof object.status === "string" ? object.status : "active",
+    inheritedParked: ["waiting", "someday"].filter((tag) =>
+      (object.itags as string[] | undefined)?.includes(tag)),
+  };
+}
+
 async function openTaskProject(lifeloop: LifeLoop, target: TaskTarget): Promise<void> {
   const linked = new Set((target.task?.ilinks as string[] | undefined) ?? []);
   const projects = lifeloop.store.objects("page")
@@ -167,6 +187,45 @@ async function openTaskProject(lifeloop: LifeLoop, target: TaskTarget): Promise<
   if (page) await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(page)));
 }
 
+function directRelatedPages(lifeloop: LifeLoop, target: TaskTarget): Array<{
+  label: string;
+  description: string;
+  detail: string;
+  page: string;
+}> {
+  const direct = new Set((target.task?.links as string[] | undefined) ?? []);
+  return lifeloop.store.objects("page")
+    .map((page) => {
+      const path = String(page.ref ?? "");
+      const tags = (page.itags as string[] | undefined) ?? [];
+      const pageType = tags.includes("project") ? "Project" : tags.includes("person") ? "Person" : "Note";
+      return { label: path.split("/").at(-1) ?? path, description: pageType, detail: path, page: path };
+    })
+    .filter((page) => direct.has(page.page) && page.description !== "Project")
+    .sort((a, b) => a.description.localeCompare(b.description) || a.page.localeCompare(b.page));
+}
+
+async function openTaskRelatedPage(lifeloop: LifeLoop, target: TaskTarget): Promise<void> {
+  const pages = directRelatedPages(lifeloop, target);
+  if (!pages.length) {
+    void vscode.window.showInformationMessage("LifeLoop: this task has no directly related Person or Note page");
+    return;
+  }
+  const selected = pages.length === 1
+    ? pages[0]
+    : await vscode.window.showQuickPick(pages, {
+      placeHolder: "Open a directly related page",
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+  if (!selected) return;
+  try {
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(lifeloop.pageUri(selected.page)));
+  } catch {
+    void vscode.window.showWarningMessage(`LifeLoop: ${selected.page} is no longer available`);
+  }
+}
+
 function activePerson(lifeloop: LifeLoop, input?: { page?: string }): string | null {
   const page = input?.page ?? (vscode.window.activeTextEditor?.document.languageId === "markdown"
     ? lifeloop.pageNameOfUri(vscode.window.activeTextEditor.document.uri) : undefined);
@@ -176,6 +235,9 @@ function activePerson(lifeloop: LifeLoop, input?: { page?: string }): string | n
 export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): void {
   const on = (name: string, handler: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(name, handler));
+  let failedCapture: { text: string; uncertain: boolean } | undefined;
+  type FindScope = "open" | "completed" | "waiting" | "someday" | "all";
+  let lastFind: { value: string; handle: TaskTarget["handle"]; scope: FindScope } | undefined;
 
   const after = async () => { await lifeloop.reindex(); };
   const refreshAndReport = async (
@@ -196,9 +258,53 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     return true;
   };
 
+  const copyCapture = async (text: string) => {
+    await vscode.env.clipboard.writeText(text);
+    vscode.window.setStatusBarMessage("LifeLoop: capture text copied", 3000);
+  };
+
+  const captureToInbox = async (retry?: string): Promise<void> => {
+    let value = retry;
+    for (;;) {
+      const line = await vscode.window.showInputBox({
+        prompt: value === undefined ? "Capture to Inbox" : "Retry capture to Inbox",
+        placeHolder: "a thought, a task, anything",
+        value,
+      });
+      if (line === undefined) return;
+      const page = lifeloop.config("inboxPage", "Inbox");
+      const result = await capture(lifeloop.vault, line, page);
+      if (result.ok) {
+        failedCapture = undefined;
+        await refreshAndReport(result, "captured");
+        return;
+      }
+      failedCapture = { text: line, uncertain: result.reason === "unknown" };
+      if (result.reason === "unknown") {
+        const choice = await vscode.window.showErrorMessage(
+          `LifeLoop: capture outcome is unknown — ${result.message}`,
+          "Open Inbox", "Copy Text",
+        );
+        if (choice === "Open Inbox") await vscode.commands.executeCommand("lifeloop.openInbox");
+        if (choice === "Copy Text") await copyCapture(line);
+        return;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `LifeLoop: capture was not saved — ${result.message}`,
+        "Edit and Retry", "Copy Text",
+      );
+      if (choice === "Copy Text") {
+        await copyCapture(line);
+        return;
+      }
+      if (choice !== "Edit and Retry") return;
+      value = line;
+    }
+  };
+
   const setTaskDate = async (
     at: TaskTarget,
-    field: "deadline" | "scheduled",
+    field: TaskDateField,
     value: string | null,
   ): Promise<boolean> => {
     let refreshed;
@@ -220,15 +326,48 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     return refreshAndReport(result, detail, current);
   };
 
+  const addNextAction = async (input: TaskTargetInput, prompt = "First / next action"): Promise<void> => {
+    const initial = taskTarget(lifeloop, input);
+    if (!initial) {
+      void vscode.window.showWarningMessage("LifeLoop: choose a task before adding a next action");
+      return;
+    }
+    const name = await vscode.window.showInputBox({ prompt });
+    if (!name) return;
+    const current = await refreshTaskTarget(lifeloop, initial);
+    if (!current) {
+      void vscode.window.showWarningMessage("LifeLoop: that task changed; no action was created");
+      return;
+    }
+    await refreshAndReport(
+      await appendTaskChild(lifeloop.vault, current.handle, name), "created next action", current,
+    );
+  };
+
   // 1.7 — Capture. Costs less than filing does: one box, no navigation.
-  on("lifeloop.capture", async () => {
-    const line = await vscode.window.showInputBox({
-      prompt: "Capture to Inbox",
-      placeHolder: "a thought, a task, anything",
-    });
-    if (line === undefined) return;
-    const page = lifeloop.config("inboxPage", "Inbox");
-    await refreshAndReport(await capture(lifeloop.vault, line, page), "captured");
+  on("lifeloop.capture", () => captureToInbox());
+
+  on("lifeloop.recoverLastCapture", async () => {
+    if (!failedCapture) {
+      void vscode.window.showInformationMessage("LifeLoop: no failed capture in this session");
+      return;
+    }
+    if (failedCapture.uncertain) {
+      const choice = await vscode.window.showWarningMessage(
+        "LifeLoop: the previous capture outcome is unknown. Check the Inbox before retrying.",
+        "Open Inbox", "Retry After Checking", "Copy Text",
+      );
+      if (choice === "Open Inbox") {
+        await vscode.commands.executeCommand("lifeloop.openInbox");
+        return;
+      }
+      if (choice === "Copy Text") {
+        await copyCapture(failedCapture.text);
+        return;
+      }
+      if (choice !== "Retry After Checking") return;
+    }
+    await captureToInbox(failedCapture.text);
   });
 
   on("lifeloop.captureHere", async () => {
@@ -309,6 +448,43 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     await recordInteraction(lifeloop, [person]);
   });
 
+  on("lifeloop.meetingWrapUp", async (input?: TaskTargetInput) => {
+    const initial = taskTarget(lifeloop, input);
+    let target: TaskTarget | null = null;
+    try { target = initial ? await refreshTaskTarget(lifeloop, initial) : null; }
+    catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
+    const linkedPeople = target?.task ? directPersonLinks(lifeloop.store, target.task) : [];
+    const event = target ? exactEventBinding(target.line) : undefined;
+    if (!target?.task || !event || !linkedPeople.length) {
+      void vscode.window.showWarningMessage(
+        "LifeLoop: Meeting Wrap-up needs an exact Calendar-bound task with direct Person links",
+      );
+      return;
+    }
+    const steps = await vscode.window.showQuickPick([
+      { label: "$(comment-discussion) Log interaction", id: "interaction" },
+      { label: "$(add) Add follow-up as next action", id: "follow-up" },
+      ...(!target.task.done ? [{ label: "$(check) Complete related task", id: "complete" }] : []),
+    ], {
+      canPickMany: true,
+      placeHolder: "Choose independent wrap-up steps; each is revalidated before writing",
+    });
+    if (!steps?.length) return;
+    const selected = new Set(steps.map((step) => step.id));
+    if (selected.has("interaction")) {
+      await recordInteraction(lifeloop, linkedPeople, "meeting", target, event);
+    }
+    if (selected.has("follow-up")) {
+      await vscode.commands.executeCommand("lifeloop.addNextAction", target);
+    }
+    if (selected.has("complete")) {
+      await vscode.commands.executeCommand("lifeloop.completeTask", target);
+    }
+  });
+
   on("lifeloop.createReconnectTask", async (input?: Pick<Node, "page">) => {
     const person = activePerson(lifeloop, input);
     if (!person) { void vscode.window.showWarningMessage("LifeLoop: open a page tagged `person`"); return; }
@@ -322,10 +498,19 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   });
 
   // 1.8 — Process Inbox. Link before Move: the captured wording stays where it happened.
-  on("lifeloop.processInbox", async (preselected?: InboxItem) => {
+  on("lifeloop.processInbox", async (preselected?: InboxItem | Node) => {
     const page = lifeloop.config("inboxPage", "Inbox");
-    const continuous = preselected === undefined;
-    let selected = preselected;
+    // A right-click ("view/item/context") passes the tree Node, not the InboxItem
+    // that a click's own `command.arguments` carries — normalize both to InboxItem.
+    const asInboxItem = preselected === undefined
+      ? undefined
+      : "text" in preselected
+        ? preselected
+        : preselected.itemText !== undefined && preselected.offset !== undefined && preselected.itemEnd !== undefined
+          ? { offset: preselected.offset, text: preselected.itemText, end: preselected.itemEnd }
+          : undefined;
+    const continuous = asInboxItem === undefined;
+    let selected = asInboxItem;
     let cursor = 0;
     for (;;) {
       let text: string;
@@ -485,20 +670,15 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   });
 
   on("lifeloop.taskActions", async (input?: TaskTargetInput) => {
-    let target = taskTarget(lifeloop, input);
+    const target = taskTarget(lifeloop, input);
     if (!target) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
-    try {
-      await lifeloop.currentTaskStates();
-      target = taskTarget(lifeloop, target);
-    } catch (error) {
-      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
-      return;
-    }
-    if (!target) { void vscode.window.showWarningMessage("LifeLoop: that task changed; choose it again"); return; }
     const reminder = /\[reminder:\s*"([^"]+)"\]/.exec(target.line)?.[1];
     const event = exactEventBinding(target.line);
     const done = target.task?.done === true;
+    const directWaiting = (target.task?.tags as string[] | undefined)?.includes("waiting") ?? false;
+    const effectiveWaiting = (target.task?.itags as string[] | undefined)?.includes("waiting") ?? directWaiting;
     const linkedPeople = target.task ? directPersonLinks(lifeloop.store, target.task) : [];
+    const relatedPages = directRelatedPages(lifeloop, target);
     const now = lifeloop.nowTarget();
     const isNow = now?.handle.ref === target.handle.ref &&
       now.handle.expectedText === target.handle.expectedText;
@@ -512,6 +692,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       ...(event
         ? [
           ...(linkedPeople.length ? [{ label: "$(preview) Pre-meeting Brief", id: "brief" }] : []),
+          ...(linkedPeople.length ? [{ label: "$(checklist) Meeting Wrap-up", id: "meeting-wrap-up" }] : []),
           { label: "$(sync) Sync Calendar", id: "sync" },
           { label: "$(link-external) Open Calendar", id: "open-event" },
           { label: "$(debug-disconnect) Detach Calendar", id: "detach-event" },
@@ -519,9 +700,20 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         : [{ label: "$(calendar) Add to Calendar", id: "calendar" }]),
       { label: "$(calendar) Set Deadline", id: "deadline" },
       { label: "$(calendar) Quick Reschedule", id: "reschedule" },
+      { label: "$(add) Add Next Action", id: "next-action" },
       { label: "$(note) Add Progress / Resume Cue", id: "note" },
+      { label: "$(link) Add Related Link", id: "related" },
+      ...(relatedPages.length ? [{
+        label: "$(link-external) Open Related Page",
+        description: relatedPages.length === 1 ? relatedPages[0].detail : `${relatedPages.length} pages`,
+        id: "open-related",
+      }] : []),
+      { label: "$(tools) Make Actionable", id: "make-actionable" },
       { label: "$(question) Why here?", id: "why" },
-      { label: `${target.line.includes("#waiting") ? "$(close) Clear" : "$(watch) Mark"} Waiting`, id: "waiting" },
+      ...(effectiveWaiting ? [{ label: "$(debug-step-over) Waiting → Next Action", id: "waiting-next" }] : []),
+      ...(directWaiting
+        ? [{ label: "$(close) Clear Waiting", id: "waiting" }]
+        : effectiveWaiting ? [] : [{ label: "$(watch) Mark Waiting", id: "waiting" }]),
       { label: `${target.line.includes("#someday") ? "$(close) Clear" : "$(archive) Mark"} Someday`, id: "someday" },
       { label: "$(project) Open Project", id: "project" },
       { label: "$(preview) Peek Source", id: "peek" },
@@ -532,10 +724,16 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       return recordInteraction(lifeloop, linkedPeople, event ? "meeting" : undefined, target, event);
     }
     if (action.id === "brief") return vscode.commands.executeCommand("lifeloop.preMeetingBrief", target);
+    if (action.id === "meeting-wrap-up") return vscode.commands.executeCommand("lifeloop.meetingWrapUp", target);
     if (action.id === "project") return openTaskProject(lifeloop, target);
     if (action.id === "set-now") return vscode.commands.executeCommand("lifeloop.setNow", target);
     if (action.id === "clear-now") return vscode.commands.executeCommand("lifeloop.clearNow");
     if (action.id === "note") return vscode.commands.executeCommand("lifeloop.addTaskNote", target);
+    if (action.id === "next-action") return vscode.commands.executeCommand("lifeloop.addNextAction", target);
+    if (action.id === "related") return vscode.commands.executeCommand("lifeloop.addRelatedLink", target);
+    if (action.id === "open-related") return openTaskRelatedPage(lifeloop, target);
+    if (action.id === "make-actionable") return vscode.commands.executeCommand("lifeloop.makeActionable", target);
+    if (action.id === "waiting-next") return vscode.commands.executeCommand("lifeloop.waitingNextAction", target);
     if (action.id === "why") return vscode.commands.executeCommand("lifeloop.explainTask", target);
     if (action.id === "sync") return vscode.commands.executeCommand("lifeloop.syncExternal");
     if (action.id === "open-reminder" || action.id === "open-event") {
@@ -562,10 +760,19 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     await vscode.commands.executeCommand(command[action.id], target);
   });
 
-  on("lifeloop.findTask", async () => {
+  const openFindTask = async (restore: boolean) => {
     try {
       await lifeloop.currentTaskStates();
-      const items = tasks.universe(lifeloop.store).map((task) => {
+      let scope: FindScope = restore && lastFind ? lastFind.scope : "open";
+      const all = tasks.universe(lifeloop.store);
+      const inScope = () => all.filter((task) => {
+        const tags = (task.itags as string[] | undefined) ?? [];
+        if (scope === "all") return true;
+        if (scope === "completed") return task.done === true;
+        if (scope === "waiting" || scope === "someday") return task.done !== true && tags.includes(scope);
+        return task.done !== true;
+      });
+      const taskItems = () => inScope().map((task) => {
         const target = taskTargetFromIndexed(lifeloop, task);
         const parked = (["waiting", "someday"] as const).find((tag) =>
           (task.itags as string[] | undefined)?.includes(tag));
@@ -583,18 +790,177 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         };
       }).filter((item) => item.target !== null)
         .sort((a, b) => a.label.localeCompare(b.label) || a.description.localeCompare(b.description));
-      if (!items.length) {
-        void vscode.window.showInformationMessage("LifeLoop: no indexed tasks with an available source");
-        return;
-      }
-      const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: "Find task by text, status, source or context",
-        matchOnDescription: true,
-        matchOnDetail: true,
+      type FindItem = ReturnType<typeof taskItems>[number] & { scope?: FindScope };
+      const picked = await new Promise<FindItem | undefined>((resolve) => {
+        const picker = vscode.window.createQuickPick<FindItem>();
+        let previewing = false;
+        let previewGeneration = 0;
+        const previewButton = () => ({
+          iconPath: new vscode.ThemeIcon("preview"),
+          tooltip: previewing ? "Stop previewing selection" : "Preview selection while moving",
+        });
+        const preview = async (item?: FindItem) => {
+          const generation = ++previewGeneration;
+          if (!previewing || !item?.target) return;
+          const current = taskTarget(lifeloop, item.target);
+          if (!current) return;
+          const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(current.page));
+          if (generation !== previewGeneration) return;
+          const editor = await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
+          if (generation !== previewGeneration) return;
+          const at = document.positionAt(current.offset);
+          editor.revealRange?.(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
+        };
+        const refresh = () => {
+          picker.items = [
+            { label: `$(filter) Scope: ${scope[0].toUpperCase()}${scope.slice(1)}`, description: "change task scope", detail: "Open · Completed · Waiting · Someday · All", target: null, scope },
+            ...taskItems(),
+          ];
+        };
+        refresh();
+        picker.placeholder = "Find task by text, status, source or context";
+        picker.title = "Find Task";
+        picker.buttons = [previewButton()];
+        picker.matchOnDescription = true;
+        picker.matchOnDetail = true;
+        if (restore && lastFind) {
+          picker.value = lastFind.value;
+          const remembered = taskItems().find((item) =>
+            item.target!.handle.ref === lastFind!.handle.ref &&
+            item.target!.handle.expectedText === lastFind!.handle.expectedText &&
+            item.target!.handle.expectedState === lastFind!.handle.expectedState);
+          if (remembered) {
+            picker.activeItems = [remembered];
+            picker.selectedItems = [remembered];
+          }
+        }
+        let settled = false;
+        const remember = () => {
+          const item = picker.selectedItems[0] ?? picker.activeItems[0];
+          if (item?.target) lastFind = { value: picker.value, handle: item.target.handle, scope };
+        };
+        const finish = (item?: FindItem) => {
+          if (settled) return;
+          settled = true;
+          accepted.dispose();
+          hidden.dispose();
+          active.dispose();
+          button.dispose();
+          previewGeneration++;
+          picker.dispose();
+          resolve(item);
+        };
+        const accepted = picker.onDidAccept(() => {
+          const item = picker.selectedItems[0] ?? picker.activeItems[0];
+          if (item?.scope) {
+            const scopes: FindScope[] = ["open", "completed", "waiting", "someday", "all"];
+            scope = scopes[(scopes.indexOf(scope) + 1) % scopes.length];
+            refresh();
+            return;
+          }
+          remember();
+          finish(item);
+        });
+        const hidden = picker.onDidHide(() => {
+          remember();
+          finish();
+        });
+        const active = picker.onDidChangeActive((items) => { void preview(items[0]); });
+        const button = picker.onDidTriggerButton(() => {
+          previewing = !previewing;
+          picker.title = previewing ? "Find Task · Previewing selection" : "Find Task";
+          picker.buttons = [previewButton()];
+          void preview(picker.activeItems[0]);
+        });
+        picker.show();
       });
       if (picked?.target) await vscode.commands.executeCommand("lifeloop.taskActions", picked.target);
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+    }
+  };
+
+  on("lifeloop.findTask", () => openFindTask(false));
+
+  on("lifeloop.returnToLastFind", async () => {
+    if (lastFind) {
+      await openFindTask(true);
+      return;
+    }
+    const choice = await vscode.window.showInformationMessage(
+      "LifeLoop: no recent Find Task in this session", "Find Task",
+    );
+    if (choice === "Find Task") await openFindTask(false);
+  });
+
+  on("lifeloop.addFromBacklog", async () => {
+    await lifeloop.currentTaskStates();
+    const candidates = backlog(lifeloop.store, day()).map((task) => ({
+      label: String(task.name ?? "").trim() || "(empty task)",
+      description: String(task.page ?? ""),
+      target: taskTargetFromIndexed(lifeloop, task),
+    })).filter((item) => item.target !== null);
+    const picked = await vscode.window.showQuickPick(candidates, { placeHolder: "Add from backlog" });
+    if (!picked?.target) return;
+    const action = await vscode.window.showQuickPick([
+      { label: "$(target) Set Now", id: "now" },
+      { label: "$(calendar) Schedule Today", id: "today" },
+      { label: "$(preview) Peek Source", id: "peek" },
+      { label: "$(go-to-file) Open Source", id: "open" },
+    ], { placeHolder: picked.label });
+    if (action?.id === "now") await vscode.commands.executeCommand("lifeloop.setNow", picked.target);
+    if (action?.id === "today") await setTaskDate(picked.target, "scheduled", day());
+    if (action?.id === "peek") await vscode.commands.executeCommand("lifeloop.peekSource", picked.target);
+    if (action?.id === "open") await vscode.commands.executeCommand("lifeloop.revealTask", picked.target);
+  });
+
+  on("lifeloop.waitingNextAction", async (input?: TaskTargetInput) => {
+    const initial = taskTarget(lifeloop, input);
+    const at = initial && await refreshTaskTarget(lifeloop, initial);
+    if (!at?.task || !(at.task.itags as string[] | undefined)?.includes("waiting")) {
+      void vscode.window.showWarningMessage("LifeLoop: choose a Waiting task");
+      return;
+    }
+    const direct = (at.task.tags as string[] | undefined)?.includes("waiting") ?? false;
+    const choice = await vscode.window.showQuickPick([
+      { label: "$(check) Complete waiting item", id: "complete" },
+      { label: "$(add) Create next action", id: "create" },
+      { label: "$(calendar) Schedule", id: "schedule" },
+      ...(direct ? [{ label: "$(close) Clear Waiting only", id: "clear" }] : []),
+    ], { placeHolder: at.name || "Waiting → Next Action" });
+    if (choice?.id === "complete") return vscode.commands.executeCommand("lifeloop.completeTask", at);
+    if (choice?.id === "schedule") return vscode.commands.executeCommand("lifeloop.quickReschedule", at);
+    if (choice?.id === "clear") return vscode.commands.executeCommand("lifeloop.toggleWaiting", at);
+    if (choice?.id === "create") await addNextAction(at, "Next action");
+  });
+
+  on("lifeloop.addNextAction", (input?: TaskTargetInput) => addNextAction(input ?? {}));
+
+  on("lifeloop.makeActionable", async (input?: TaskTargetInput) => {
+    const at = taskTarget(lifeloop, input);
+    if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    const choice = await vscode.window.showQuickPick([
+      { label: "$(edit) Edit wording", id: "edit" },
+      { label: "$(add) Add first / next action", id: "child" },
+      { label: "$(new-file) Attach new context page", id: "context" },
+      { label: "$(watch) Waiting", id: "waiting" },
+      { label: "$(archive) Someday", id: "someday" },
+    ], { placeHolder: at.name || "Make actionable" });
+    if (choice?.id === "context") return vscode.commands.executeCommand("lifeloop.attachPage", at);
+    if (choice?.id === "waiting") return vscode.commands.executeCommand("lifeloop.toggleWaiting", at);
+    if (choice?.id === "someday") return vscode.commands.executeCommand("lifeloop.toggleSomeday", at);
+    if (choice?.id === "child") return addNextAction(at);
+    if (choice?.id === "edit") {
+      const value = await vscode.window.showInputBox({
+        prompt: "Task wording",
+        value: at.name,
+      });
+      if (!value) return;
+      const current = await refreshTaskTarget(lifeloop, at);
+      if (!current) { void vscode.window.showWarningMessage("LifeLoop: that task changed; nothing was changed"); return; }
+      await refreshAndReport(
+        await setTaskName(lifeloop.vault, current.handle, value), "updated task wording", current,
+      );
     }
   });
 
@@ -704,7 +1070,19 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     on(`lifeloop.toggle${tag[0].toUpperCase()}${tag.slice(1)}`, async (input?: TaskTargetInput) => {
       const at = taskTarget(lifeloop, input);
       if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
-      await refreshAndReport(await toggleParked(lifeloop.vault, at.handle, tag), `toggled #${tag}`, at);
+      const result = await toggleParked(lifeloop.vault, at.handle, tag);
+      const success = result.ok
+        ? result.value.added ? `marked #${tag}` : `removed direct #${tag}`
+        : `toggled #${tag}`;
+      if (!await refreshAndReport(result, success, at) || !result.ok || result.value.added) return;
+      const current = taskTarget(lifeloop, {
+        handle: { ...at.handle, expectedText: result.value.line },
+      });
+      if ((current?.task?.itags as string[] | undefined)?.includes(tag)) {
+        void vscode.window.showWarningMessage(
+          `LifeLoop: removed direct #${tag}, but this task still inherits #${tag}`,
+        );
+      }
     });
   }
 
@@ -733,7 +1111,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     await setTaskDate(at, "scheduled", value);
   });
 
-  for (const field of ["deadline", "scheduled"] as const) {
+  for (const field of TASK_DATE_FIELDS) {
     on(`lifeloop.set${field[0].toUpperCase()}${field.slice(1)}`, async (input?: TaskTargetInput) => {
       const at = taskTarget(lifeloop, input);
       if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
@@ -747,8 +1125,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     });
   }
 
-  on("lifeloop.attachPage", async () => {
-    const at = taskTarget(lifeloop);
+  on("lifeloop.attachPage", async (input?: TaskTargetInput) => {
+    const at = taskTarget(lifeloop, input);
     if (!at) { vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     // The destination is the user's, never inferred from a folder convention.
     const destination = await vscode.window.showInputBox({ prompt: "New page for this task" });
@@ -763,16 +1141,250 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
   });
 
+  on("lifeloop.addRelatedLink", async (input?: TaskTargetInput) => {
+    const initial = taskTarget(lifeloop, input);
+    if (!initial) {
+      void vscode.window.showWarningMessage("LifeLoop: choose a task before adding a related link");
+      return;
+    }
+    const direct = new Set((initial.task?.links as string[] | undefined) ?? []);
+    const candidates = lifeloop.store.objects("page")
+      .map((page) => {
+        const path = String(page.ref ?? "");
+        const tags = (page.itags as string[] | undefined) ?? [];
+        const pageType = tags.includes("project") ? "Project" : tags.includes("person") ? "Person" : "Note";
+        return {
+          label: path.split("/").at(-1) ?? path,
+          description: pageType,
+          detail: path,
+          path,
+          pageType,
+        };
+      })
+      .filter((page) => page.path && !direct.has(page.path))
+      .sort((a, b) => a.pageType.localeCompare(b.pageType) || a.path.localeCompare(b.path));
+    if (!candidates.length) {
+      void vscode.window.showInformationMessage("LifeLoop: no unlinked Project, Person or Note page is available");
+      return;
+    }
+    const selected = await vscode.window.showQuickPick(candidates, {
+      placeHolder: "Add a related link (this does not change project ownership)",
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!selected) return;
+
+    let targetText: string;
+    try { targetText = lifeloop.vault.read(`${selected.path}.md`); }
+    catch {
+      void vscode.window.showWarningMessage(`LifeLoop: ${selected.path} no longer exists`);
+      return;
+    }
+    const current = await refreshTaskTarget(lifeloop, initial);
+    if (!current) {
+      void vscode.window.showWarningMessage("LifeLoop: that task changed; no related link was added");
+      return;
+    }
+    const result = await addTaskLink(lifeloop.vault, current.handle, selected.path, targetText);
+    if (!await refreshAndReport(result, `added related link to ${selected.path}`, current)) return;
+    if (selected.pageType === "Project") {
+      void vscode.window.showInformationMessage(
+        "LifeLoop: related link added. Project gap still counts only tasks written on the project page.",
+      );
+    }
+  });
+
+  const showProject = async (project: string, preserveFocus: boolean): Promise<void> => {
+    const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(project));
+    await vscode.window.showTextDocument(document, preserveFocus
+      ? { preview: true, preserveFocus: true } : undefined);
+  };
+
+  const pauseProject = async (project: string): Promise<void> => {
+    const snapshot = projectSnapshot(lifeloop, project);
+    if (!snapshot) {
+      void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+      return;
+    }
+    if (report(
+      await setProjectStatus(lifeloop.vault, project, "paused", snapshot.text),
+      `${project} is paused`, { page: project, offset: 0 },
+    )) await after();
+  };
+
+  const addProjectNextAction = async (project: string): Promise<void> => {
+    const snapshot = projectSnapshot(lifeloop, project);
+    if (!snapshot || snapshot.status !== "active") {
+      void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing, no longer active, or no longer a project`);
+      return;
+    }
+    const name = await vscode.window.showInputBox({
+      prompt: `Add next action to the end of ${project}`,
+      placeHolder: "next action",
+    });
+    if (!name) return;
+    const result = await captureHere(lifeloop.vault, project, snapshot.text.length, name, snapshot.text);
+    if (!await refreshAndReport(
+      result, `added next action to ${project}`, { page: project, offset: snapshot.text.length },
+    )) return;
+    if (snapshot.inheritedParked.length) {
+      void vscode.window.showWarningMessage(
+        `LifeLoop: added the task, but it still inherits ${snapshot.inheritedParked.map((tag) => `#${tag}`).join(" and ")} from ${project}`,
+      );
+    }
+  };
+
   // 1.9 — lifecycle is semantic only: archiving does not move the page.
-  on("lifeloop.setProjectStatus", async () => {
-    const project = await pickProject(lifeloop);
+  on("lifeloop.setProjectStatus", async (input?: ProjectTargetInput) => {
+    const project = input?.page ?? await pickProject(lifeloop);
     if (!project) return;
+    if (!projectSnapshot(lifeloop, project)) {
+      void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+      return;
+    }
     const status = await vscode.window.showQuickPick([...PROJECT_STATES], {
       placeHolder: `status for ${project}`,
     });
     if (!status) return;
-    if (report(await setProjectStatus(lifeloop.vault, project, status as any), `${project} is ${status}`)) {
+    try { await lifeloop.currentTaskStates(); }
+    catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
+    let snapshot = projectSnapshot(lifeloop, project);
+    if (!snapshot) {
+      void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+      return;
+    }
+    if (status === "completed" || status === "archived") {
+      const facts = projectResumption(lifeloop.store, project);
+      if (!facts) {
+        void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+        return;
+      }
+      const open = [...facts.onPageOpen, ...facts.relatedOpen];
+      const waiting = open.filter((task) =>
+        ((task.itags as string[] | undefined) ?? []).includes("waiting")).length;
+      const bindings = facts.knownBindings.length;
+      const decision = await vscode.window.showQuickPick([
+        {
+          label: `$(check) Set project ${status}`,
+          description: "leave tasks and external objects unchanged",
+          detail: `${facts.onPageOpen.length} open on this page · ${facts.relatedOpen.length} related elsewhere · ${waiting} waiting · ${bindings} with known bindings`,
+          id: "confirm",
+        },
+        { label: "$(preview) Open known closure facts", id: "facts" },
+      ], { placeHolder: `Review known facts before setting ${project} ${status}` });
+      if (!decision) return;
+      if (decision.id === "facts") {
+        await vscode.commands.executeCommand("lifeloop.projectResumptionBrief", { page: project });
+        return;
+      }
+      try { await lifeloop.currentTaskStates(); }
+      catch (error) {
+        void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+        return;
+      }
+      snapshot = projectSnapshot(lifeloop, project);
+      if (!snapshot) {
+        void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+        return;
+      }
+    }
+    if (report(
+      await setProjectStatus(lifeloop.vault, project, status as any, snapshot.text),
+      `${project} is ${status}`, { page: project, offset: 0 },
+    )) {
       await after();
+    }
+  });
+
+  on("lifeloop.projectActions", async (input?: ProjectTargetInput) => {
+    const project = input?.page ?? await pickProject(lifeloop);
+    if (!project) return;
+    const snapshot = projectSnapshot(lifeloop, project);
+    if (!snapshot) {
+      void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+      return;
+    }
+    const choice = await vscode.window.showQuickPick([
+      { label: "$(preview) Preview project context", detail: "read-only tasks on this page and related work elsewhere", id: "preview" },
+      { label: "$(go-to-file) Open project", id: "open" },
+      ...(snapshot.status === "active" ? [
+        { label: "$(add) Add next action", detail: "append one task to the end of this project page", id: "add" },
+        { label: "$(debug-pause) Pause project", detail: "leave tasks and external bindings unchanged", id: "pause" },
+      ] : []),
+      { label: "$(arrow-right) Leave unchanged", id: "skip" },
+    ], { placeHolder: project });
+    if (!choice || choice.id === "skip") return;
+    if (choice.id === "preview") {
+      return vscode.commands.executeCommand("lifeloop.projectResumptionBrief", { page: project });
+    }
+    if (choice.id === "open") return showProject(project, false);
+    if (choice.id === "pause") return pauseProject(project);
+    await addProjectNextAction(project);
+  });
+
+  on("lifeloop.projectResumptionBrief", async (input?: ProjectTargetInput) => {
+    const project = input?.page ?? await pickProject(lifeloop);
+    if (!project) return;
+    try {
+      await lifeloop.currentTaskStates();
+      const context = projectResumption(lifeloop.store, project);
+      if (!context) {
+        void vscode.window.showWarningMessage(`LifeLoop: ${project} is missing or no longer a project`);
+        return;
+      }
+      const rows = (list: LifeloopObject[]) => list.length ? list.map((task) => {
+        const tags = (task.itags as string[] | undefined) ?? [];
+        const state = task.done === true ? "completed"
+          : tags.includes("waiting") ? "waiting" : tags.includes("someday") ? "someday" : "open";
+        const completed = typeof task.completed === "string" ? ` · completed ${task.completed}` : "";
+        return `* ${sourceLink(lifeloop, String(task.ref), String(task.page ?? ""))} — ${markdownText(task.name)} · ${state}${completed}`;
+      }).join("\n") : "_Nothing._";
+      const bindingRows = context.knownBindings.length ? context.knownBindings.map((task) => {
+        const bindings = [
+          typeof task.reminder === "string" ? `Reminder ${markdownText(task.reminder)}` : "",
+          typeof task.event === "string" ? `Calendar ${markdownText(task.event)}` : "",
+        ].filter(Boolean).join(" · ");
+        return `* ${sourceLink(lifeloop, String(task.ref), String(task.page ?? ""))} — ${markdownText(task.name)} · ${bindings}`;
+      }).join("\n") : "_Nothing._";
+      const uri = lifeloop.pageUri(project).toString();
+      const markdown = [
+        `# Resume ${markdownText(project.split("/").at(-1) ?? project)}`,
+        "",
+        `Project: [${markdownText(project)}](<${uri}>)`,
+        `Status: ${markdownText(context.project.status ?? "active")}`,
+        `Project page last modified: ${markdownText(context.project.lastModified || "unknown")}`,
+        "",
+        "## Open tasks on this project page",
+        "",
+        rows(context.onPageOpen),
+        "",
+        "## Related open tasks from other pages",
+        "",
+        rows(context.relatedOpen),
+        "",
+        "_Related links provide context and do not change project-page membership._",
+        "",
+        "## Recent factual completions",
+        "",
+        rows(context.recentCompleted),
+        "",
+        "## Known Reminder / Calendar bindings",
+        "",
+        bindingRows,
+        "",
+      ].join("\n");
+      if (input?.preserveFocus) {
+        await vscode.commands.executeCommand(
+          "lifeloop.openReadonlyResult", markdown, "project-resumption", { preserveFocus: true },
+        );
+      } else {
+        await vscode.commands.executeCommand("lifeloop.openReadonlyResult", markdown, "project-resumption");
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: Project Resumption Brief failed — ${(error as Error).message}`);
     }
   });
 
@@ -797,6 +1409,410 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
   });
 
+  const openWeeklyFocus = async (start: string, preserveFocus = false): Promise<void> => {
+    const template = readTemplate(lifeloop.vault, "Templates/Weekly Focus") ??
+      builtinWeeklyFocusTemplate();
+    const result = await createFromTemplate(
+      lifeloop.vault,
+      template,
+      `Weekly/${start}`,
+      new Date(`${start}T12:00:00`),
+    );
+    if (!result.ok) {
+      void vscode.window.showWarningMessage(`LifeLoop: ${result.message}`);
+      return;
+    }
+    if (!result.value.existed) await after();
+    const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(result.value.page));
+    const editor = await vscode.window.showTextDocument(
+      document,
+      preserveFocus ? { preview: true, preserveFocus: true } : undefined,
+    );
+    if (result.value.cursor !== null) {
+      const at = document.positionAt(result.value.cursor);
+      editor.selection = new vscode.Selection(at, at);
+    }
+  };
+
+  on("lifeloop.openNextWeekFocus", () => {
+    return openWeeklyFocus(week(shift(day(), 7)).start);
+  });
+
+  on("lifeloop.reviewPeriodFacts", async () => {
+    try {
+      await lifeloop.currentTaskStates();
+      const sections = review(lifeloop.store, day());
+      const activity = interactions(lifeloop.store).filter((entry) =>
+        entry.date >= sections.week.start && entry.date <= sections.week.end);
+      const completed = sections.completed.length ? sections.completed.map((task) =>
+        `* ${sourceLink(lifeloop, String(task.ref), String(task.page ?? ""))} — ${markdownText(task.name)} · completed ${markdownText(task.completed)}`,
+      ).join("\n") : "_Nothing with a reliable completion date._";
+      const interactionsMarkdown = activity.length ? activity.map((entry) =>
+        `* ${sourceLink(lifeloop, entry.ref, entry.page)} — ${markdownText(entry.date)} · ${markdownText(entry.kind)} · ${markdownText(entry.people.join(", "))} · ${markdownText(entry.text)}`,
+      ).join("\n") : "_No explicitly dated interactions._";
+      const markdown = [
+        `# Facts for ${sections.week.start} to ${sections.week.end}`,
+        "",
+        "## Completed tasks",
+        "",
+        completed,
+        "",
+        "## Interactions",
+        "",
+        interactionsMarkdown,
+        "",
+        "_This report omits task creation and Inbox processing because those facts do not have reliable dates._",
+        "",
+      ].join("\n");
+      await vscode.commands.executeCommand("lifeloop.openReadonlyResult", markdown, "review-period-facts");
+    } catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: Review Period Facts failed — ${(error as Error).message}`);
+    }
+  });
+
+  on("lifeloop.planToday", () =>
+    vscode.commands.executeCommand("lifeloop.reviewActions", { mode: "plan" }));
+
+  on("lifeloop.closeTodayPlanTomorrow", () =>
+    vscode.commands.executeCommand("lifeloop.reviewActions", { mode: "close" }));
+
+  on("lifeloop.reviewActions", async (input?: { mode?: "review" | "plan" | "close" }) => {
+    type ReviewScope = "open" | "projects" | "waiting" | "someday" | "completed" | "unscheduled" | "paused" |
+      "plan-today" | "backlog-today" | "day-review" | "plan-tomorrow" | "backlog-tomorrow";
+    type ReviewItem = vscode.QuickPickItem & {
+      key?: string;
+      target?: TaskTarget;
+      project?: string;
+      chooseScope?: true;
+      openWeekFocus?: string;
+      openNextWeekFocus?: true;
+      openPeriodFacts?: true;
+    };
+    const reviewScopes: { label: string; description: string; scope: ReviewScope }[] = [
+      { label: "Open tasks", description: "open and actionable", scope: "open" },
+      { label: "Active projects", description: "page-scoped project facts", scope: "projects" },
+      { label: "Waiting", description: "effective #waiting only", scope: "waiting" },
+      { label: "Someday", description: "effective #someday, excluding Waiting", scope: "someday" },
+      { label: "Completed this week", description: "factual completion dates", scope: "completed" },
+      { label: "Unscheduled backlog", description: "not planned, parked or under a paused project", scope: "unscheduled" },
+      { label: "Paused projects", description: "user-selected backlog scope", scope: "paused" },
+    ];
+    const todayDate = day();
+    const tomorrowDate = shift(todayDate, 1);
+    const mode = input?.mode ?? "review";
+    const scopes = mode === "plan" ? [
+      { label: `Plan today — ${todayDate}`, description: "deadlines, plans and unfinished earlier plans", scope: "plan-today" as const },
+      { label: "Backlog candidates", description: "open, actionable and not already planned", scope: "backlog-today" as const },
+    ] : mode === "close" ? [
+      { label: `Review today — ${todayDate}`, description: "factual completions and remaining plans", scope: "day-review" as const },
+      { label: `Plan tomorrow — ${tomorrowDate}`, description: "tomorrow's constraints and existing plans", scope: "plan-tomorrow" as const },
+      { label: "Tomorrow backlog candidates", description: "open, actionable and not already planned", scope: "backlog-tomorrow" as const },
+    ] : reviewScopes;
+    let scope: ReviewScope = scopes[0].scope;
+    let results: ReviewItem[] = [];
+    let lastResultKey: string | undefined;
+    let lastResultIndex = 0;
+    const picker = vscode.window.createQuickPick<ReviewItem>();
+    picker.title = mode === "plan" ? "Plan Today"
+      : mode === "close" ? "Close Today and Plan Tomorrow" : "Review in Place";
+    picker.placeholder = mode === "plan" ? "Review constraints, choose freely, and adjust when needed"
+      : mode === "close" ? "Review today, then plan tomorrow without task check-ins" : "Review in place";
+    picker.matchOnDescription = true;
+    picker.matchOnDetail = true;
+
+    const taskItem = (task: LifeloopObject, reason?: string): ReviewItem | null => {
+      const target = taskTargetFromIndexed(lifeloop, task);
+      if (!target) return null;
+      const tags = (task.itags as string[] | undefined) ?? [];
+      const facts = [
+        task.done ? "completed" : tags.includes("waiting") ? "waiting" : tags.includes("someday") ? "someday" : "actionable",
+        typeof task.deadline === "string" ? `due ${task.deadline}` : "",
+        typeof task.scheduled === "string" ? `scheduled ${task.scheduled}` : "",
+        reason ?? "",
+      ].filter(Boolean);
+      return {
+        label: String(task.name ?? "").trim() || "(empty task)",
+        description: String(task.page ?? ""),
+        detail: facts.join(" · "),
+        key: `task:${target.handle.ref}`,
+        target,
+      };
+    };
+    const planItems = (date: string): ReviewItem[] => {
+      const buckets = today(lifeloop.store, date);
+      const rows: [LifeloopObject, string][] = [
+        ...buckets.overdue.map((task): [LifeloopObject, string] => [task, `deadline before ${date}`]),
+        ...buckets.due.map((task): [LifeloopObject, string] => [task, `deadline ${date}`]),
+        ...buckets.scheduled.map((task): [LifeloopObject, string] => [task, `planned for ${date}`]),
+        ...buckets.pastScheduled.map((task): [LifeloopObject, string] => [task, `earlier plan ${String(task.scheduled)} still open`]),
+      ];
+      return rows.map(([task, reason]) => taskItem(task, reason))
+        .filter((item): item is ReviewItem => item !== null);
+    };
+    const projectItem = (project: LifeloopObject, paused = false): ReviewItem => {
+      const page = String(project.ref ?? "");
+      const signals = paused ? [] : projectSignals(
+        lifeloop.store, page, day(), lifeloop.config("staleDays", 21),
+      );
+      const actionable = tasks.actionable(lifeloop.store).filter((task) => task.page === page).length;
+      return {
+        label: page.split("/").at(-1) ?? page,
+        description: page,
+        detail: paused ? "paused project" : signals.length
+          ? signals.map((signal) => `this page: ${signal.kind}`).join(" · ")
+          : `${actionable} actionable on this project page`,
+        key: `project:${page}`,
+        project: page,
+      };
+    };
+    const currentResults = (): ReviewItem[] => {
+      if (scope === "plan-today") return planItems(todayDate);
+      if (scope === "plan-tomorrow") return planItems(tomorrowDate);
+      if (scope === "backlog-today" || scope === "backlog-tomorrow") {
+        return backlog(lifeloop.store, scope === "backlog-today" ? todayDate : tomorrowDate)
+          .map((task) => taskItem(task, "backlog candidate"))
+          .filter((item): item is ReviewItem => item !== null);
+      }
+      if (scope === "day-review") {
+        const summary = dayReview(lifeloop.store, todayDate);
+        return [
+          ...summary.completed.map((task) => taskItem(task, "completed today")),
+          ...summary.remaining.map((task) => taskItem(task, "still open at close of day")),
+        ].filter((item): item is ReviewItem => item !== null);
+      }
+      const sections = review(lifeloop.store, todayDate);
+      const taskRows = scope === "open" ? sections.stillOpen
+        : scope === "waiting" ? sections.waiting
+          : scope === "someday" ? sections.someday
+            : scope === "completed" ? sections.completed
+              : scope === "unscheduled" ? backlog(lifeloop.store, day()) : [];
+      if (taskRows.length) return taskRows.map((task) => taskItem(task))
+        .filter((item): item is ReviewItem => item !== null);
+      if (scope === "projects") return sections.activeProjects.map((project) => projectItem(project));
+      if (scope === "paused") {
+        return lifeloop.store.objects("page")
+          .filter((page) => (page.itags as string[] | undefined)?.includes("project") && page.status === "paused")
+          .map((project) => projectItem(project, true));
+      }
+      return [];
+    };
+    const render = (preferred?: string, fallback = 0) => {
+      results = currentResults();
+      const title = scopes.find((candidate) => candidate.scope === scope)!.label;
+      const scopeItem: ReviewItem = {
+        label: `$(filter) Scope: ${title}`,
+        description: "change review scope",
+        detail: scopes.map((candidate) => candidate.label).join(" · "),
+        chooseScope: true,
+      };
+      const focusItem: ReviewItem[] = mode === "review" ? [{
+        label: "$(calendar) Open next week's focus",
+        description: "ordinary Markdown intent note; exits Review",
+        openNextWeekFocus: true,
+      }, {
+        label: "$(history) Open this week's dated facts",
+        description: "completed tasks and explicit interactions only; exits Review",
+        openPeriodFacts: true,
+      }] : [{
+        label: `$(calendar) Open focus for week ${week(mode === "close" ? tomorrowDate : todayDate).start}`,
+        description: "ordinary Markdown focus note; keeps this planning list",
+        openWeekFocus: week(mode === "close" ? tomorrowDate : todayDate).start,
+      }];
+      picker.items = results.length ? [scopeItem, ...focusItem, ...results] : [scopeItem, ...focusItem, {
+        label: "$(info) Nothing in this scope",
+        description: title,
+      }];
+      const next = results.find((item) => item.key === preferred) ??
+        results[Math.min(fallback, Math.max(0, results.length - 1))];
+      if (next?.key) {
+        lastResultKey = next.key;
+        lastResultIndex = Math.max(0, results.findIndex((item) => item.key === next.key));
+      }
+      picker.activeItems = next ? [next] : [scopeItem];
+      picker.selectedItems = [];
+    };
+
+    try {
+      await lifeloop.currentTaskStates();
+    } catch (error) {
+      picker.dispose();
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let running = false;
+      let ended = false;
+      let activeChanged: vscode.Disposable | undefined;
+      const finish = () => {
+        if (ended) return;
+        ended = true;
+        accepted.dispose();
+        hidden.dispose();
+        activeChanged?.dispose();
+        picker.dispose();
+        resolve();
+      };
+      const resume = async (preferred?: string, fallback = 0) => {
+        if (ended) return;
+        if (!lifeloop.indexIsSettled()) await lifeloop.currentTaskStates();
+        render(preferred, fallback);
+        picker.busy = false;
+        running = false;
+        picker.show();
+      };
+      const accept = async () => {
+        if (running || ended) return;
+        const item = picker.selectedItems[0] ?? picker.activeItems[0];
+        if (!item) return;
+        running = true;
+        picker.busy = true;
+        const value = picker.value;
+        const index = Math.max(0, results.findIndex((candidate) => candidate.key === item.key));
+        if (item.key) {
+          lastResultKey = item.key;
+          lastResultIndex = index;
+        }
+        try {
+          if (item.chooseScope) {
+            const picked = await vscode.window.showQuickPick(scopes, {
+              placeHolder: mode === "review" ? "Review scope" : "Planning scope",
+            });
+            // VS Code can deliver the parent picker's hide event just after a
+            // nested picker resolves. Settle it while `running` still guards
+            // the Review session from ending.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            if (picked) scope = picked.scope;
+            picker.value = value;
+            await resume(undefined, 0);
+            return;
+          }
+          if (item.openNextWeekFocus) {
+            finish();
+            await vscode.commands.executeCommand("lifeloop.openNextWeekFocus");
+            return;
+          }
+          if (item.openWeekFocus) {
+            await openWeeklyFocus(item.openWeekFocus, true);
+            picker.value = value;
+            await resume(lastResultKey, lastResultIndex);
+            return;
+          }
+          if (item.openPeriodFacts) {
+            finish();
+            await vscode.commands.executeCommand("lifeloop.reviewPeriodFacts");
+            return;
+          }
+          if (!item.target && !item.project) {
+            await resume(undefined, 0);
+            return;
+          }
+
+          if (item.target) {
+            const tags = (item.target.task?.itags as string[] | undefined) ?? [];
+            const planningDate = scope === "plan-today" || scope === "backlog-today" ? todayDate
+              : scope === "plan-tomorrow" || scope === "backlog-tomorrow" ? tomorrowDate : undefined;
+            const action = await vscode.window.showQuickPick([
+              { label: "$(preview) Preview source", id: "preview" },
+              { label: "$(go-to-file) Open source and exit this list", id: "open" },
+              { label: item.target.task?.done ? "$(discard) Reopen" : "$(check) Complete", id: item.target.task?.done ? "reopen" : "complete" },
+              ...(planningDate && !item.target.task?.done && item.target.task?.scheduled !== planningDate
+                ? [{ label: `$(calendar) Schedule for ${planningDate}`, id: "schedule-day" }] : []),
+              ...(!item.target.task?.done ? [{ label: "$(calendar) Quick Reschedule", id: "reschedule" }] : []),
+              ...(!item.target.task?.done ? [{ label: "$(target) Set as Now (optional)", id: "set-now" }] : []),
+              ...(!item.target.task?.done ? [{ label: "$(note) Add Progress / Resume Cue", id: "note" }] : []),
+              { label: tags.includes("waiting") ? "$(debug-step-over) Waiting → Next Action" : "$(watch) Mark Waiting", id: tags.includes("waiting") ? "waiting-next" : "waiting" },
+              { label: "$(add) Add next action", id: "next" },
+              { label: "$(link) Add Related Link", id: "related" },
+              { label: "$(ellipsis) All Task Actions", id: "all" },
+              { label: "$(arrow-right) Keep unchanged and continue", id: "continue" },
+            ], { placeHolder: item.label });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            if (!action || action.id === "continue") {
+              picker.value = value;
+              await resume(item.key, index);
+              return;
+            }
+            if (action.id === "open") {
+              finish();
+              await vscode.commands.executeCommand("lifeloop.revealTask", item.target);
+              return;
+            }
+            if (action.id === "preview") {
+              const current = taskTarget(lifeloop, item.target);
+              if (!current) {
+                void vscode.window.showWarningMessage("LifeLoop: that task changed; refresh Review before previewing it");
+              } else {
+                const document = await vscode.workspace.openTextDocument(lifeloop.pageUri(current.page));
+                const editor = await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
+                const at = document.positionAt(current.offset);
+                editor.revealRange?.(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
+              }
+            } else if (action.id === "schedule-day") {
+              await setTaskDate(item.target, "scheduled", planningDate!);
+            } else {
+              const commands: Record<string, string> = {
+                complete: "lifeloop.completeTask", reopen: "lifeloop.reopenTask",
+                reschedule: "lifeloop.quickReschedule", waiting: "lifeloop.toggleWaiting",
+                "waiting-next": "lifeloop.waitingNextAction", next: "lifeloop.addNextAction",
+                related: "lifeloop.addRelatedLink", all: "lifeloop.taskActions",
+                "set-now": "lifeloop.setNow", note: "lifeloop.addTaskNote",
+              };
+              await vscode.commands.executeCommand(commands[action.id], item.target);
+            }
+          } else {
+            const snapshot = projectSnapshot(lifeloop, item.project!);
+            const action = await vscode.window.showQuickPick([
+              { label: "$(preview) Preview project", id: "preview" },
+              { label: "$(go-to-file) Open project and exit Review", id: "open" },
+              ...(snapshot?.status === "active" ? [
+                { label: "$(add) Add next action", id: "add" },
+                { label: "$(debug-pause) Pause project", id: "pause" },
+              ] : []),
+              { label: "$(ellipsis) All Project Actions", id: "all" },
+              { label: "$(arrow-right) Keep unchanged and continue", id: "continue" },
+            ], { placeHolder: item.description });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            if (!action || action.id === "continue") {
+              picker.value = value;
+              await resume(item.key, index);
+              return;
+            }
+            if (action.id === "open") {
+              finish();
+              await showProject(item.project!, false);
+              return;
+            }
+            if (action.id === "preview") {
+              await vscode.commands.executeCommand("lifeloop.projectResumptionBrief", {
+                page: item.project!, preserveFocus: true,
+              });
+            }
+            if (action.id === "add") await addProjectNextAction(item.project!);
+            if (action.id === "pause") await pauseProject(item.project!);
+            if (action.id === "all") await vscode.commands.executeCommand("lifeloop.projectActions", item);
+          }
+          picker.value = value;
+          await resume(item.key, index);
+        } catch (error) {
+          void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+          picker.value = value;
+          try { await resume(item.key, index); } catch { finish(); }
+        }
+      };
+      const accepted = picker.onDidAccept(() => { void accept(); });
+      const hidden = picker.onDidHide(() => { if (!running) finish(); });
+      activeChanged = picker.onDidChangeActive?.((items) => {
+        const item = items[0];
+        if (!item?.key) return;
+        lastResultKey = item.key;
+        lastResultIndex = Math.max(0, results.findIndex((candidate) => candidate.key === item.key));
+      });
+      render();
+      picker.show();
+    });
+  });
+
   on("lifeloop.freezeReview", async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
@@ -805,7 +1821,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     const render = (name: string): string | null => {
       const lists: Record<string, unknown[]> = {
         completed: sections.completed, stillOpen: sections.stillOpen,
-        activeProjects: sections.activeProjects, waiting: sections.waiting, inbox: sections.inbox,
+        activeProjects: sections.activeProjects, waiting: sections.waiting,
+        someday: sections.someday, inbox: sections.inbox,
       };
       const list = lists[name];
       if (!list) return null;

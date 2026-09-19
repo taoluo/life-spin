@@ -34,6 +34,7 @@ export type TodayBuckets = {
   overdue: LifeloopObject[];
   due: LifeloopObject[];
   scheduled: LifeloopObject[];
+  pastScheduled: LifeloopObject[];
   waiting: LifeloopObject[];
 };
 
@@ -43,8 +44,8 @@ export type TaskViewExplanation = {
 };
 
 /**
- * Today: overdue / due today / scheduled today, **disjoint**, plus what you are
- * waiting on.
+ * Today: overdue / due today / scheduled today / unfinished earlier plans,
+ * **disjoint**, plus what you are waiting on.
  *
  * Disjoint matters — a task with both a deadline and a schedule appears once, in
  * the most urgent bucket it qualifies for, or the same work is counted twice in a
@@ -64,7 +65,46 @@ export function today(store: Store, date = day()): TodayBuckets {
   const overdue = take(actionable.filter((t) => typeof t.deadline === "string" && t.deadline < date));
   const due = take(actionable.filter((t) => t.deadline === date));
   const scheduled = take(actionable.filter((t) => t.scheduled === date));
-  return { date, overdue, due, scheduled, waiting: tasks.parked(store) };
+  const pastScheduled = take(actionable.filter((t) =>
+    typeof t.scheduled === "string" && t.scheduled < date));
+  return { date, overdue, due, scheduled, pastScheduled, waiting: tasks.parked(store) };
+}
+
+export type DayReview = {
+  date: string;
+  completed: LifeloopObject[];
+  remaining: LifeloopObject[];
+};
+
+/** Factual close-of-day rows; it does not infer starts, effort or planned order. */
+export function dayReview(store: Store, date = day()): DayReview {
+  const buckets = today(store, date);
+  return {
+    date,
+    completed: tasks.universe(store).filter((task) => task.completed === date),
+    remaining: [
+      ...buckets.overdue, ...buckets.due, ...buckets.scheduled, ...buckets.pastScheduled,
+    ],
+  };
+}
+
+/** Open work that is neither parked, planned, in Today, nor under a paused project. */
+export function backlog(store: Store, date = day()): LifeloopObject[] {
+  const current = today(store, date);
+  const planned = new Set([
+    ...current.overdue,
+    ...current.due,
+    ...current.scheduled,
+    ...current.pastScheduled,
+  ].map((task) => task.ref));
+  const paused = new Set(store.objects("page")
+    .filter((page) => (page.itags as string[] | undefined)?.includes("project") && page.status === "paused")
+    .map((page) => String(page.ref)));
+  return tasks.actionable(store).filter((task) => {
+    if (planned.has(task.ref) || typeof task.scheduled === "string") return false;
+    const context = new Set((task.ilinks as string[] | undefined) ?? []);
+    return !paused.has(String(task.page)) && ![...paused].some((page) => context.has(page));
+  });
 }
 
 /** Explain only the two task predicates LifeLoop currently promises to users. */
@@ -99,6 +139,9 @@ export function explainTask(
   }
   if (buckets.scheduled.some(same)) {
     return { included: true, reasons: [`scheduled for ${date}`] };
+  }
+  if (buckets.pastScheduled.some(same)) {
+    return { included: true, reasons: [`scheduled for ${String(task.scheduled)} and still open` ] };
   }
   if (buckets.waiting.some(same)) {
     return { included: true, reasons: parkedReason.length ? parkedReason : ["parked"] };
@@ -164,6 +207,7 @@ export type ReviewSections = {
   stillOpen: LifeloopObject[];
   activeProjects: LifeloopObject[];
   waiting: LifeloopObject[];
+  someday: LifeloopObject[];
   inbox: LifeloopObject[];
 };
 
@@ -178,12 +222,17 @@ export function review(store: Store, date = day()): ReviewSections {
   const projects = store
     .objects("page")
     .filter((p) => (p.itags as string[] | undefined)?.includes("project"));
+  const parked = tasks.parked(store);
   return {
     week: range,
     completed,
     stillOpen: tasks.actionable(store),
     activeProjects: projects.filter((p) => (p.status ?? "active") === "active"),
-    waiting: tasks.parked(store),
+    waiting: parked.filter((task) =>
+      (task.itags as string[] | undefined)?.includes("waiting")),
+    someday: parked.filter((task) =>
+      !(task.itags as string[] | undefined)?.includes("waiting") &&
+      (task.itags as string[] | undefined)?.includes("someday")),
     inbox: store.objects("item").filter((i) => i.page === "Inbox"),
   };
 }
@@ -197,19 +246,34 @@ export function projectSignals(
   date = day(),
   staleDays = 21,
 ): Signal[] {
+  const page = store.objects("page").find((p) => p.ref === project);
+  const active = Boolean(page &&
+    (page.itags as string[] | undefined)?.includes("project") &&
+    (page.status ?? "active") === "active");
   const mine = tasks.universe(store).filter((t) => t.page === project);
   const open = mine.filter((t) => !t.done);
   const parked = (t: LifeloopObject) =>
     ["waiting", "someday"].some((tag) => (t.itags as string[] | undefined)?.includes(tag));
   const signals: Signal[] = [];
 
-  if (open.length > 0 && open.every(parked)) {
+  if (active && open.length === 0) {
+    signals.push({ kind: "no open task", detail: "this project page has no open task" });
+  } else if (active && open.every(parked)) {
     // Narrower than "not actionable" on purpose: a project holding both waiting
     // and someday tasks has nothing actionable but is not waiting on anybody.
     if (open.every((t) => (t.itags as string[] | undefined)?.includes("waiting"))) {
-      signals.push({ kind: "waiting only", detail: `${open.length} open, all #waiting` });
+      signals.push({ kind: "waiting only", detail: `${open.length} open on this project page, all are #waiting` });
     } else {
-      signals.push({ kind: "no actionable task", detail: `${open.length} open, none actionable` });
+      const waiting = open.filter((task) =>
+        (task.itags as string[] | undefined)?.includes("waiting")).length;
+      const someday = open.filter((task) => {
+        const tags = (task.itags as string[] | undefined) ?? [];
+        return !tags.includes("waiting") && tags.includes("someday");
+      }).length;
+      signals.push({
+        kind: "no actionable task",
+        detail: `${open.length} open on this project page: ${waiting} waiting, ${someday} someday`,
+      });
     }
   }
 
@@ -218,7 +282,6 @@ export function projectSignals(
     signals.push({ kind: "overdue tasks", detail: `${overdue.length} past their deadline` });
   }
 
-  const page = store.objects("page").find((p) => p.ref === project);
   const modified = typeof page?.lastModified === "string" ? page.lastModified.slice(0, 10) : null;
   if (modified && modified < shift(date, -staleDays)) {
     // Not called "no activity": the only evidence is one page's timestamp, while
@@ -229,4 +292,41 @@ export function projectSignals(
     });
   }
   return signals;
+}
+
+export type ProjectResumption = {
+  project: LifeloopObject;
+  onPageOpen: LifeloopObject[];
+  relatedOpen: LifeloopObject[];
+  recentCompleted: LifeloopObject[];
+  knownBindings: LifeloopObject[];
+};
+
+/** Read-only facts for resuming one Project; related links never redefine membership. */
+export function projectResumption(
+  store: Store,
+  project: string,
+  completedLimit = 5,
+): ProjectResumption | null {
+  const page = store.objects("page").find((candidate) =>
+    candidate.ref === project &&
+    (candidate.itags as string[] | undefined)?.includes("project"));
+  if (!page) return null;
+  const universe = tasks.universe(store);
+  const belongs = (task: LifeloopObject) => task.page === project;
+  const relates = (task: LifeloopObject) => task.page !== project &&
+    ((task.ilinks as string[] | undefined) ?? []).includes(project);
+  const open = (task: LifeloopObject) => task.done !== true && task.inComment !== true;
+  const completed = universe.filter((task) => task.done === true && (belongs(task) || relates(task)))
+    .sort((a, b) => String(b.completed ?? "").localeCompare(String(a.completed ?? "")))
+    .slice(0, completedLimit);
+  return {
+    project: page,
+    onPageOpen: universe.filter((task) => belongs(task) && open(task)),
+    relatedOpen: universe.filter((task) => relates(task) && open(task)),
+    recentCompleted: completed,
+    knownBindings: universe.filter((task) =>
+      (belongs(task) || relates(task)) &&
+      (typeof task.reminder === "string" || typeof task.event === "string")),
+  };
 }

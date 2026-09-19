@@ -157,11 +157,16 @@ suite("LifeLoop in a real VS Code", () => {
     for (const name of [
       "lifeloop.capture", "lifeloop.captureHere", "lifeloop.captureSelection", "lifeloop.processInbox", "lifeloop.openToday",
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
+      "lifeloop.reviewActions", "lifeloop.openNextWeekFocus", "lifeloop.reviewPeriodFacts", "lifeloop.planToday",
+      "lifeloop.closeTodayPlanTomorrow", "lifeloop.projectResumptionBrief", "lifeloop.addNextAction",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
-      "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.explainTask", "lifeloop.addTaskNote",
+      "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.addFromBacklog", "lifeloop.waitingNextAction",
+      "lifeloop.makeActionable", "lifeloop.explainTask", "lifeloop.addTaskNote",
+      "lifeloop.addRelatedLink",
+      "lifeloop.recoverLastCapture", "lifeloop.returnToLastFind",
       "lifeloop.setNow", "lifeloop.returnToNow", "lifeloop.clearNow",
       "lifeloop.peekSource", "lifeloop.detachBinding", "lifeloop.copyBindingId",
-      "lifeloop.logInteraction", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
+      "lifeloop.logInteraction", "lifeloop.meetingWrapUp", "lifeloop.createReconnectTask", "lifeloop.preMeetingBrief",
       "lifeloop.openQueryResult",
     ]) {
       assert.ok(commands.includes(name), `missing command ${name}`);
@@ -172,8 +177,9 @@ suite("LifeLoop in a real VS Code", () => {
     try {
       await vscode.commands.executeCommand("lifeloop.openQueryResult", `interactions\nperson: ${g1Person}\nfields: ref, people`);
       const result = vscode.window.activeTextEditor!.document;
-      assert.strictEqual(result.uri.scheme, "untitled");
-      assert.strictEqual(result.languageId, "markdown");
+      assert.strictEqual(result.uri.scheme, "lifeloop-result");
+      assert.strictEqual(result.languageId, "lifeloop-result");
+      assert.ok(!result.isDirty);
       assert.match(result.getText(), /^# interactions\n/);
       const numeric = g1Files[g1Journal].indexOf("* G1 numeric");
       await followG1PersonLink(result);
@@ -181,7 +187,8 @@ suite("LifeLoop in a real VS Code", () => {
       await followG1Source(result, `${g1Journal}@g1-call`, g1Journal, g1Files[g1Journal].indexOf("$g1-call"));
       await vscode.commands.executeCommand("lifeloop.openQueryResult", `person-context\nperson: ${g1Person}\nfields: person, openFollowupRefs`);
       const context = vscode.window.activeTextEditor!.document;
-      assert.strictEqual(context.uri.scheme, "untitled");
+      assert.strictEqual(context.uri.scheme, "lifeloop-result");
+      assert.strictEqual(context.languageId, "lifeloop-result");
       await followG1PersonLink(context);
       await followG1Source(context, `${g1Work}@g1-followup`, g1Work, g1Files[g1Work].indexOf("$g1-followup"));
       await followG1Source(context, `${g1Work}@g1-event`, g1Work, g1Files[g1Work].indexOf("$g1-event"));
@@ -219,9 +226,10 @@ suite("LifeLoop in a real VS Code", () => {
       assert.deepStrictEqual(forbidden, [], "Brief attempted an unapproved Calendar operation");
       assert.deepStrictEqual(calls, ["probe", "read"]);
       const brief = vscode.window.activeTextEditor!.document;
-      assert.strictEqual(brief.uri.scheme, "untitled");
-      assert.strictEqual(brief.languageId, "markdown");
       assert.match(brief.getText(), /^# Pre-meeting Brief\n/);
+      assert.strictEqual(brief.uri.scheme, "lifeloop-result");
+      assert.strictEqual(brief.languageId, "lifeloop-result");
+      assert.strictEqual(brief.isDirty, false);
       assert.match(brief.getText(), /G1 qualified meeting/);
       assert.match(brief.getText(), /Open follow-ups: 2/);
       await followG1PersonLink(brief);
@@ -288,6 +296,58 @@ suite("LifeLoop in a real VS Code", () => {
         assert.match(vscode.window.activeTextEditor!.document.getText(), /G1 numeric meeting/);
       }
     } finally { assertG1Unchanged(); }
+  });
+
+  test("managed task completion coexists with the host and inserts an absolute date", async () => {
+    const fieldUri = pageUri("Scratch/Completion Field");
+    writeFileSync(fieldUri.fsPath, "- [ ] 复查结果");
+    const fieldDocument = await vscode.workspace.openTextDocument(fieldUri);
+    const fieldEditor = await vscode.window.showTextDocument(fieldDocument);
+    await fieldEditor.edit(edit => edit.insert(new vscode.Position(0, fieldDocument.lineAt(0).text.length), " [sche"));
+    assert.ok(fieldDocument.isDirty);
+    const fieldSource = fieldDocument.getText();
+    const fieldPosition = fieldDocument.positionAt(fieldSource.length);
+    const fields = await vscode.commands.executeCommand<vscode.CompletionList>(
+      "vscode.executeCompletionItemProvider", fieldDocument.uri, fieldPosition,
+    );
+    const scheduled = fields?.items.find(item =>
+      (typeof item.label === "string" ? item.label : item.label.label) === "scheduled");
+    assert.ok(scheduled, "no LifeLoop scheduled completion");
+    assert.ok(scheduled.range instanceof vscode.Range);
+    assert.strictEqual(fieldDocument.getText(scheduled.range), "sche");
+    assert.ok(scheduled.insertText instanceof vscode.SnippetString);
+    assert.strictEqual(scheduled.insertText.value, 'scheduled: "$1"]');
+    const fieldEdit = new vscode.WorkspaceEdit();
+    fieldEdit.replace(fieldDocument.uri, scheduled.range, 'scheduled: "2026-09-13"]');
+    assert.ok(await vscode.workspace.applyEdit(fieldEdit));
+    assert.ok(await fieldDocument.save());
+
+    const dateUri = pageUri("Scratch/Completion Date");
+    writeFileSync(dateUri.fsPath, "- [ ] Review");
+    const dateDocument = await vscode.workspace.openTextDocument(dateUri);
+    const dateEditor = await vscode.window.showTextDocument(dateDocument);
+    await dateEditor.edit(edit => edit.insert(new vscode.Position(0, dateDocument.lineAt(0).text.length), " [deadline: 2026"));
+    assert.ok(dateDocument.isDirty);
+    const dateSource = dateDocument.getText();
+    const datePosition = dateDocument.positionAt(dateSource.length);
+    const dates = await vscode.commands.executeCommand<vscode.CompletionList>(
+      "vscode.executeCompletionItemProvider", dateDocument.uri, datePosition,
+    );
+    const today = dates?.items.find(item => {
+      const label = typeof item.label === "string" ? item.label : item.label.label;
+      return label.startsWith("Today — ");
+    });
+    assert.ok(today, "no LifeLoop absolute Today completion");
+    assert.ok(today.range instanceof vscode.Range);
+    assert.strictEqual(dateDocument.getText(today.range), "2026");
+    const insertText = today.insertText;
+    assert.ok(typeof insertText === "string");
+    assert.match(insertText, /^"\d{4}-\d{2}-\d{2}"\]$/);
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(dateDocument.uri, today.range, insertText);
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    assert.match(dateDocument.getText(), /^- \[ \] Review \[deadline: "\d{4}-\d{2}-\d{2}"\]$/);
+    assert.ok(await dateDocument.save());
   });
 
   test("registers the tree views", async () => {

@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { Store, indexVault } from "./index.ts";
-import { today, upcoming, week, review, projectSignals, shift, explainTask } from "./projections.ts";
+import { today, dayReview, upcoming, week, review, projectSignals, projectResumption, shift, explainTask, backlog } from "./projections.ts";
 import { MemoryVault } from "./vault.ts";
 import { freezeReview } from "./mutations/review.ts";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
@@ -26,19 +26,38 @@ describe("Today", () => {
         '* [ ] overdue [deadline: "2026-09-01"]',
         '* [ ] due now [deadline: "2026-09-08"]',
         '* [ ] both [deadline: "2026-09-08"] [scheduled: "2026-09-08"]',
+        '* [ ] missed plan [scheduled: "2026-09-07"]',
+        '* [ ] urgent missed plan [deadline: "2026-09-01"] [scheduled: "2026-09-07"]',
         '* [ ] later [deadline: "2026-12-01"]',
         "* [ ] blocked #waiting",
         "",
       ].join("\n"),
     });
     const t = today(store, "2026-09-08");
-    expect(t.overdue.map((x) => x.name)).toEqual(["overdue"]);
+    expect(t.overdue.map((x) => x.name)).toEqual(["overdue", "urgent missed plan"]);
     expect(t.due.map((x) => x.name).sort()).toEqual(["both", "due now"]);
     expect(t.scheduled).toHaveLength(0); // "both" was already taken by `due`
+    expect(t.pastScheduled.map((x) => x.name)).toEqual(["missed plan"]);
     expect(t.waiting.map((x) => x.name)).toEqual(["blocked"]);
 
-    const all = [...t.overdue, ...t.due, ...t.scheduled].map((x) => x.ref);
+    const all = [...t.overdue, ...t.due, ...t.scheduled, ...t.pastScheduled].map((x) => x.ref);
     expect(new Set(all).size).toBe(all.length);
+    store.close();
+  });
+
+  test("reviews factual completions and remaining plans without start/stop state", async () => {
+    const store = await vaultWith({
+      "Notes.md": [
+        '* [x] finished [completed: "2026-09-08"]',
+        '* [x] earlier [completed: "2026-09-07"]',
+        '* [ ] still planned [scheduled: "2026-09-08"]',
+        '* [ ] missed plan [scheduled: "2026-09-07"]',
+        "",
+      ].join("\n"),
+    });
+    const result = dayReview(store, "2026-09-08");
+    expect(result.completed.map((task) => task.name)).toEqual(["finished"]);
+    expect(result.remaining.map((task) => task.name)).toEqual(["still planned", "missed plan"]);
     store.close();
   });
 
@@ -80,6 +99,22 @@ describe("Today", () => {
     });
     store.close();
   });
+});
+
+test("Backlog excludes planned work and work under paused projects", async () => {
+  const store = await vaultWith({
+    "Open.md": [
+      "* [ ] available",
+      '* [ ] future scheduled [scheduled: "2026-09-20"]',
+      '* [ ] due today [deadline: "2026-09-08"]',
+      "* [ ] waiting #waiting",
+      "* [ ] linked paused [[Paused]]",
+      "",
+    ].join("\n"),
+    "Paused.md": "---\ntags: project\nstatus: paused\n---\n* [ ] child\n",
+  });
+  expect(backlog(store, "2026-09-08").map((task) => task.name)).toEqual(["available"]);
+  store.close();
 });
 
 describe("Upcoming", () => {
@@ -126,6 +161,16 @@ describe("Weekly Review", () => {
     expect(r.stillOpen.map((t) => t.name)).toEqual(["still open"]);
     store.close();
   });
+
+  test("waiting and someday are separate factual sections", async () => {
+    const store = await vaultWith({
+      "Notes.md": "* [ ] reply #waiting\n* [ ] maybe #someday\n* [ ] both #waiting #someday\n",
+    });
+    const r = review(store, "2026-09-08");
+    expect(r.waiting.map((t) => t.name)).toEqual(["reply", "both"]);
+    expect(r.someday.map((t) => t.name)).toEqual(["maybe"]);
+    store.close();
+  });
 });
 
 describe("project signals", () => {
@@ -144,6 +189,16 @@ describe("project signals", () => {
     expect(kinds).toContain("no actionable task");
     expect(kinds).not.toContain("waiting only");
     mixed.close();
+
+    const overlapping = await vaultWith({
+      "P.md": "---\ntags: project\n---\n* [ ] a #waiting #someday\n* [ ] b #someday\n",
+    });
+    expect(projectSignals(overlapping, "P", "2026-09-08"))
+      .toContainEqual({
+        kind: "no actionable task",
+        detail: "2 open on this project page: 1 waiting, 1 someday",
+      });
+    overlapping.close();
   });
 
   test("a healthy project emits nothing", async () => {
@@ -151,6 +206,44 @@ describe("project signals", () => {
     expect(projectSignals(store, "P", "2026-09-08")).toEqual([]);
     store.close();
   });
+
+  test("an active empty project reports only the page-scoped gap", async () => {
+    const store = await vaultWith({
+      "P.md": "---\ntags: project\n---\n# P\n",
+      "Journal.md": "* [ ] related elsewhere [[P]]\n",
+    });
+    expect(projectSignals(store, "P", "2026-09-08")).toEqual([
+      { kind: "no open task", detail: "this project page has no open task" },
+    ]);
+    store.close();
+  });
+
+  test("paused projects do not report an action gap", async () => {
+    const store = await vaultWith({
+      "P.md": "---\ntags: project\nstatus: paused\n---\n* [ ] later #someday\n",
+    });
+    expect(projectSignals(store, "P", "2026-09-08").map((signal) => signal.kind))
+      .not.toContain("no actionable task");
+    store.close();
+  });
+});
+
+test("Project resumption keeps on-page membership separate from related task context", async () => {
+  const store = await vaultWith({
+    "Projects/P.md": [
+      "---", "tags: project", "status: paused", "---",
+      "* [ ] on page", '* [x] finished [completed: "2026-09-08"] [event: "E1"]', "",
+    ].join("\n"),
+    "Work.md": "* [ ] related [[Projects/P]]\n* [ ] unrelated\n",
+  });
+  const result = projectResumption(store, "Projects/P")!;
+  expect(result.project.status).toBe("paused");
+  expect(result.onPageOpen.map((task) => task.name)).toEqual(["on page"]);
+  expect(result.relatedOpen.map((task) => task.name)).toEqual(["related [[Projects/P]]"]);
+  expect(result.recentCompleted.map((task) => task.name)).toEqual(["finished"]);
+  expect(result.knownBindings.map((task) => task.name)).toEqual(["finished"]);
+  expect(projectResumption(store, "Missing")).toBeNull();
+  store.close();
 });
 
 describe("freezing a review", () => {

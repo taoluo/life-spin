@@ -1,7 +1,7 @@
 import { expect, test, describe } from "vitest";
 import { MemoryVault } from "../vault.ts";
 import {
-  readTemplate, createFromTemplate, substitute, builtinReviewTemplate,
+  readTemplate, createFromTemplate, substitute, builtinReviewTemplate, builtinWeeklyFocusTemplate,
 } from "./templates.ts";
 
 const AT = new Date("2026-09-08T12:00:00Z");
@@ -97,4 +97,17 @@ test("a vault with no template still gets the Review live sections", async () =>
   const text = v.read(`${(made as any).value.page}.md`);
   expect(text).toContain("week: 2026-09-07");
   expect(text).toContain("${lifeloop.review.completed()}");
+  expect(text).toContain("${lifeloop.review.someday()}");
+});
+
+test("the weekly focus fallback stores intent without duplicating task checkboxes", async () => {
+  const v = MemoryVault.of({});
+  const made = await createFromTemplate(
+    v, builtinWeeklyFocusTemplate(), "Weekly/${week.start()}", AT,
+  );
+  expect(made.ok).toBe(true);
+  const text = v.read(`${(made as any).value.page}.md`);
+  expect(text).toContain("## Focus");
+  expect(text).toContain("## Related Projects / Pages");
+  expect(text).not.toMatch(/^\s*[-*]\s+\[[ x]\]/m);
 });

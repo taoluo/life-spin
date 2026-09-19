@@ -2,7 +2,8 @@ import { expect, test, describe } from "vitest";
 import { MemoryVault } from "../vault.ts";
 import {
   setTaskState, stampCompletion, toggleParked, setTaskAttribute, setTaskName,
-  cycleTaskState, appendTaskNote,
+  cycleTaskState, appendTaskNote, addTaskLink,
+  appendTaskChild,
 } from "./tasks.ts";
 import { capture, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask } from "./inbox.ts";
 import { setProjectStatus, attachPageToTask, patchFrontmatter } from "./pages.ts";
@@ -68,6 +69,20 @@ test("task progress and resume cues share one guarded ordinary Markdown path", a
   expect(await appendTaskNote(vault, current, "next", "rerun the focused test"))
     .toMatchObject({ ok: false, reason: "stale" });
   unchanged(vault, beforeDuplicate);
+});
+
+test("next action is a guarded checkbox child appended after the existing subtree", async () => {
+  const text = "* [ ] waiting\r\n  * existing note\r\n* [ ] sibling\r\n";
+  const vault = MemoryVault.of({ "W.md": text });
+  expect(await appendTaskChild(vault, { ref: "W@0", expectedText: "* [ ] waiting" }, "Call again"))
+    .toMatchObject({ ok: true, value: { line: "  * [ ] Call again" } });
+  expect(vault.read("W.md")).toBe(
+    "* [ ] waiting\r\n  * existing note\r\n  * [ ] Call again\r\n* [ ] sibling\r\n",
+  );
+  const before = vault.snapshot();
+  expect(await appendTaskChild(vault, { ref: "W@0", expectedText: "* [ ] stale" }, "No"))
+    .toMatchObject({ ok: false, reason: "stale" });
+  unchanged(vault, before);
 });
 
 describe("ticking a task", () => {
@@ -337,12 +352,48 @@ describe("project lifecycle", () => {
     unchanged(vault, before);
   });
 
+  test("refuses a stale snapshot or a page that is no longer a project", async () => {
+    const original = "---\ntags: project\nstatus: active\n---\n# P\n";
+    const stale = MemoryVault.of({ "P.md": original.replace("# P", "# Changed") });
+    expect(await setProjectStatus(stale, "P", "paused", original)).toMatchObject({
+      ok: false, reason: "stale",
+    });
+    expect(stale.read("P.md")).toContain("status: active");
+
+    const note = MemoryVault.of({ "P.md": "---\ntags: note\n---\n# P\n" });
+    expect(await setProjectStatus(note, "P", "paused")).toMatchObject({
+      ok: false, reason: "invalid",
+    });
+    expect(note.read("P.md")).not.toContain("status:");
+  });
+
   test("a page with no frontmatter gains one", async () => {
     const vault = MemoryVault.of({ "P.md": "# P\n" });
     const patched = await patchFrontmatter(vault, "P", "status", "active");
     expect(patched.ok && patched.value.created).toBe(true);
     expect(vault.read("P.md")).toBe("---\nstatus: active\n---\n# P\n");
   });
+});
+
+test("Add Related Link guards both pages and refuses an existing direct link", async () => {
+  const target = "---\ntags: project\n---\n# P\n";
+  const vault = MemoryVault.of({ "Work.md": "* [ ] Act\n", "Projects/P.md": target });
+  expect(await addTaskLink(
+    vault, { ref: "Work@0", expectedText: "* [ ] Act", expectedState: " " },
+    "Projects/P", target,
+  )).toMatchObject({ ok: true });
+  expect(vault.read("Work.md")).toBe("* [ ] Act [[Projects/P]]\n");
+
+  const before = vault.snapshot();
+  expect(await addTaskLink(vault, {
+    ref: "Work@0", expectedText: "* [ ] Act [[Projects/P]]", expectedState: " ",
+  }, "Projects/P", target)).toMatchObject({ ok: false, reason: "stale" });
+  unchanged(vault, before);
+
+  const stale = MemoryVault.of({ "Work.md": "* [ ] Act\n", "Projects/P.md": `${target}changed\n` });
+  expect(await addTaskLink(stale, { ref: "Work@0" }, "Projects/P", target))
+    .toMatchObject({ ok: false, reason: "stale" });
+  expect(stale.read("Work.md")).toBe("* [ ] Act\n");
 });
 
 describe("attaching a page to a task", () => {

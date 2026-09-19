@@ -6,6 +6,7 @@ import {
 import { runQueryBlock, toMarkdown, toNavigableMarkdown, parseQueryBlock } from "./preview.ts";
 import type { LifeLoop } from "./workspace.ts";
 import { findLocatedQueryFences, queryBodyContains } from "./query-language.ts";
+import { definitions } from "./retrieval.ts";
 
 /**
  * The same query, in the editor, on two surfaces that are good at different things.
@@ -25,6 +26,8 @@ import { findLocatedQueryFences, queryBodyContains } from "./query-language.ts";
  */
 
 export type QueryFence = { range: vscode.Range; source: string; open: number };
+export const QUERY_RESULT_SCHEME = "lifeloop-result";
+export const QUERY_RESULT_LANGUAGE = "lifeloop-result";
 
 /** Every LifeLoop query block in a document, with the lines it spans. */
 export function findQueryFences(document: vscode.TextDocument): QueryFence[] {
@@ -47,6 +50,7 @@ export function queryCompletions(lifeloop: () => LifeLoop | undefined): vscode.C
       const instance = lifeloop();
       if (!instance) return [];
       const text = document.getText();
+      if (!text.includes("```") && !text.includes("~~~")) return [];
       const offset = document.offsetAt(position);
       const fence = findLocatedQueryFences(text).find((candidate) =>
         queryBodyContains(candidate, offset));
@@ -113,10 +117,17 @@ export function codeLenses(lifeloop: () => LifeLoop | undefined): vscode.CodeLen
     provideCodeLenses(document) {
       const instance = lifeloop();
       if (!instance) return [];
-      // Off-switch, because a count above every block is exactly the kind of
-      // decoration some people find noisy — and the hover still works without it.
-      if (!vscode.workspace.getConfiguration("lifeloop").get("queryCodeLens", true)) return [];
-      return findQueryFences(document).flatMap((fence) => [
+      const review = /\$\{lifeloop\.review\.\w+\(\)\}/.exec(document.getText());
+      const reviewLens = review ? [new vscode.CodeLens(new vscode.Range(
+        document.positionAt(review.index), document.positionAt(review.index + review[0].length),
+      ), {
+        command: "lifeloop.reviewActions",
+        title: "$(checklist) Review in place",
+      })] : [];
+      // This switch controls query counts only; the Review workflow remains
+      // reachable from its own live marker.
+      if (!vscode.workspace.getConfiguration("lifeloop").get("queryCodeLens", true)) return reviewLens;
+      return [...reviewLens, ...findQueryFences(document).flatMap((fence) => [
         // A count, visible without any interaction.
         new vscode.CodeLens(fence.range, {
           command: "lifeloop.openQueryResult",
@@ -129,7 +140,7 @@ export function codeLenses(lifeloop: () => LifeLoop | undefined): vscode.CodeLen
           title: "$(open-preview) Open",
           arguments: [fence.source],
         }),
-      ]);
+      ])];
     },
   };
 }
@@ -164,7 +175,68 @@ export function registerQueryCommands(
   lifeloop: () => LifeLoop | undefined,
   context: vscode.ExtensionContext,
 ): void {
+  const contents = new Map<string, string>();
+  const changingLanguage = new Set<string>();
+  let sequence = 0;
+  const selector: vscode.DocumentSelector = {
+    scheme: QUERY_RESULT_SCHEME,
+    language: QUERY_RESULT_LANGUAGE,
+  };
+  const openResult = async (
+    content: string,
+    name = "result",
+    options?: { preserveFocus?: boolean },
+  ) => {
+    const uri = vscode.Uri.parse(
+      `${QUERY_RESULT_SCHEME}:/${name}-${Date.now()}-${++sequence}.lifeloop-result`,
+    );
+    const key = uri.toString();
+    contents.set(key, content);
+    let document = await vscode.workspace.openTextDocument(uri);
+    if (document.languageId !== QUERY_RESULT_LANGUAGE) {
+      changingLanguage.add(key);
+      try {
+        document = await vscode.languages.setTextDocumentLanguage(document, QUERY_RESULT_LANGUAGE);
+      } finally {
+        changingLanguage.delete(key);
+      }
+    }
+    await vscode.window.showTextDocument(
+      document,
+      options?.preserveFocus ? { preview: true, preserveFocus: true } : { preview: true },
+    );
+  };
   context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(QUERY_RESULT_SCHEME, {
+      provideTextDocumentContent: (uri) => contents.get(uri.toString()) ??
+        "# Query result expired\n\nRun the query again from its source block.\n",
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      const key = document.uri.toString();
+      if (document.uri.scheme === QUERY_RESULT_SCHEME && !changingLanguage.has(key)) {
+        contents.delete(key);
+      }
+    }),
+    vscode.languages.registerDocumentLinkProvider(selector, {
+      provideDocumentLinks(document) {
+        return [...document.getText().matchAll(/\[[^\]\r\n]*\]\(<(file:[^>\r\n]+)>\)/g)]
+          .map((match) => new vscode.DocumentLink(
+            new vscode.Range(
+              document.positionAt(match.index!),
+              document.positionAt(match.index! + match[0].length),
+            ),
+            vscode.Uri.parse(match[1]),
+          ));
+      },
+    }),
+    vscode.languages.registerDefinitionProvider(selector, {
+      provideDefinition(document, position, token) {
+        const instance = lifeloop();
+        return instance
+          ? definitions(instance).provideDefinition(document, position, token)
+          : undefined;
+      },
+    }),
     vscode.commands.registerCommand("lifeloop.openQueryResult", async (source: string) => {
       const instance = lifeloop();
       if (!instance) return;
@@ -172,15 +244,10 @@ export function registerQueryCommands(
       const parsed = parseQueryBlock(source);
       const heading = "error" in parsed ? "Query" : parsed.projection;
 
-      // A virtual document, not a webview: it is Markdown, so the preview, search
-      // and copy all work, and nothing is written to the vault.
-      const document = await vscode.workspace.openTextDocument({
-        content: `# ${heading}\n\n${"error" in parsed
-          ? toMarkdown(outcome)
-          : toNavigableMarkdown(instance, outcome, parsed.projection)}\n`,
-        language: "markdown",
-      });
-      await vscode.window.showTextDocument(document, { preview: true });
+      await openResult(`# ${heading}\n\n${"error" in parsed
+        ? toMarkdown(outcome)
+        : toNavigableMarkdown(instance, outcome, parsed.projection)}\n`, "query");
     }),
+    vscode.commands.registerCommand("lifeloop.openReadonlyResult", openResult),
   );
 }

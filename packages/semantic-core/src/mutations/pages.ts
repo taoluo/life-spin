@@ -4,11 +4,23 @@ import {
 } from "../mutation.ts";
 import type { Vault } from "../vault.ts";
 import { pathOf } from "../vault.ts";
+import { pageMetaFor, pageObject } from "../extract.ts";
 
 export const PROJECT_STATES = ["active", "paused", "completed", "archived"] as const;
 export type ProjectState = (typeof PROJECT_STATES)[number];
 
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n?/;
+
+function patchedFrontmatter(text: string, key: string, value: string): { next: string; created: boolean } {
+  const fm = frontmatterOf(text);
+  if (!fm) return { next: `---\n${key}: ${value}\n---\n${text}`, created: true };
+  const pattern = new RegExp(`^${key}:\\s*.*$`);
+  const index = fm.lines.findIndex((line) => pattern.test(line));
+  const lines = [...fm.lines];
+  if (index === -1) lines.push(`${key}: ${value}`);
+  else lines[index] = `${key}: ${value}`;
+  return { next: `---\n${lines.join("\n")}\n---\n${fm.rest}`, created: false };
+}
 
 /** Read a page's frontmatter block as raw lines, or null when it has none. */
 export function frontmatterOf(text: string): { body: string; lines: string[]; rest: string } | null {
@@ -33,21 +45,7 @@ export async function patchFrontmatter(
   const path = pathOf(page);
   if (!vault.exists(path)) return refuse("missing", `no such page: ${page}`);
   const text = vault.read(path);
-  const fm = frontmatterOf(text);
-
-  let next: string;
-  let created = false;
-  if (!fm) {
-    created = true;
-    next = `---\n${key}: ${value}\n---\n${text}`;
-  } else {
-    const pattern = new RegExp(`^${key}:\\s*.*$`);
-    const index = fm.lines.findIndex((line) => pattern.test(line));
-    const lines = [...fm.lines];
-    if (index === -1) lines.push(`${key}: ${value}`);
-    else lines[index] = `${key}: ${value}`;
-    next = `---\n${lines.join("\n")}\n---\n${fm.rest}`;
-  }
+  const { next, created } = patchedFrontmatter(text, key, value);
 
   const cs = changeSet(`set ${key} on ${page}`);
   cs.expected.set(path, text);
@@ -66,9 +64,23 @@ export async function setProjectStatus(
   vault: Vault,
   page: string,
   status: ProjectState,
+  expected?: string,
 ): Promise<MutationResult<{ created: boolean }>> {
   if (!PROJECT_STATES.includes(status)) return refuse("invalid", `not a project status: ${status}`);
-  return patchFrontmatter(vault, page, "status", status);
+  const path = pathOf(page);
+  if (!vault.exists(path)) return refuse("missing", `no such page: ${page}`);
+  const text = vault.read(path);
+  if (expected !== undefined && text !== expected) {
+    return refuse("stale", `${page} changed while its project status was being chosen`);
+  }
+  if (!(pageObject(text, pageMetaFor(page)).itags as string[] | undefined)?.includes("project")) {
+    return refuse("invalid", `${page} is no longer a project`);
+  }
+  const { next, created } = patchedFrontmatter(text, "status", status);
+  const cs = changeSet(`set status on ${page}`);
+  cs.expected.set(path, text);
+  cs.writes.set(path, next);
+  return applied(vault, cs, { created });
 }
 
 /**

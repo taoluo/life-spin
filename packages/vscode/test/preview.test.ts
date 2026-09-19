@@ -368,6 +368,23 @@ describe("the same query on three surfaces", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("a live Review gets one action CodeLens while a frozen Review gets none", async () => {
+    const { codeLenses } = await import("../src/query-lens.ts");
+    const { lifeloop, dir } = await workspaceWith({ "W.md": "* [ ] open\n" });
+    try {
+      const live = (codeLenses(() => lifeloop) as any).provideCodeLenses(
+        documentOf("## Open\n\n${lifeloop.review.stillOpen()}\n\n${lifeloop.review.waiting()}\n"),
+      );
+      expect(live).toHaveLength(1);
+      expect(live[0].command).toMatchObject({
+        command: "lifeloop.reviewActions", title: "$(checklist) Review in place",
+      });
+      expect((codeLenses(() => lifeloop) as any).provideCodeLenses(
+        documentOf("---\nfrozen: 2026-09-13\n---\n## Open\n\n* open\n"),
+      )).toEqual([]);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("hover shows the table, and cannot inject markup or commands", async () => {
     const { hovers } = await import("../src/query-lens.ts");
     const { lifeloop, dir } = await workspaceWith({

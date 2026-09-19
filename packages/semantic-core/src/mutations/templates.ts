@@ -120,8 +120,24 @@ export function builtinReviewTemplate(): PageTemplate {
       "## Open", "", "${lifeloop.review.stillOpen()}", "",
       "## Active Projects", "", "${lifeloop.review.activeProjects()}", "",
       "## Waiting", "", "${lifeloop.review.waiting()}", "",
+      "## Someday", "", "${lifeloop.review.someday()}", "",
       "## Inbox", "", "${lifeloop.review.inbox()}", "",
       "## Reflection", "", "|^|", "",
+    ].join("\n"),
+  };
+}
+
+/** A small ordinary Markdown note for intent, not a second task list. */
+export function builtinWeeklyFocusTemplate(): PageTemplate {
+  return {
+    page: "builtin:weekly-focus",
+    openIfExists: true,
+    body: [
+      "---", "week: ${week.start()}", "---", "",
+      "# Week of ${week.start()}", "",
+      "## Focus", "", "|^|", "",
+      "## Related Projects / Pages", "", "",
+      "## Not This Week", "", "",
     ].join("\n"),
   };
 }

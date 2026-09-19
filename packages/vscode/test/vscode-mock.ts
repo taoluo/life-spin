@@ -82,8 +82,14 @@ export class EventEmitter<T> {
 }
 export const Uri = {
   file: (fsPath: string) => ({ scheme: "file", fsPath, toString: () => `file://${fsPath}` }),
-  parse: (value: string) => ({ scheme: value.split(":")[0], toString: () => value }),
+  parse: (value: string) => ({
+    scheme: value.split(":")[0],
+    fsPath: value.startsWith("file://") ? decodeURIComponent(value.slice("file://".length)) : "",
+    toString: () => value,
+  }),
 };
+const contentProviders = new Map<string, any>();
+const closeDocumentHandlers: ((document: any) => void)[] = [];
 export const workspace = {
   textDocuments: [] as any[],
   /** Settings a test wants to pretend the user set: `workspace.settings["lifeloop.identity"]`. */
@@ -100,10 +106,23 @@ export const workspace = {
     return String(uri.fsPath ?? uri).replace(`${root}/`, "");
   },
   onDidChangeTextDocument: () => ({ dispose: () => {} }),
+  onDidCloseTextDocument: (handler: (document: any) => void) => {
+    closeDocumentHandlers.push(handler);
+    return { dispose: () => closeDocumentHandlers.splice(closeDocumentHandlers.indexOf(handler), 1) };
+  },
   onDidDeleteFiles: () => ({ dispose: () => {} }),
   onDidCreateFiles: () => ({ dispose: () => {} }),
   onDidRenameFiles: () => ({ dispose: () => {} }),
   onDidChangeConfiguration: () => ({ dispose: () => {} }),
+  registerTextDocumentContentProvider: (scheme: string, provider: any) => {
+    contentProviders.set(scheme, provider);
+    return { dispose: () => contentProviders.delete(scheme) };
+  },
+  __closeTextDocument: (document: any) => {
+    document.isClosed = true;
+    workspace.textDocuments = workspace.textDocuments.filter((candidate) => candidate !== document);
+    for (const handler of [...closeDocumentHandlers]) handler(document);
+  },
   applyEdit: async (edit: WorkspaceEdit) => {
     const versions = new Map(edit.edits.map((entry) => [entry,
       workspace.textDocuments.find((candidate) => candidate.uri?.fsPath === entry.uri.fsPath)?.version]));
@@ -129,8 +148,33 @@ export const workspace = {
     return true;
   },
   openTextDocument: async (uri: any) => {
-    const open = workspace.textDocuments.find((document) => document.uri?.fsPath === uri.fsPath);
+    const open = workspace.textDocuments.find((document) =>
+      uri?.scheme === "file"
+        ? document.uri?.fsPath === uri.fsPath
+        : document.uri?.toString?.() === uri?.toString?.());
     if (open) return open;
+    if (uri?.scheme && uri.scheme !== "file") {
+      const provider = contentProviders.get(uri.scheme);
+      if (!provider) throw new Error(`no content provider for ${uri.scheme}`);
+      let text = await provider.provideTextDocumentContent(uri, {});
+      const document: any = {
+        uri, languageId: "plaintext", version: 1, isDirty: false, isClosed: false,
+        getText: (range?: any) => range
+          ? text.slice(document.offsetAt(range.start), document.offsetAt(range.end))
+          : text,
+        positionAt: (offset: number) => {
+          const lines = text.slice(0, offset).split("\n");
+          return new Position(lines.length - 1, lines.at(-1)!.length);
+        },
+        offsetAt: (position: Position) => {
+          const lines = text.split("\n");
+          return lines.slice(0, position.line).reduce((sum: number, line: string) => sum + line.length + 1, 0) +
+            position.character;
+        },
+      };
+      workspace.textDocuments.push(document);
+      return document;
+    }
     if (!uri?.fsPath) return {};
     let text = readFileSync(uri.fsPath, "utf8");
     const document: any = {
@@ -162,15 +206,23 @@ export const window = {
   visibleTextEditors: [] as any[],
   activeTextEditor: undefined as any,
   onDidChangeActiveTextEditor: () => ({ dispose: () => {} }),
-  showQuickPick: async () => undefined,
-  showInputBox: async () => undefined,
+  showQuickPick: async (items?: any, _options?: any): Promise<any> => { await items; return undefined; },
+  createQuickPick: () => { throw new Error("test must provide a QuickPick"); },
+  showInputBox: async (_options?: any): Promise<string | undefined> => undefined,
   showInformationMessage: async () => undefined,
   showWarningMessage: async (m: string) => { (window as any).lastWarning = m; },
   showErrorMessage: async (m: string) => { (window as any).lastError = m; },
   setStatusBarMessage: () => ({ dispose: () => {} }),
-  showTextDocument: async () => ({}),
+  showTextDocument: async (_document: any, _options?: any): Promise<any> => ({}),
   createStatusBarItem: () => ({ show() {}, dispose() {}, text: "", command: "", tooltip: "" }),
   registerTreeDataProvider: () => ({ dispose: () => {} }),
+};
+export const env = {
+  clipboard: {
+    text: "",
+    writeText: async (value: string) => { env.clipboard.text = value; },
+    readText: async () => env.clipboard.text,
+  },
 };
 export const languages = {
   registerDocumentSymbolProvider: () => ({ dispose: () => {} }),
@@ -181,6 +233,11 @@ export const languages = {
   registerDefinitionProvider: () => ({ dispose: () => {} }),
   registerCodeActionsProvider: () => ({ dispose: () => {} }),
   registerReferenceProvider: () => ({ dispose: () => {} }),
+  setTextDocumentLanguage: async (document: any, languageId: string) => {
+    for (const handler of [...closeDocumentHandlers]) handler(document);
+    document.languageId = languageId;
+    return document;
+  },
   createDiagnosticCollection: () => {
     const map = new Map<string, any[]>();
     return {

@@ -27,6 +27,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vscode.workspace.settings = {};
   vscode.workspace.textDocuments = [];
+  delete (vscode.commands as any).executeCommand;
   delete (vscode.window as any).createOutputChannel;
 });
 
@@ -73,12 +74,14 @@ function appleCommands(
   const batchRead = vi.spyOn(bridge.Calendar.prototype, "read").mockRejectedValue(new Error("unexpected batch read"));
   const open = vi.spyOn(vscode.workspace, "openTextDocument");
   const show = vi.spyOn(vscode.window, "showTextDocument");
+  const execute = vi.fn();
+  (vscode.commands as any).executeCommand = execute;
   const status = vi.spyOn(vscode.window, "setStatusBarMessage");
   registerApple(lifeloop, {
     subscriptions: [], workspaceState: { get: (key: string, fallback: unknown) => state[key] ?? fallback, update },
   } as any);
   return {
-    available, read, open, show, audit, state, status, update,
+    available, read, open, show, execute, audit, state, status, update,
     run: (name: string, input: unknown) => handlers.get(name)!(input),
     unchanged() {
       for (const effect of [...effects, batchRead, update, status]) expect(effect).not.toHaveBeenCalled();
@@ -288,6 +291,30 @@ describe("registered Apple command boundaries", () => {
     } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("Notes import reports observation persistence failure after a local write", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "Inbox.md": "" });
+    const command = appleCommands(lifeloop, async (key) => {
+      if (key === "lifeloop.noteObservations") throw new Error("storage unavailable");
+    });
+    vi.spyOn(bridge.Notes.prototype, "list").mockResolvedValue([{
+      id: "N1", name: "phone capture", body: "<div>phone capture</div>",
+      modified: "2026-09-12T10:00:00Z", rich: false,
+    }]);
+    const error = vi.spyOn(vscode.window, "showErrorMessage");
+    try {
+      await command.run("lifeloop.importNotes", undefined);
+      expect(lifeloop.vault.read("Inbox.md")).toContain("phone capture");
+      expect(command.status).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(
+        "import failed — storage unavailable",
+      ));
+      expect(command.audit.appendLine).toHaveBeenCalledWith(expect.stringContaining(
+        "Notes sync failed: storage unavailable",
+      ));
+      expect(command.audit.show).toHaveBeenCalledWith(true);
+    } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   for (const reason of ["no binding", "empty binding", "duplicate binding", "no Person", "missing Person", "non-Person", "inherited only", "stale handle"] as const) {
     test(`Brief ${reason} refuses before capability and leaves all effects untouched`, async () => {
       const task = reason === "no binding" ? line.replace(' [event: "E1"]', "")
@@ -361,9 +388,9 @@ describe("registered Apple command boundaries", () => {
         if (outcome === "unavailable") expect(command.read).not.toHaveBeenCalled();
         else expect(command.read).toHaveBeenCalledExactlyOnceWith("E1", "Personal");
         if (outcome === "found") {
-          expect(command.open).toHaveBeenCalledOnce();
-          expect((command.open.mock.calls[0] as unknown[])[0]).toMatchObject({ language: "markdown", content: expect.stringContaining("# Pre-meeting Brief") });
-          expect(command.show).toHaveBeenCalledOnce();
+          expect(command.execute).toHaveBeenCalledWith(
+            "lifeloop.openReadonlyResult", expect.stringContaining("# Pre-meeting Brief"), "pre-meeting",
+          );
         } else command.noOutput();
         command.unchanged();
         expect(snapshot(lifeloop)).toStrictEqual(before);

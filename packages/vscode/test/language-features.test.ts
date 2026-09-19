@@ -5,11 +5,14 @@ import { join } from "node:path";
 import { interactions } from "@lifeloop/semantic-core";
 import {
   applyDiagnosticFix, codeActions, definitions, documentSymbols, relationshipDiagnostics,
-  relationshipHovers,
+  relationshipHovers, managedFieldCompletions,
 } from "../src/retrieval.ts";
 import { LifeLoop } from "../src/workspace.ts";
 import { taskTarget, taskTargetAt } from "../src/task-target.ts";
 import { activate, deactivate } from "../src/extension.ts";
+import {
+  QUERY_RESULT_LANGUAGE, QUERY_RESULT_SCHEME, registerQueryCommands,
+} from "../src/query-lens.ts";
 import * as apple from "../src/apple.ts";
 import * as vscode from "./vscode-mock.ts";
 
@@ -50,6 +53,132 @@ afterEach(() => {
   vscode.workspace.textDocuments = [];
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("managed task-field completion", () => {
+  const itemsAt = (text: string, cursor: number, today = "2026-03-08") => {
+    const document = documentOf(text);
+    return (managedFieldCompletions(() => today) as any).provideCompletionItems(
+      document, document.positionAt(cursor), {} as any, {} as any,
+    ) as any[];
+  };
+
+  test("finishes only stable task date fields from incomplete source", () => {
+    const text = "- [ ] 复查结果 [sche";
+    const items = itemsAt(text, text.length);
+    expect(items.map((item) => item.label)).toEqual(["scheduled"]);
+    expect(items[0].insertText.value).toBe('scheduled: "$1"]');
+    expect(text.slice(items[0].range.start.character, items[0].range.end.character)).toBe("sche");
+
+    expect(itemsAt("- [ ] Review [de", "- [ ] Review [de".length).map((item) => item.label))
+      .toEqual(["deadline"]);
+    for (const prefix of ["rem", "eve", "com"]) {
+      const source = `- [ ] Review [${prefix}`;
+      expect(itemsAt(source, source.length)).toEqual([]);
+    }
+  });
+
+  test("replaces a whole existing field name without disturbing its value", () => {
+    const text = '- [ ] Review [scheduled: "2026-03-10"]';
+    const cursor = text.indexOf("scheduled") + 4;
+    const [item] = itemsAt(text, cursor);
+    expect(item.label).toBe("scheduled");
+    expect(item.insertText).toBe("scheduled");
+    expect(text.slice(item.range.start.character, item.range.end.character)).toBe("scheduled");
+  });
+
+  test("uses one captured local day for labels and canonical date text", () => {
+    // Keep provider requests silent while the user is typing incomplete syntax.
+    const parserLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const text = '- [ ] Review [scheduled: "2026-0"]';
+    const cursor = text.indexOf("2026-0") + "2026-0".length;
+    const items = itemsAt(text, cursor);
+    expect(items.map((item) => item.label)).toEqual([
+      "Today — 2026-03-08", "Tomorrow — 2026-03-09",
+    ]);
+    expect(items.map((item) => item.insertText)).toEqual([
+      '"2026-03-08"', '"2026-03-09"',
+    ]);
+    expect(text.slice(items[0].range.start.character, items[0].range.end.character)).toBe('"2026-0"');
+
+    const incomplete = "- [ ] Review [deadline: 2026";
+    expect(itemsAt(incomplete, incomplete.length)[0].insertText).toBe('"2026-03-08"]');
+    expect(parserLog).not.toHaveBeenCalled();
+  });
+
+  test("supports CRLF dirty-buffer text and suppresses duplicates", () => {
+    const text = "intro\r\n- [ ] 中文 [dead";
+    expect(itemsAt(text, text.length).map((item) => item.label)).toEqual(["deadline"]);
+
+    const duplicate = '- [ ] Review [scheduled: "2026-03-10"] [sche';
+    expect(itemsAt(duplicate, duplicate.length)).toEqual([]);
+    const duplicateValue = '- [ ] Review [scheduled: "2026-03-10"] [scheduled: ';
+    expect(itemsAt(duplicateValue, duplicateValue.length)).toEqual([]);
+  });
+
+  test("does not compete with prose, links, code or comments", () => {
+    const sources = [
+      "ordinary [sche",
+      "- ordinary item [sche",
+      "- [ ] Read [scheduled](guide)",
+      "- [ ] Read [[scheduled]]",
+      "- [ ] Review `[sche`",
+      "<!-- - [ ] Review [sche -->",
+      "```md\n- [ ] Review [sche\n```",
+    ];
+    for (const source of sources) {
+      const marker = source.indexOf("sche") + "sche".length;
+      expect(itemsAt(source, marker), source).toEqual([]);
+    }
+  });
+
+  test("keeps live diagnostics quiet while a managed field is incomplete", async () => {
+    const { lifeloop, dir } = await workspaceWith({ "Query.md": "- [ ] Review\n" });
+    const parserLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(relationshipDiagnostics(lifeloop, "- [ ] Review [deadline: 2026", "Query", false)).toEqual([]);
+      expect(parserLog).not.toHaveBeenCalled();
+    } finally {
+      lifeloop.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("query results use a read-only custom document and release live contents on close", async () => {
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": "* [ ] one\n" });
+  const handlers = new Map<string, Function>();
+  vi.spyOn(vscode.commands, "registerCommand").mockImplementation(((id: string, handler: Function) => {
+    handlers.set(id, handler);
+    return { dispose() {} };
+  }) as any);
+  const shown = vi.spyOn(vscode.window, "showTextDocument").mockResolvedValue({} as any);
+  const context = { subscriptions: [] } as any;
+  try {
+    registerQueryCommands(() => lifeloop, context);
+    await handlers.get("lifeloop.openQueryResult")!("actionable\nfields: name");
+    const document = shown.mock.calls[0][0] as any;
+    expect(document.uri.scheme).toBe(QUERY_RESULT_SCHEME);
+    expect(document.languageId).toBe(QUERY_RESULT_LANGUAGE);
+    expect(document.isDirty).toBe(false);
+    expect(document.getText()).toContain("| one |");
+
+    await handlers.get("lifeloop.openReadonlyResult")!("# Context\n", "context", {
+      preserveFocus: true,
+    });
+    expect(shown).toHaveBeenLastCalledWith(
+      expect.objectContaining({ languageId: QUERY_RESULT_LANGUAGE }),
+      { preview: true, preserveFocus: true },
+    );
+
+    (vscode.workspace as any).__closeTextDocument(document);
+    const expired = await vscode.workspace.openTextDocument(document.uri);
+    expect(expired.getText()).toContain("Query result expired");
+  } finally {
+    for (const disposable of context.subscriptions) disposable.dispose?.();
+    lifeloop.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("relationship diagnostics", () => {

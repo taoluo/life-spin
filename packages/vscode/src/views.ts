@@ -26,6 +26,9 @@ export class Node extends vscode.TreeItem {
     readonly handle?: TaskCommandHandle,
     readonly page?: string,
     readonly offset?: number,
+    /** Full source text of an Inbox item, so a right-click can resolve it too (not just a click). */
+    readonly itemText?: string,
+    readonly itemEnd?: number,
   ) {
     super(label, collapsible);
   }
@@ -71,13 +74,14 @@ function taskNode(
   return node;
 }
 
-function section(label: string, children: Node[], icon?: string): Node | null {
+function section(label: string, children: Node[], icon?: string, id?: string): Node | null {
   if (children.length === 0) return null;
   const node = new Node(
     `${label}  (${children.length})`,
     vscode.TreeItemCollapsibleState.Expanded,
     children,
   );
+  node.id = id;
   if (icon) node.iconPath = new vscode.ThemeIcon(icon);
   return node;
 }
@@ -107,7 +111,7 @@ abstract class BaseProvider implements vscode.TreeDataProvider<Node> {
   protected abstract roots(): Node[];
 }
 
-/** 1.10 — Today: overdue / due / scheduled, disjoint, plus what you are waiting on. */
+/** 1.10 — Today: overdue / due / scheduled / earlier plans, disjoint, plus Waiting. */
 export class TodayView extends BaseProvider {
   protected roots(): Node[] {
     const t = today(this.lifeloop.store, day());
@@ -135,6 +139,7 @@ export class TodayView extends BaseProvider {
       section("Overdue", t.overdue.map((x) => taskNode(this.lifeloop, x, true, `deadline ${x.deadline} is before today`)), "flame"),
       section("Due today", t.due.map((x) => taskNode(this.lifeloop, x, true, "deadline is today")), "calendar"),
       section("Scheduled", t.scheduled.map((x) => taskNode(this.lifeloop, x, true, "scheduled for today")), "clock"),
+      section("Earlier plans", t.pastScheduled.map((x) => taskNode(this.lifeloop, x, true, `scheduled for ${x.scheduled} and still open`)), "history"),
       section("Waiting", t.waiting.map((x) => taskNode(this.lifeloop, x, true, "task or inherited context is tagged #waiting")), "watch"),
     ].filter((n): n is Node => n !== null));
 
@@ -172,8 +177,10 @@ export class TodayView extends BaseProvider {
       nodes.push(peopleSection);
     }
     if (nodes.length === 0) {
-      const empty = new Node("Nothing due today", vscode.TreeItemCollapsibleState.None);
+      const empty = new Node("Nothing due or planned today", vscode.TreeItemCollapsibleState.None);
       empty.iconPath = new vscode.ThemeIcon("check-all");
+      empty.description = "Plan Today to choose from the backlog";
+      empty.command = { command: "lifeloop.planToday", title: "Plan Today" };
       return [empty];
     }
 
@@ -232,6 +239,8 @@ export class ProjectsView extends BaseProvider {
       const signals = projectSignals(
         this.lifeloop.store, name, day(), this.lifeloop.config("staleDays", 21),
       );
+      const gap = signals.some((signal) =>
+        ["no open task", "waiting only", "no actionable task"].includes(signal.kind));
 
       const node = new Node(
         name,
@@ -240,9 +249,12 @@ export class ProjectsView extends BaseProvider {
         undefined,
         name,
       );
-      node.contextValue = "lifeloopProject";
+      node.id = `project:${name}`;
+      node.contextValue = gap ? "lifeloopProjectGap" : "lifeloopProject";
       node.iconPath = new vscode.ThemeIcon(signals.length ? "warning" : "project");
-      node.description = signals.map((s) => s.kind).join(", ") || `${open.length} actionable`;
+      node.description = signals.map((signal) =>
+        ["no open task", "waiting only", "no actionable task", "overdue tasks"].includes(signal.kind)
+          ? `this page: ${signal.kind}` : signal.kind).join(", ") || `${open.length} actionable on this page`;
       node.tooltip = new vscode.MarkdownString(
         signals.length ? signals.map((s) => `- **${s.kind}** — ${s.detail}`).join("\n") : "no signals",
       );
@@ -254,7 +266,9 @@ export class ProjectsView extends BaseProvider {
     }
 
     return ["active", "paused", "completed", "archived"]
-      .map((status) => section(status[0].toUpperCase() + status.slice(1), byStatus.get(status) ?? []))
+      .map((status) => section(
+        status[0].toUpperCase() + status.slice(1), byStatus.get(status) ?? [], undefined, `projects:${status}`,
+      ))
       .filter((n): n is Node => n !== null);
   }
 }
@@ -286,6 +300,8 @@ export class InboxView extends BaseProvider {
         undefined,
         page,
         item.offset,
+        item.text,
+        item.end,
       );
       node.contextValue = "lifeloopInboxItem";
       node.iconPath = new vscode.ThemeIcon("circle-outline");

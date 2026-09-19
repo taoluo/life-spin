@@ -87,7 +87,7 @@ describe("two clients, one answer", () => {
     const direct = runProjection(store, "today", { date: DATE }) as any;
     const viaCli = cli(["query", "test/fixtures", "today", "--date", DATE, "--db", db]) as any;
 
-    for (const bucket of ["overdue", "due", "scheduled", "waiting"]) {
+    for (const bucket of ["overdue", "due", "scheduled", "pastScheduled", "waiting"]) {
       expect(viaCli[bucket].map((t: any) => t.ref).sort())
         .toEqual(direct[bucket].map((t: any) => t.ref).sort());
     }
@@ -102,7 +102,8 @@ describe("two clients, one answer", () => {
 
       const projection = runProjection(lifeloop.store, "today", { date: undefined }) as any;
       const expected = new Set<string>([
-        ...projection.overdue, ...projection.due, ...projection.scheduled, ...projection.waiting,
+        ...projection.overdue, ...projection.due, ...projection.scheduled,
+        ...projection.pastScheduled, ...projection.waiting,
       ].map((task: any) => taskSourceRef(
         lifeloop.vault.read(`${task.page}.md`), task.page, task,
       )));

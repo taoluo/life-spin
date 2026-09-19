@@ -92,6 +92,7 @@ export const queryBodyContains = (fence: LocatedQueryFence, offset: number): boo
 
 /** Recognized query fences, including an unfinished final block for completion. */
 export function findLocatedQueryFences(source: string): LocatedQueryFence[] {
+  if (!/(?:`{3,}|~{3,})/.test(source)) return [];
   const sourceLines = lines(source);
   const found: LocatedQueryFence[] = [];
   for (const fence of collectNodesOfType(parseMarkdown(source), "FencedCode")) {

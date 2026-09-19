@@ -1,7 +1,8 @@
 import {
-  applied, changeSet, refuse, resolveHandle, type MutationResult, type SourceHandle,
+  applied, changeSet, refuse, resolveHandle, validPageName, type MutationResult, type SourceHandle,
 } from "../mutation.ts";
 import type { Vault } from "../vault.ts";
+import { pathOf } from "../vault.ts";
 import { parseMarkdown } from "../../../../vendor/silverbullet/client/markdown_parser/parser.ts";
 import { collectNodesOfType } from "../../../../vendor/silverbullet/plug-api/lib/tree.ts";
 import { itemAt } from "./outline.ts";
@@ -10,6 +11,10 @@ const MARKER = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([^\[\]\r\n]+)(\].*)$/;
 
 /** `[completed: "2026-09-08"]`, the shape LifeLoop already writes. */
 const COMPLETED = /\s*\[completed:\s*"[^"]*"\]/;
+
+/** Task dates users may author directly; bindings and completion history are command-owned. */
+export const TASK_DATE_FIELDS = ["deadline", "scheduled"] as const;
+export type TaskDateField = typeof TASK_DATE_FIELDS[number];
 
 /** Named `isoDate` rather than `today` — `today()` is the projection, and one of
  * them meaning "a date string" while the other means "what is due" is a collision
@@ -24,6 +29,39 @@ export const isoDate = (now = new Date()) => {
 
 const replaceLine = (text: string, start: number, end: number, line: string) =>
   text.slice(0, start) + line + text.slice(end);
+
+/** Add one direct link to an existing page without changing task ownership. */
+export async function addTaskLink(
+  vault: Vault,
+  handle: SourceHandle,
+  page: string,
+  expectedPage?: string,
+): Promise<MutationResult<{ line: string; page: string }>> {
+  if (!validPageName(page) || /[\[\]|\r\n]/.test(page)) {
+    return refuse("invalid", `not a linkable page name: ${page}`);
+  }
+  const targetPath = pathOf(page);
+  if (!vault.exists(targetPath)) return refuse("missing", `no such page: ${page}`);
+  const targetText = vault.read(targetPath);
+  if (expectedPage !== undefined && targetText !== expectedPage) {
+    return refuse("stale", `${page} changed while it was being selected`);
+  }
+
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  if (!MARKER.test(source.line)) return refuse("stale", `${handle.ref} is not a task line`);
+  const alreadyLinked = collectNodesOfType(parseMarkdown(source.line), "WikiLinkPage")
+    .some((node) => node.from !== undefined && node.to !== undefined &&
+      source.line.slice(node.from, node.to) === page);
+  if (alreadyLinked) return refuse("stale", `${handle.ref} already directly links to ${page}`);
+
+  const line = `${source.line} [[${page}]]`;
+  const cs = changeSet(`link ${handle.ref} to ${page}`);
+  cs.expected.set(source.path, source.text);
+  cs.expected.set(targetPath, targetText);
+  cs.writes.set(source.path, replaceLine(source.text, source.lineStart, source.lineEnd, line));
+  return applied(vault, cs, { line, page });
+}
 
 /**
  * Tick or untick a task, and stamp or unstamp its completion date.
@@ -286,6 +324,31 @@ export async function appendTaskNote(
 
   lines.splice(item.end, 0, line);
   const cs = changeSet(`append ${label.toLowerCase()} to ${handle.ref}`);
+  cs.expected.set(source.path, source.text);
+  cs.writes.set(source.path, lines.join(eol));
+  return applied(vault, cs, { line });
+}
+
+/** Append one actionable checkbox at the end of the task's existing subtree. */
+export async function appendTaskChild(
+  vault: Vault,
+  handle: SourceHandle,
+  name: string,
+): Promise<MutationResult<{ line: string }>> {
+  const value = name.trim();
+  if (!value || /[\r\n]/.test(value)) return refuse("invalid", "next action must be one line");
+  const source = resolveHandle(vault, handle);
+  if ("ok" in source) return source;
+  if (!MARKER.test(source.line)) return refuse("stale", `${handle.ref} is not a task line`);
+
+  const eol = source.text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.text.split(/\r?\n/);
+  const lineNumber = source.text.slice(0, source.lineStart).split(/\r?\n/).length - 1;
+  const item = itemAt(lines, lineNumber);
+  if (!item) return refuse("stale", `${handle.ref} is no longer a list item`);
+  const line = `${" ".repeat(item.indent + 2)}* [ ] ${value}`;
+  lines.splice(item.end, 0, line);
+  const cs = changeSet(`append next action to ${handle.ref}`);
   cs.expected.set(source.path, source.text);
   cs.writes.set(source.path, lines.join(eol));
   return applied(vault, cs, { line });

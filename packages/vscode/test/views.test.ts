@@ -28,6 +28,7 @@ describe("Today view", () => {
     const { lifeloop, dir } = await workspaceWith({
       "Work.md": [
         '* [ ] overdue thing [deadline: "2020-01-01"]',
+        '* [ ] missed plan [scheduled: "2020-01-02"]',
         "* [ ] blocked #waiting",
         "",
       ].join("\n"),
@@ -36,6 +37,7 @@ describe("Today view", () => {
     const labels = nodes.map((n) => n.label);
     expect(labels.some((l) => String(l).startsWith("Overdue"))).toBe(true);
     expect(labels.some((l) => String(l).startsWith("Waiting"))).toBe(true);
+    expect(labels.some((l) => String(l).startsWith("Earlier plans"))).toBe(true);
 
     const task = flatten(nodes).find((n) => n.label === "overdue thing");
     expect(task).toBeDefined();
@@ -44,6 +46,8 @@ describe("Today view", () => {
     expect(task.handle.expectedState).toBe(" ");
     expect(task.handle.expectedText).toContain("overdue thing");
     expect(task.tooltip.value).toContain("Why: deadline 2020-01-01 is before today");
+    expect(flatten(nodes).find((n) => n.label === "missed plan").tooltip.value)
+      .toContain("scheduled for 2020-01-02 and still open");
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -80,7 +84,8 @@ describe("Today view", () => {
   test("says so when nothing is due, rather than showing empty sections", async () => {
     const { lifeloop, dir } = await workspaceWith({ "Work.md": "* [ ] someday thing\n" });
     const nodes = new TodayView(lifeloop).getChildren();
-    expect(nodes.map((n) => n.label)).toEqual(["Nothing due today"]);
+    expect(nodes.map((n) => n.label)).toEqual(["Nothing due or planned today"]);
+    expect(nodes[0].command).toMatchObject({ command: "lifeloop.planToday" });
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -301,7 +306,18 @@ describe("Projects view", () => {
     expect(nodes.map((n) => String(n.label).split("  ")[0])).toEqual(["Active", "Paused"]);
 
     const p = flatten(nodes).find((n) => n.label === "P");
-    expect(p.description).toContain("waiting only");
+    expect(nodes.map((n) => n.id)).toEqual(["projects:active", "projects:paused"]);
+    expect(p).toMatchObject({
+      id: "project:P",
+      contextValue: "lifeloopProjectGap",
+      description: "this page: waiting only",
+    });
+    const q = flatten(nodes).find((n) => n.label === "Q");
+    expect(q).toMatchObject({
+      id: "project:Q",
+      contextValue: "lifeloopProject",
+      description: "1 actionable on this page",
+    });
     // The signal is shown and never persisted.
     expect(lifeloop.vault.read("P.md")).not.toContain("waiting only");
     lifeloop.dispose();
@@ -317,6 +333,18 @@ describe("Inbox view", () => {
     const nodes = new InboxView(lifeloop).getChildren();
     expect(nodes.map((n) => n.label)).toEqual(["one", "two"]);
     expect(nodes[0].description).toBe("1 nested");
+    lifeloop.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("carries a contextValue and its full item text, so a right-click can resolve it too", async () => {
+    const { lifeloop, dir } = await workspaceWith({
+      "Inbox.md": "* one\n  * nested\n",
+    });
+    const [node] = new InboxView(lifeloop).getChildren();
+    expect(node.contextValue).toBe("lifeloopInboxItem");
+    expect(node.itemText).toBe("* one\n  * nested");
+    expect(node.itemEnd).toBe(node.itemText!.length);
     lifeloop.dispose();
     rmSync(dir, { recursive: true, force: true });
   });

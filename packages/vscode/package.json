@@ -18,6 +18,17 @@
     "workspaceContains:**/*.md"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "lifeloop-result",
+        "aliases": [
+          "LifeLoop Result"
+        ],
+        "extensions": [
+          ".lifeloop-result"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "lifeloop.capture",
@@ -33,12 +44,17 @@
         "title": "LifeLoop: Capture Selection with Source"
       },
       {
+        "command": "lifeloop.recoverLastCapture",
+        "title": "LifeLoop: Recover Last Failed Capture"
+      },
+      {
         "command": "lifeloop.openInbox",
         "title": "LifeLoop: Open Inbox"
       },
       {
         "command": "lifeloop.processInbox",
-        "title": "LifeLoop: Process Inbox"
+        "title": "LifeLoop: Process Inbox",
+        "icon": "$(ellipsis)"
       },
       {
         "command": "lifeloop.openToday",
@@ -46,8 +62,28 @@
         "icon": "$(calendar)"
       },
       {
+        "command": "lifeloop.planToday",
+        "title": "LifeLoop: Plan Today"
+      },
+      {
+        "command": "lifeloop.closeTodayPlanTomorrow",
+        "title": "LifeLoop: Close Today and Plan Tomorrow"
+      },
+      {
         "command": "lifeloop.openReview",
         "title": "LifeLoop: Weekly Review"
+      },
+      {
+        "command": "lifeloop.reviewActions",
+        "title": "LifeLoop: Review in Place"
+      },
+      {
+        "command": "lifeloop.openNextWeekFocus",
+        "title": "LifeLoop: Open Next Week Focus"
+      },
+      {
+        "command": "lifeloop.reviewPeriodFacts",
+        "title": "LifeLoop: Review Period Facts"
       },
       {
         "command": "lifeloop.freezeReview",
@@ -86,8 +122,29 @@
         "title": "LifeLoop: Attach Page to Task"
       },
       {
+        "command": "lifeloop.addRelatedLink",
+        "title": "LifeLoop: Add Related Link"
+      },
+      {
+        "command": "lifeloop.addNextAction",
+        "title": "LifeLoop: Add Next Action"
+      },
+      {
         "command": "lifeloop.setProjectStatus",
         "title": "LifeLoop: Set Project Status"
+      },
+      {
+        "command": "lifeloop.projectActions",
+        "title": "LifeLoop: Project Actions",
+        "icon": "$(ellipsis)"
+      },
+      {
+        "command": "lifeloop.projectResumptionBrief",
+        "title": "LifeLoop: Project Resumption Brief"
+      },
+      {
+        "command": "lifeloop.meetingWrapUp",
+        "title": "LifeLoop: Meeting Wrap-up"
       },
       {
         "command": "lifeloop.completeTask",
@@ -106,6 +163,22 @@
       {
         "command": "lifeloop.findTask",
         "title": "LifeLoop: Find Task"
+      },
+      {
+        "command": "lifeloop.addFromBacklog",
+        "title": "LifeLoop: Add from Backlog"
+      },
+      {
+        "command": "lifeloop.waitingNextAction",
+        "title": "LifeLoop: Waiting to Next Action"
+      },
+      {
+        "command": "lifeloop.makeActionable",
+        "title": "LifeLoop: Make Actionable"
+      },
+      {
+        "command": "lifeloop.returnToLastFind",
+        "title": "LifeLoop: Return to Last Find"
       },
       {
         "command": "lifeloop.explainTask",
@@ -310,8 +383,23 @@
       ],
       "view/item/context": [
         {
+          "command": "lifeloop.projectActions",
+          "when": "viewItem == lifeloopProjectGap",
+          "group": "inline"
+        },
+        {
+          "command": "lifeloop.projectActions",
+          "when": "viewItem == lifeloopProject",
+          "group": "lifeloop"
+        },
+        {
           "command": "lifeloop.taskActions",
           "when": "viewItem == lifeloopTask",
+          "group": "inline"
+        },
+        {
+          "command": "lifeloop.processInbox",
+          "when": "viewItem == lifeloopInboxItem",
           "group": "inline"
         },
         {
