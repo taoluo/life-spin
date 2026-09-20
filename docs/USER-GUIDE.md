@@ -97,6 +97,7 @@ Backlog。选择任务后可以：
 - **Open / Preview**：先查看背景。
 - **Open focus for week …**：打开今天所在周的普通 Weekly Focus note；返回后保留当前
   planning scope、输入和选择。
+- **Review upcoming …**：在同一个 picker 中进入未来日期范围，连续查看或调整后续安排。
 
 Schedule Today 和 Set Now 是两个独立意图。Plan Today 不会要求你给每个任务排序，也不会
 记录 Start/Stop 或自动把所有旧任务滚到今天。
@@ -114,6 +115,22 @@ Schedule Today 和 Set Now 是两个独立意图。Plan Today 不会要求你给
 `Now` 只存在于当前 extension session，不改变任务状态、`scheduled` 或 Calendar。完成任务的
 命令会同时维护 `[completed: "YYYY-MM-DD"]`；直接用其他编辑器勾 checkbox 只是文本编辑，
 不保证产生 completion fact。
+
+执行中无需先跳回任务来源。运行 **LifeLoop: Add Progress / Resume Cue to Now**，确认显示的
+Now 目标后输入记录；命令会在输入后重新验证该目标，不会把内容写到当前编辑器光标下的另一
+任务。目标已经变化时不会写入，并可复制刚才的输入。
+
+### 1.5.1 查看并调整未来几天
+
+运行 **LifeLoop: Review Upcoming**，或从 Today 标题／Plan Today 的 **Review upcoming …** 进入。
+默认范围为明天至“今天加 `lifeloop.upcomingDays`”，终点包含。列表只显示 open、actionable 的
+任务；Waiting 和 Someday 继续在各自 scope 中处理。
+
+每项只出现一次，按范围内较早的 scheduled/deadline 日期排列，但行内同时显示两者。可以
+Preview、Open Source、Quick Reschedule，或明确选择 **Set as Now and open**。改期后列表刷新：
+仍在范围内就保留该项，移出范围就选择合理相邻项。Open Source 会退出列表；重新运行 Review
+Upcoming 会恢复当前 session 中仍有效的搜索和选择提示。它不读取 Calendar，也不表示空闲时间、
+容量或承诺完成顺序。
 
 ### 1.6 找回工作并结束一天
 
@@ -425,6 +442,7 @@ Preview 会显示必要的页面或父级背景，但不会修改 Now，也不�
 | 上一个编辑位置 | VS Code Go Back/Forward；macOS 默认 `Ctrl+-` / `Ctrl+Shift+-` | VS Code 导航历史 |
 | 上一次 Find | **LifeLoop: Return to Last Find** | 当前 extension session；恢复仍有效的 query、scope 和选择 |
 | 当前目标 | **LifeLoop: Return to Now** | 当前 extension session；来源会重新验证 |
+| 上一次多日安排 | 再次运行 **LifeLoop: Review Upcoming** | 当前 extension session；恢复仍有效的 query 和 row key，写入仍重新验证 |
 
 ### Open Related Page
 
@@ -522,6 +540,23 @@ LifeLoop 不接管普通 Wiki link、页面路径或 heading completion，也不
 | macOS `Cmd+Shift+B` / 其他平台 `Ctrl+Shift+B` | Update Baked Sections |
 
 其他命令可以在 VS Code Keyboard Shortcuts 中自行绑定。LifeLoop 不静默修改全局快捷键。
+
+不配置额外快捷键也能全键盘使用：按 `Cmd+Shift+P`（其他平台通常是 `Ctrl+Shift+P`），输入
+下表中的命令标题并按 Return。若要自定义按键，在 **Preferences: Open Keyboard Shortcuts** 中
+搜索对应 command ID；先检查冲突，不要把依赖明确任务目标的 Task Actions 绑定成无条件全局键。
+
+| 常用入口 | Command ID |
+|---|---|
+| Capture | `lifeloop.capture` |
+| Plan Today | `lifeloop.planToday` |
+| Review Upcoming | `lifeloop.reviewUpcoming` |
+| Find Task | `lifeloop.findTask` |
+| Return to Now | `lifeloop.returnToNow` |
+| Return to Last Find | `lifeloop.returnToLastFind` |
+| Add Progress / Resume Cue to Now | `lifeloop.addNoteToNow` |
+
+Task Actions 应从明确的 TreeView 行、Code Action，或光标确实位于目标任务时打开。键盘 `when`
+条件只控制入口是否出现，不能替代运行时 TaskTarget 验证。
 
 ---
 
@@ -691,16 +726,16 @@ npx tsx packages/cli/src/main.ts dump ~/vault
 
 ## 14. 命令地图
 
-不必记住全部命令。日常使用优先记住 Capture、Process Inbox、Plan Today、Task Actions、Find
-Task、Review in Place 和 Close Today and Plan Tomorrow。
+不必记住全部命令。日常使用优先记住 Capture、Process Inbox、Plan Today、Review Upcoming、
+Task Actions、Find Task、Review in Place 和 Close Today and Plan Tomorrow。
 
 | 场景 | 命令 |
 |---|---|
 | Capture / Inbox | Capture、Capture Here、Capture Selection with Source、Recover Last Failed Capture、Open Inbox、Process Inbox |
-| 日／周计划 | Today、Plan Today、Close Today and Plan Tomorrow、Add from Backlog、Weekly Review、Review in Place、Open Next Week Focus、Review Period Facts、Freeze Review |
+| 日／周计划 | Today、Plan Today、Review Upcoming、Close Today and Plan Tomorrow、Add from Backlog、Weekly Review、Review in Place、Open Next Week Focus、Review Period Facts、Freeze Review |
 | Task lifecycle | Task Actions、Complete、Reopen、Set Deadline、Set Scheduled、Quick Reschedule、Toggle Waiting、Toggle Someday、Waiting to Next Action、Make Actionable |
 | Context / source | Add Next Action、Add Progress / Resume Cue、Attach Page to Task、Add Related Link、Open/Peek Source、Explain Task、Find Task、Return to Last Find |
-| Now | Set Task as Now、Return to Now、Clear Now |
+| Now | Set Task as Now、Return to Now、Add Progress / Resume Cue to Now、Clear Now |
 | Project | Project Actions、Set Project Status、Project Resumption Brief、Open Project（Task Actions 内） |
 | Person | Log Interaction、Create Reconnect Task、Meeting Wrap-up、Pre-meeting Brief、Show Mentions、Sign This Block |
 | External | Add Reminder、Add to Calendar、Sync External、Show External Sync Report、Resolve External Sync Conflict、Open External App、Detach Binding、Copy Binding ID |

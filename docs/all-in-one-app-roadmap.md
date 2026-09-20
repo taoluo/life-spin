@@ -322,13 +322,13 @@ LifeLoop 应明确支持矩阵：本地 Markdown 核心、Foam 增强、Apple br
 | Capture / Capture Here / Capture Selection + Source | 已实现，普通 Capture 失败正文可恢复 | 当前 task-only 已验证 Capture/Selection 成功后回到原编辑器并保留光标/选区，输入后 Escape 不写入；普通 Capture 的真实失败注入与 Find 自身 IME 仍分别记录 |
 | Inbox Skip / Edit / Resume | 已实现本次遍历的连续处理 | selection/scroll、长正文和快速连续操作；不持久化游标 |
 | Task Actions / Complete / Reopen / Deadline / Schedule / Waiting / Someday / Source | 已实现 guarded commands 和动态入口 | K0 菜单深度、焦点、结果文案一致性 |
-| Quick Reschedule | 已实现 Today/Tomorrow/Next week/Pick/Clear | 改期后仍被 deadline/inherited value 命中的解释与真实键盘体验 |
+| Quick Reschedule | 已实现 Today/Tomorrow/Next week/Pick/Clear | 改期后仍被 deadline 命中或因 inherited Waiting/Someday 改变 actionable 资格时的解释与真实键盘体验 |
 | Find / Explain / Peek / Return to Last Find | 已实现关键词、scope、来源、session-only 返回和可选连续预览；旧异步 preview 不覆盖最新选择 | Foam GUI 已验证键盘预览、快速取消、query/exact handle 恢复及窄窗口长标题；planning QuickPick 已验证真实简体拼音，Find 自身未单独重复 IME 路径 |
-| Now / Progress / Resume Cue | 已实现 session-only Now 与普通 Markdown 记录 | 当前 task-only 已验证从 TreeView 明确任务 A 保存 Resume Cue 后仍回到编辑器 B；失效 source 的真实宿主路径仍由自动反例和后续走查覆盖 |
+| Now / Progress / Resume Cue | 已实现 session-only Now、普通 Markdown 记录，以及直接指向 Now 的 `Add Progress / Resume Cue to Now` 薄入口 | 当前 task-only/Foam integration hosts 已验证活动编辑器 B 保持不变，只有 session Now 的任务 A 收到 Progress；prompt 前后重新验证、目标漂移和文本恢复另有自动反例 |
 | Add from Backlog | 已实现 Set Now、Schedule Today、Peek/Open 的意图区分 | 候选连续处理与真实列表连续性 |
 | Waiting → Next Action | 已实现独立 Complete/Create/Schedule/Clear 意图 | 当前 task-only 已验证只在明确 Waiting 任务下创建后续行动；Live Review 清除一个 direct Waiting 后保持 Waiting scope 并选择剩余相邻项；不把收到回复自动解释为完成或 Interaction |
 | Make Actionable / Help Me Start | 已实现轻量 Edit/Add step/Attach/Waiting/Someday | 不扩成 AI 拆解或新的 task workflow |
-| Today / Upcoming / Waiting / Projects / Linked Tasks | 已实现共享 predicates、事实信号和精确 SourceHandle；Project gap 只陈述 active Project 本页事实 | task-only/Foam 已验证窄信号；其余连续操作仍待 K0 |
+| Today / Upcoming / Waiting / Projects / Linked Tasks | 已实现共享 predicates、事实信号和精确 SourceHandle；Upcoming 采用明天至 horizon 端点包含、actionable-only、有效日期最早命中且每项一次的契约 | 多日 Upcoming 已有连续 picker、Today title／Plan Today 可见入口、双日期展示、改期刷新、相邻选择和 session-only 返回；当前 task-only/Foam GUI 已验证可发现、键盘 action/cancel、Open 后查询/选择返回及 0 Problems，Foam 另验证改期后 deadline 仍命中时原地刷新和选择保持 |
 | Plan Today / Close Today and Plan Tomorrow | 已实现连续 native picker；区分期限、当日安排、旧计划和 Backlog 候选；晚间在同一流程复盘当天事实并规划明日；可打开规划日期所在周的 Focus 并返回原位置 | Focus/返回增量已有自动测试；2026-09-14 的隔离 task-only/Foam 0.44.6 宿主确认正确周文件及 picker/scope/长标题选择保留，Problems 为 0；此前两种 profile 已验证晚间 scope 切换、取消、显式安排、刷新与返回，task-only 另验证真实简体拼音组合输入 |
 | Projects 原地处理 | 已实现稳定节点及 Preview/Open/Add Next Action/Pause/Leave Unchanged；Preview 复用只读 Resumption 结果，同时显示本页与跨页 related work | membership 仍只统计 `task.page === project`；新 Preview/Review 返回有自动测试，2026-09-14 的隔离 task-only/Foam 0.44.6 宿主确认两组结果、边界说明、来源返回、0 Problems 且无 Foam provider error；不声称覆盖全部项目工作 |
 | Project Resumption / Closure Facts | 已实现只读 Project Preview／恢复简报；关闭前显示本页 open、跨页相关 open、Waiting 和已知 Reminder/Calendar bindings，状态写入重新验证 | task-only 已打开 paused-project 简报并在 closure facts 后取消，Project 保持 active；不声称发现全部项目工作或外部对象 |
@@ -364,7 +364,8 @@ Reschedule、Waiting/Someday 和 Clear scheduled 等低成本调整动作。
 | Weekly Review → 下周重点 | 已复用持续 Review picker、项目动作和普通 Weekly Focus 模板 | 小到中 | 从最终状态反推周初计划，或把 frozen Review 当写入来源 | **已实现最小版**；Review 中原地处理并可打开下周普通 Markdown note |
 | Backlog resurfacing | 已复用现有 Unscheduled、Someday、Paused 和 Waiting scopes | 小 | 自动污染 Today，或引入 last-reviewed/cadence 状态 | **已实现手动 scopes**；保持搁置是正常结果 |
 | 本周重点／候选 | 已实现 Weekly Note 模板与导航；Plan Today 和前晚明日规划可打开正确周并返回原 picker；没有专用 task membership | 模板小；专用操作中高 | 复制第二组 checkbox、offset 漂移、维护负担 | **模板最小版与规划入口已实现**；不创建 anchor 或复制任务；专用加入/移出操作仍按真实摩擦准入 |
-| Upcoming 准备行动 | Upcoming task 已复用 Task Actions 的 Open/Peek、Add Next Action、Add Related Link | 小 | 自动倒排或重复创建准备任务 | **已有最小入口**；不自动创建准备任务 |
+| 可操作的多日 Upcoming | 已复用共享 projection、连续 Review/Plan picker、Quick Reschedule、Preview/Open、Now 与 TaskTarget | 中 | 日期边界漂移、双日期被隐藏、旧 row 被误当写入授权 | **最小实现与当前 task-only/Foam K0 完成**；范围为明天至 `today + upcomingDays` 两端包含，只列 actionable；按范围内最早有效日期分组但同时显示 scheduled/deadline；不增加顺序、rollover、容量或 Calendar 含义 |
+| 执行中直接记录 Now | 已复用 session Now 与 Progress/Resume Cue guarded mutation | 小 | Now 失效后误落到活动编辑器、输入失败后丢失 | **薄入口、自动反例及当前 task-only/Foam host 验证完成**；prompt 前后验证，不导航、不改变 Capture 默认目标 |
 
 Plan Today 需要先补一个窄语义缺口：当前 Today 只收录当天 `scheduled`，Backlog 又排除所有已有
 `scheduled` 的任务，因此过去日期仍未完成的安排需要独立的 `past scheduled` 事实。它必须与 overdue
@@ -382,7 +383,8 @@ deadline 去重，并明确表示“旧计划待处理”，不能自动滚到�
 | 跨 extension-host writer admission | 事件触发 | 很高安全收益 | 中 | 中高 | 多窗口同时 sync 使用不同 authority，产生覆盖或错误成功报告 | **启用多窗口 autoSync 前必须做** |
 | Plan Today → Replan → 当天复盘＋明日计划 | 日／事件触发 | 高 | 高 | 中 | 形成第二套 planner、混淆 deadline 与主动安排、自动 rollover | **最小实现完成，task-only/Foam K0 已通过**；明日安排需用户显式选择，简体拼音已在 native picker 验证 |
 | Weekly Review → 下周重点与 Backlog resurfacing | 周／月 | 高 | 高 | 小到中 | 强迫清积压、增加 cadence 状态、从当前状态伪造历史 | **最小实现完成，待新增出口 K0** |
-| Upcoming 准备行动 | 周／事件触发 | 中高 | 高 | 小 | 自动倒排、重复任务或把未来 deadline 当今日承诺 | **已有 Task Actions 入口**；真实路径继续观察 |
+| 可操作的多日 Upcoming | 日／周 | 高 | 高 | 中 | 日期边界、旧目标、调整后丢 scope/选择 | **最小实现与当前 task-only/Foam K0 完成**；Today title、Plan Today 可见入口和 Command Palette 共用一个连续 picker |
+| Add Progress / Resume Cue to Now | 日／事件触发 | 高 | 高 | 小 | stale Now、活动编辑器误目标、失败后输入丢失 | **薄入口、自动反例及当前 task-only/Foam host 验证完成**；只使用 session Now，不回退光标任务 |
 | Project resumption brief | 月／事件触发 | 高 | 高 | 中 | 把 mention 当进展、把生成时间当事实时间 | **最小实现完成，task-only K0 已通过**；只显示页面、相关任务和可靠完成事实 |
 | Review period facts / What changed | 周／月 | 中高 | 高 | 小到中 | 缺少通用 event store 时夸大历史完整性 | **最小实现完成，task-only K0 已通过**；仅 completion dates 与明确 dated interactions |
 | Meeting Wrap-up | 事件触发 | 高 | 高 | 中 | 重放步骤、错误 participant、自动完成相关任务 | **最小实现完成，待真实 K0**；三个步骤由用户独立勾选并分别验证 |
@@ -391,7 +393,7 @@ deadline 去重，并明确表示“旧计划待处理”，不能自动滚到�
 
 | 项目 | 频率／收益 | 成本 | 风险 | 准入结论 |
 |---|---|---:|---|---|
-| Calendar read-only Agenda | 日用潜力高 | 中高 | TCC/发布宿主、多 Calendar、全天/跨日、DST、recurring occurrence | `Product value: High / readiness: Needs capability spike`；先与 Calendar 并排使用实测 |
+| Calendar read-only Agenda | 日用潜力高 | 中高 | TCC/发布宿主、ICS 凭据与新鲜度、多 Calendar、全天/跨日、DST、recurring occurrence | `Product value: High / readiness: Needs capability spike`；比较 Calendar 并排、明确授权只读 ICS 与 EventKit，不建通用 provider |
 | Notes/Reminders/Calendar 真实宿主验证 | 事件触发，正确性收益高 | 中 | 权限、个人数据、外部对象清理、迟到同步 | 使用明确授权的可丢弃对象；fake 不能替代 |
 | Durable shared sync authority migration | 多 writer 时安全收益高 | 高 | 迁移旧 baseline、单写者、失败表达、provider/vault 隔离 | 单窗口当前 UX 不阻塞；新增 writer 或跨 host 前单独设计 |
 | Cancel / Drop | 周／事件触发，中高收益 | 中 | 与 Complete/Delete/Someday 混义，历史与外部完成状态不清 | 先确定状态政策与查询语义；未确定前不显示 |
@@ -406,6 +408,9 @@ deadline 去重，并明确表示“旧计划待处理”，不能自动滚到�
 | 候选 | 可能收益 | 成本／风险 | 默认决策与最小版本 |
 |---|---|---|---|
 | Paste with Source | 原位整理资料时少补一次来源 | 中；clipboard metadata 仅限窗口，offset 不耐久 | Deferred；先比较普通粘贴与 Capture Selection，必要时插入正文＋来源 |
+| 最近关联目标 | 连续给同一 Project/Person/Note 补 direct link 时少搜索 | 小到中；不同选择器候选资格不同，最近项可能扰动活动选择 | 先观察 Add Related Link；若重复搜索稳定出现，只保存 session page path，成功后更新并在当前合法候选中提升，不建全局历史 |
+| Capture Here 保存并继续 | 同一上下文连续建少量明确任务时少重开命令 | 中；dirty buffer、插入位置和部分成功 | 真实连续创建摩擦出现后再加可选继续；每次重新取得位置与 guard，不拆多行、不承诺原子性 |
+| Upcoming 本轮复用日期 | 多项明确改到同一天时少重复选择 | 中；残留 Enter、旧回调和错误批量应用 | 只有真实连续改期证明需要时加入当前 picker；日期始终可见可改，每项独立确认和验证 |
 | Inherited-only Inlay Hints | 少开 Hover，减少隐藏继承误解 | 中；噪声、性能、与 Foam 装饰竞争 | 默认关闭；只显示会改变操作判断且正文未表达的继承值 |
 | Narrow Undo | 修复误完成/误改期 | 高；与原生 Undo、stale、外部效果交错 | Deferred D2；仅 session 内安全 semantic mutation，绝不整页恢复 |
 | Full Context / Pin / Follow | 更快恢复一组工作背景 | 高；新状态、布局和跨窗口复杂度 | 继续用 Now、Find、Project/Person Context；有重复摩擦才设计 |

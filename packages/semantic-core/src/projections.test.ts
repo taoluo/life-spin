@@ -118,19 +118,28 @@ test("Backlog excludes planned work and work under paused projects", async () =>
 });
 
 describe("Upcoming", () => {
-  test("groups by scheduled when there is one, deadline otherwise, once each", async () => {
+  test("uses an inclusive future horizon, groups by the earliest valid date, and lists each task once", async () => {
     const store = await vaultWith({
       "Notes.md": [
         '* [ ] both [deadline: "2026-09-20"] [scheduled: "2026-09-12"]',
+        '* [ ] deadline first [deadline: "2026-09-10"] [scheduled: "2026-09-18"]',
         '* [ ] deadline only [deadline: "2026-09-14"]',
+        '* [ ] endpoint [deadline: "2026-09-22"]',
+        '* [ ] invalid [scheduled: "2026-09-11x"]',
+        '* [ ] waiting endpoint [deadline: "2026-09-22"] #waiting',
         '* [ ] far away [deadline: "2027-01-01"]',
         "",
       ].join("\n"),
     });
     const days = upcoming(store, "2026-09-08", 14);
-    expect(days.map((d) => d.date)).toEqual(["2026-09-12", "2026-09-14"]);
-    expect(days[0].tasks.map((t) => t.name)).toEqual(["both"]);
-    expect(days.flatMap((d) => d.tasks.map((t) => t.name))).not.toContain("far away");
+    expect(days.map((d) => d.date)).toEqual(["2026-09-10", "2026-09-12", "2026-09-14", "2026-09-22"]);
+    expect(days[0].tasks.map((t) => t.name)).toEqual(["deadline first"]);
+    expect(days.flatMap((d) => d.tasks.map((t) => t.name))).toEqual([
+      "deadline first", "both", "deadline only", "endpoint",
+    ]);
+    expect(upcoming(store, "2026-09-08", 1).map((d) => d.date)).toEqual([]);
+    expect(upcoming(store, "2026-09-21", 1).map((d) => d.date)).toEqual(["2026-09-22"]);
+    expect(upcoming(store, "2026-09-08", 0)).toEqual([]);
     store.close();
   });
 });

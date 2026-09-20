@@ -66,6 +66,11 @@
         "title": "LifeLoop: Plan Today"
       },
       {
+        "command": "lifeloop.reviewUpcoming",
+        "title": "LifeLoop: Review Upcoming",
+        "icon": "$(calendar)"
+      },
+      {
         "command": "lifeloop.closeTodayPlanTomorrow",
         "title": "LifeLoop: Close Today and Plan Tomorrow"
       },
@@ -187,6 +192,10 @@
       {
         "command": "lifeloop.addTaskNote",
         "title": "LifeLoop: Add Progress / Resume Cue"
+      },
+      {
+        "command": "lifeloop.addNoteToNow",
+        "title": "LifeLoop: Add Progress / Resume Cue to Now"
       },
       {
         "command": "lifeloop.setNow",
@@ -376,6 +385,11 @@
           "group": "navigation"
         },
         {
+          "command": "lifeloop.reviewUpcoming",
+          "when": "view == lifeloop.today",
+          "group": "navigation"
+        },
+        {
           "command": "lifeloop.refreshViews",
           "when": "view =~ /^lifeloop\\./",
           "group": "navigation"
@@ -456,8 +470,9 @@
         },
         "lifeloop.upcomingDays": {
           "type": "number",
+          "minimum": 1,
           "default": 14,
-          "description": "Days shown by Upcoming."
+          "description": "Calendar days after today shown by Upcoming; the end date is included."
         },
         "lifeloop.staleDays": {
           "type": "number",

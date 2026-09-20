@@ -157,11 +157,11 @@ suite("LifeLoop in a real VS Code", () => {
     for (const name of [
       "lifeloop.capture", "lifeloop.captureHere", "lifeloop.captureSelection", "lifeloop.processInbox", "lifeloop.openToday",
       "lifeloop.completeTask", "lifeloop.setProjectStatus", "lifeloop.addReminder",
-      "lifeloop.reviewActions", "lifeloop.openNextWeekFocus", "lifeloop.reviewPeriodFacts", "lifeloop.planToday",
+      "lifeloop.reviewActions", "lifeloop.reviewUpcoming", "lifeloop.openNextWeekFocus", "lifeloop.reviewPeriodFacts", "lifeloop.planToday",
       "lifeloop.closeTodayPlanTomorrow", "lifeloop.projectResumptionBrief", "lifeloop.addNextAction",
       "lifeloop.syncProjected", "lifeloop.importNotes", "lifeloop.taskActions",
       "lifeloop.quickReschedule", "lifeloop.findTask", "lifeloop.addFromBacklog", "lifeloop.waitingNextAction",
-      "lifeloop.makeActionable", "lifeloop.explainTask", "lifeloop.addTaskNote",
+      "lifeloop.makeActionable", "lifeloop.explainTask", "lifeloop.addTaskNote", "lifeloop.addNoteToNow",
       "lifeloop.addRelatedLink",
       "lifeloop.recoverLastCapture", "lifeloop.returnToLastFind",
       "lifeloop.setNow", "lifeloop.returnToNow", "lifeloop.clearNow",
@@ -544,6 +544,36 @@ suite("LifeLoop in a real VS Code", () => {
     } finally {
       (vscode.window as any).showQuickPick = quickPick;
       (vscode.window as any).showInputBox = inputBox;
+    }
+  });
+
+  test("Add Progress to Now keeps the active editor and writes only the session target", async () => {
+    const targetUri = pageUri("Scratch/NowProgressTarget");
+    const otherUri = pageUri("Scratch/NowProgressOther");
+    const line = "* [ ] current work";
+    writeFileSync(targetUri.fsPath, `${line}\n`);
+    writeFileSync(otherUri.fsPath, "* [ ] background editor task\n");
+    await vscode.commands.executeCommand("lifeloop.reindex");
+    const other = await vscode.workspace.openTextDocument(otherUri);
+    await vscode.window.showTextDocument(other);
+    await vscode.commands.executeCommand("lifeloop.setNow", {
+      handle: { ref: "Scratch/NowProgressTarget@0", expectedText: line, expectedState: " " },
+    });
+
+    const quickPick = vscode.window.showQuickPick;
+    const inputBox = vscode.window.showInputBox;
+    try {
+      (vscode.window as any).showQuickPick = async (items: any[]) =>
+        items.find((item) => item.id === "progress");
+      (vscode.window as any).showInputBox = async () => "recorded without leaving the editor";
+      await vscode.commands.executeCommand("lifeloop.addNoteToNow");
+      assert.match(readPage("Scratch/NowProgressTarget"), /Progress: recorded without leaving the editor/);
+      assert.strictEqual(readPage("Scratch/NowProgressOther"), "* [ ] background editor task\n");
+      assert.strictEqual(vscode.window.activeTextEditor?.document.uri.fsPath, otherUri.fsPath);
+    } finally {
+      (vscode.window as any).showQuickPick = quickPick;
+      (vscode.window as any).showInputBox = inputBox;
+      await vscode.commands.executeCommand("lifeloop.clearNow");
     }
   });
 

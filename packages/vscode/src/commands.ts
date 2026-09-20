@@ -3,7 +3,7 @@ import {
   capture, captureItem, captureHere, ensureInbox, pending, processItem, linkToProject, makeTask,
   setTaskState, toggleParked, moveItem, appendTaskNote, appendTaskChild, setTaskName, addTaskLink,
   setTaskAttribute, setProjectStatus, attachPageToTask, freezeReview,
-  PROJECT_STATES, review, dayReview, today, projectSignals, projectResumption, week, day,
+  PROJECT_STATES, review, dayReview, today, upcoming, projectSignals, projectResumption, week, day,
   readTemplate, builtinReviewTemplate, builtinWeeklyFocusTemplate, createFromTemplate,
   bakeAt, unbakeAt, updateBaked,
   people, directPersonLinks, interactions, logInteraction, createReconnectTask, INTERACTION_KINDS, shift,
@@ -238,6 +238,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   let failedCapture: { text: string; uncertain: boolean } | undefined;
   type FindScope = "open" | "completed" | "waiting" | "someday" | "all";
   let lastFind: { value: string; handle: TaskTarget["handle"]; scope: FindScope } | undefined;
+  let lastUpcoming: { value: string; key?: string; index: number } | undefined;
 
   const after = async () => { await lifeloop.reindex(); };
   const refreshAndReport = async (
@@ -966,19 +967,21 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
 
   on("lifeloop.setNow", async (input?: TaskTargetInput) => {
     const at = taskTarget(lifeloop, input);
-    if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
+    if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return false; }
     try {
       const current = await refreshTaskTarget(lifeloop, at);
       if (!current?.task) {
         void vscode.window.showWarningMessage("LifeLoop: that task changed; Now was not set");
-        return;
+        return false;
       }
       lifeloop.setNowTarget({
         handle: current.handle, page: current.page, offset: current.offset, name: current.name,
       });
       vscode.window.setStatusBarMessage(`LifeLoop: Now — ${current.name}`, 3000);
+      return true;
     } catch (error) {
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return false;
     }
   });
 
@@ -1038,7 +1041,10 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     }
   });
 
-  on("lifeloop.addTaskNote", async (input?: TaskTargetInput) => {
+  const addTaskNote = async (
+    input?: TaskTargetInput,
+    stillSelected?: () => boolean,
+  ): Promise<void> => {
     const at = taskTarget(lifeloop, input);
     if (!at) { void vscode.window.showWarningMessage("LifeLoop: put the cursor on a task"); return; }
     const kind = await vscode.window.showQuickPick([
@@ -1053,17 +1059,70 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     try {
       const current = await refreshTaskTarget(lifeloop, at);
       if (!current) {
-        void vscode.window.showWarningMessage("LifeLoop: that task changed; nothing was recorded");
+        const choice = await vscode.window.showWarningMessage(
+          "LifeLoop: that task changed; nothing was recorded", "Copy Text",
+        );
+        if (choice === "Copy Text") await vscode.env.clipboard.writeText(note);
         return;
       }
-      await refreshAndReport(
-        await appendTaskNote(lifeloop.vault, current.handle, kind.id, note),
-        kind.id === "progress" ? "recorded progress" : "saved resume cue",
-        current,
-      );
+      if (stillSelected && !stillSelected()) {
+        const choice = await vscode.window.showWarningMessage(
+          "LifeLoop: the recording target changed; nothing was recorded", "Copy Text",
+        );
+        if (choice === "Copy Text") await vscode.env.clipboard.writeText(note);
+        return;
+      }
+      const result = await appendTaskNote(lifeloop.vault, current.handle, kind.id, note);
+      if (!result.ok) {
+        const choice = await vscode.window.showWarningMessage(
+          `LifeLoop: nothing was recorded — ${result.message}`, "Copy Text", "Open Source",
+        );
+        if (choice === "Copy Text") await vscode.env.clipboard.writeText(note);
+        if (choice === "Open Source") await vscode.commands.executeCommand("lifeloop.revealTask", current);
+        return;
+      }
+      await refreshAndReport(result,
+        kind.id === "progress" ? "recorded progress" : "saved resume cue", current);
     } catch (error) {
-      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      const choice = await vscode.window.showErrorMessage(
+        `LifeLoop: nothing was recorded — ${(error as Error).message}`, "Copy Text",
+      );
+      if (choice === "Copy Text") await vscode.env.clipboard.writeText(note);
     }
+  };
+
+  on("lifeloop.addTaskNote", addTaskNote);
+
+  on("lifeloop.addNoteToNow", async () => {
+    const now = lifeloop.nowTarget();
+    if (!now) {
+      const choice = await vscode.window.showInformationMessage(
+        "LifeLoop: no Now task in this session", "Find Task",
+      );
+      if (choice === "Find Task") await vscode.commands.executeCommand("lifeloop.findTask");
+      return;
+    }
+    let current: TaskTarget | null;
+    try { current = await refreshTaskTarget(lifeloop, now); }
+    catch (error) {
+      void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
+      return;
+    }
+    if (!current) {
+      const choice = await vscode.window.showWarningMessage(
+        "LifeLoop: the Now task changed or moved; nothing was recorded", "Find Task", "Clear Now",
+      );
+      if (choice === "Find Task") await vscode.commands.executeCommand("lifeloop.findTask");
+      if (choice === "Clear Now") lifeloop.setNowTarget();
+      return;
+    }
+    await addTaskNote(current, () => {
+      const selected = lifeloop.nowTarget();
+      return selected?.page === now.page &&
+        selected.handle.ref === now.handle.ref &&
+        selected.handle.expectedText === now.handle.expectedText &&
+        selected.handle.expectedState === now.handle.expectedState;
+    });
   });
 
   for (const tag of ["waiting", "someday"] as const) {
@@ -1476,9 +1535,12 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
   on("lifeloop.closeTodayPlanTomorrow", () =>
     vscode.commands.executeCommand("lifeloop.reviewActions", { mode: "close" }));
 
-  on("lifeloop.reviewActions", async (input?: { mode?: "review" | "plan" | "close" }) => {
+  on("lifeloop.reviewUpcoming", () =>
+    vscode.commands.executeCommand("lifeloop.reviewActions", { mode: "upcoming" }));
+
+  on("lifeloop.reviewActions", async (input?: { mode?: "review" | "plan" | "close" | "upcoming" }) => {
     type ReviewScope = "open" | "projects" | "waiting" | "someday" | "completed" | "unscheduled" | "paused" |
-      "plan-today" | "backlog-today" | "day-review" | "plan-tomorrow" | "backlog-tomorrow";
+      "plan-today" | "backlog-today" | "day-review" | "plan-tomorrow" | "backlog-tomorrow" | "upcoming";
     type ReviewItem = vscode.QuickPickItem & {
       key?: string;
       target?: TaskTarget;
@@ -1487,9 +1549,11 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       openWeekFocus?: string;
       openNextWeekFocus?: true;
       openPeriodFacts?: true;
+      openUpcoming?: true;
     };
     const reviewScopes: { label: string; description: string; scope: ReviewScope }[] = [
       { label: "Open tasks", description: "open and actionable", scope: "open" },
+      { label: "Upcoming", description: "future scheduled dates and deadlines", scope: "upcoming" },
       { label: "Active projects", description: "page-scoped project facts", scope: "projects" },
       { label: "Waiting", description: "effective #waiting only", scope: "waiting" },
       { label: "Someday", description: "effective #someday, excluding Waiting", scope: "someday" },
@@ -1499,14 +1563,21 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     ];
     const todayDate = day();
     const tomorrowDate = shift(todayDate, 1);
+    const configuredUpcomingDays = lifeloop.config("upcomingDays", 14);
+    const upcomingDays = Number.isInteger(configuredUpcomingDays) && configuredUpcomingDays > 0
+      ? configuredUpcomingDays : 14;
+    const upcomingEnd = shift(todayDate, upcomingDays);
     const mode = input?.mode ?? "review";
     const scopes = mode === "plan" ? [
       { label: `Plan today — ${todayDate}`, description: "deadlines, plans and unfinished earlier plans", scope: "plan-today" as const },
       { label: "Backlog candidates", description: "open, actionable and not already planned", scope: "backlog-today" as const },
+      { label: `Upcoming — ${tomorrowDate} to ${upcomingEnd}`, description: "future plans and deadlines", scope: "upcoming" as const },
     ] : mode === "close" ? [
       { label: `Review today — ${todayDate}`, description: "factual completions and remaining plans", scope: "day-review" as const },
       { label: `Plan tomorrow — ${tomorrowDate}`, description: "tomorrow's constraints and existing plans", scope: "plan-tomorrow" as const },
       { label: "Tomorrow backlog candidates", description: "open, actionable and not already planned", scope: "backlog-tomorrow" as const },
+    ] : mode === "upcoming" ? [
+      { label: `Upcoming — ${tomorrowDate} to ${upcomingEnd}`, description: "future plans and deadlines", scope: "upcoming" as const },
     ] : reviewScopes;
     let scope: ReviewScope = scopes[0].scope;
     let results: ReviewItem[] = [];
@@ -1514,9 +1585,11 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
     let lastResultIndex = 0;
     const picker = vscode.window.createQuickPick<ReviewItem>();
     picker.title = mode === "plan" ? "Plan Today"
-      : mode === "close" ? "Close Today and Plan Tomorrow" : "Review in Place";
+      : mode === "close" ? "Close Today and Plan Tomorrow"
+        : mode === "upcoming" ? `Upcoming — ${tomorrowDate} to ${upcomingEnd}` : "Review in Place";
     picker.placeholder = mode === "plan" ? "Review constraints, choose freely, and adjust when needed"
-      : mode === "close" ? "Review today, then plan tomorrow without task check-ins" : "Review in place";
+      : mode === "close" ? "Review today, then plan tomorrow without task check-ins"
+        : mode === "upcoming" ? "Preview, reschedule, or choose current work" : "Review in place";
     picker.matchOnDescription = true;
     picker.matchOnDetail = true;
 
@@ -1566,6 +1639,11 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       };
     };
     const currentResults = (): ReviewItem[] => {
+      if (scope === "upcoming") {
+        return upcoming(lifeloop.store, todayDate, upcomingDays).flatMap((group) =>
+          group.tasks.map((task) => taskItem(task, `shown on ${group.date}`))
+            .filter((item): item is ReviewItem => item !== null));
+      }
       if (scope === "plan-today") return planItems(todayDate);
       if (scope === "plan-tomorrow") return planItems(tomorrowDate);
       if (scope === "backlog-today" || scope === "backlog-tomorrow") {
@@ -1601,9 +1679,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       const title = scopes.find((candidate) => candidate.scope === scope)!.label;
       const scopeItem: ReviewItem = {
         label: `$(filter) Scope: ${title}`,
-        description: "change review scope",
+        description: scopes.length > 1 ? "change review scope" : "active date range",
         detail: scopes.map((candidate) => candidate.label).join(" · "),
-        chooseScope: true,
+        chooseScope: scopes.length > 1 ? true : undefined,
       };
       const focusItem: ReviewItem[] = mode === "review" ? [{
         label: "$(calendar) Open next week's focus",
@@ -1613,11 +1691,15 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         label: "$(history) Open this week's dated facts",
         description: "completed tasks and explicit interactions only; exits Review",
         openPeriodFacts: true,
-      }] : [{
+      }] : mode === "upcoming" ? [] : [{
         label: `$(calendar) Open focus for week ${week(mode === "close" ? tomorrowDate : todayDate).start}`,
         description: "ordinary Markdown focus note; keeps this planning list",
         openWeekFocus: week(mode === "close" ? tomorrowDate : todayDate).start,
-      }];
+      }, ...(mode === "plan" ? [{
+        label: `$(calendar) Review upcoming — ${tomorrowDate} to ${upcomingEnd}`,
+        description: "future plans and deadlines; keeps this planning list",
+        openUpcoming: true as const,
+      }] : [])];
       picker.items = results.length ? [scopeItem, ...focusItem, ...results] : [scopeItem, ...focusItem, {
         label: "$(info) Nothing in this scope",
         description: title,
@@ -1639,6 +1721,8 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
       void vscode.window.showErrorMessage(`LifeLoop: ${(error as Error).message}`);
       return;
     }
+
+    if (mode === "upcoming" && lastUpcoming) picker.value = lastUpcoming.value;
 
     await new Promise<void>((resolve) => {
       let running = false;
@@ -1673,6 +1757,9 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
           lastResultKey = item.key;
           lastResultIndex = index;
         }
+        if (scope === "upcoming") {
+          lastUpcoming = { value, key: item.key, index };
+        }
         try {
           if (item.chooseScope) {
             const picked = await vscode.window.showQuickPick(scopes, {
@@ -1703,6 +1790,12 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
             await vscode.commands.executeCommand("lifeloop.reviewPeriodFacts");
             return;
           }
+          if (item.openUpcoming) {
+            scope = "upcoming";
+            picker.value = value;
+            await resume(lastUpcoming?.key, lastUpcoming?.index ?? 0);
+            return;
+          }
           if (!item.target && !item.project) {
             await resume(undefined, 0);
             return;
@@ -1719,7 +1812,10 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
               ...(planningDate && !item.target.task?.done && item.target.task?.scheduled !== planningDate
                 ? [{ label: `$(calendar) Schedule for ${planningDate}`, id: "schedule-day" }] : []),
               ...(!item.target.task?.done ? [{ label: "$(calendar) Quick Reschedule", id: "reschedule" }] : []),
-              ...(!item.target.task?.done ? [{ label: "$(target) Set as Now (optional)", id: "set-now" }] : []),
+              ...(!item.target.task?.done ? [{
+                label: scope === "upcoming" ? "$(target) Set as Now and open" : "$(target) Set as Now (optional)",
+                id: scope === "upcoming" ? "set-now-open" : "set-now",
+              }] : []),
               ...(!item.target.task?.done ? [{ label: "$(note) Add Progress / Resume Cue", id: "note" }] : []),
               { label: tags.includes("waiting") ? "$(debug-step-over) Waiting → Next Action" : "$(watch) Mark Waiting", id: tags.includes("waiting") ? "waiting-next" : "waiting" },
               { label: "$(add) Add next action", id: "next" },
@@ -1734,6 +1830,7 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
               return;
             }
             if (action.id === "open") {
+              if (scope === "upcoming") lastUpcoming = { value, key: item.key, index };
               finish();
               await vscode.commands.executeCommand("lifeloop.revealTask", item.target);
               return;
@@ -1750,6 +1847,12 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
               }
             } else if (action.id === "schedule-day") {
               await setTaskDate(item.target, "scheduled", planningDate!);
+            } else if (action.id === "set-now-open") {
+              if (await vscode.commands.executeCommand<boolean>("lifeloop.setNow", item.target)) {
+                finish();
+                await vscode.commands.executeCommand("lifeloop.returnToNow");
+                return;
+              }
             } else {
               const commands: Record<string, string> = {
                 complete: "lifeloop.completeTask", reopen: "lifeloop.reopenTask",
@@ -1807,8 +1910,11 @@ export function register(lifeloop: LifeLoop, context: vscode.ExtensionContext): 
         if (!item?.key) return;
         lastResultKey = item.key;
         lastResultIndex = Math.max(0, results.findIndex((candidate) => candidate.key === item.key));
+        if (scope === "upcoming") {
+          lastUpcoming = { value: picker.value, key: item.key, index: lastResultIndex };
+        }
       });
-      render();
+      render(mode === "upcoming" ? lastUpcoming?.key : undefined, mode === "upcoming" ? lastUpcoming?.index : 0);
       picker.show();
     });
   });

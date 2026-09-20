@@ -166,22 +166,28 @@ export function explainTask(
 
 export type UpcomingDay = { date: string; tasks: LifeloopObject[] };
 
+const calendarDate = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
+
 /**
  * The next `days` days, grouped by day.
  *
- * A task with both dates appears **once**, grouped by `scheduled` — the day you
- * meant to work on it — and falls back to its deadline when nothing is scheduled
- * in range.
+ * Today is excluded: `days = 1` means tomorrow only. The end date is included.
+ * A task with both dates appears **once**, grouped by the earlier date in range;
+ * callers still show both facts so grouping never hides a deadline or plan.
  */
 export function upcoming(store: Store, from = day(), days = 14): UpcomingDay[] {
+  if (!Number.isInteger(days) || days <= 0) return [];
   const horizon = shift(from, days);
   const buckets = new Map<string, LifeloopObject[]>();
   for (const task of tasks.actionable(store)) {
-    const scheduled = typeof task.scheduled === "string" ? task.scheduled : null;
-    const deadline = typeof task.deadline === "string" ? task.deadline : null;
-    const on = scheduled && scheduled > from && scheduled < horizon ? scheduled
-      : deadline && deadline > from && deadline < horizon ? deadline
-      : null;
+    const dates = [task.scheduled, task.deadline]
+      .filter((value): value is string => calendarDate(value) && value > from && value <= horizon)
+      .sort();
+    const on = dates[0];
     if (!on) continue;
     const bucket = buckets.get(on);
     if (bucket) bucket.push(task);

@@ -351,6 +351,72 @@ test("Add Progress records one guarded child without completing the task", async
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Add Progress to Now records on the session target without using the active editor", async () => {
+  const a = "* [ ] task A";
+  const b = "* [ ] task B";
+  const { lifeloop, dir } = await workspaceWith({ "A.md": `${a}\n`, "B.md": `${b}\n` });
+  const handlers = registered(lifeloop);
+  await handlers.get("lifeloop.setNow")!({
+    handle: { ref: "A@0", expectedText: a, expectedState: " " },
+  });
+  const bDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(join(dir, "B.md")) as any);
+  vscode.window.activeTextEditor = { document: bDocument, selection: { active: new vscode.Position(0, 0) } } as any;
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "progress")) as any);
+  vi.spyOn(vscode.window, "showInputBox").mockResolvedValue("kept the exact target" as any);
+  try {
+    await handlers.get("lifeloop.addNoteToNow")!();
+    expect(lifeloop.vault.read("A.md")).toContain("* Progress: kept the exact target");
+    expect(lifeloop.vault.read("B.md")).toBe(`${b}\n`);
+    expect(vscode.window.activeTextEditor?.document).toBe(bDocument);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Add Progress to Now refuses prompt-time drift and lets the user recover the text", async () => {
+  const line = "* [ ] current";
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+  const handlers = registered(lifeloop);
+  await handlers.get("lifeloop.setNow")!(task(lifeloop, line));
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "next")) as any);
+  vi.spyOn(vscode.window, "showInputBox").mockImplementation(async () => {
+    await lifeloop.vault.write("Work.md", "* [ ] changed while typing\n");
+    return "resume from the failing case";
+  });
+  vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Copy Text" as any);
+  try {
+    await handlers.get("lifeloop.addNoteToNow")!();
+    expect(lifeloop.vault.read("Work.md")).toBe("* [ ] changed while typing\n");
+    expect(vscode.env.clipboard.text).toBe("resume from the failing case");
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Add Progress to Now refuses when the session Now target changes during input", async () => {
+  const a = "* [ ] task A";
+  const b = "* [ ] task B";
+  const { lifeloop, dir } = await workspaceWith({ "A.md": `${a}\n`, "B.md": `${b}\n` });
+  const handlers = registered(lifeloop);
+  await handlers.get("lifeloop.setNow")!({
+    handle: { ref: "A@0", expectedText: a, expectedState: " " },
+  });
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "progress")) as any);
+  vi.spyOn(vscode.window, "showInputBox").mockImplementation(async () => {
+    await handlers.get("lifeloop.setNow")!({
+      handle: { ref: "B@0", expectedText: b, expectedState: " " },
+    });
+    return "must not follow the old Now target";
+  });
+  vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue("Copy Text" as any);
+  try {
+    await handlers.get("lifeloop.addNoteToNow")!();
+    expect(lifeloop.vault.read("A.md")).toBe(`${a}\n`);
+    expect(lifeloop.vault.read("B.md")).toBe(`${b}\n`);
+    expect(lifeloop.nowTarget()?.name).toBe("task B");
+    expect(vscode.env.clipboard.text).toBe("must not follow the old Now target");
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("Now uses the explicit task, returns while valid, and refuses source drift", async () => {
   const a = "* [ ] task A";
   const b = "* [ ] task B";
@@ -1164,6 +1230,9 @@ for (const planning of [
           expect(this.title).toBe(planning.title);
           const focus = this.items.find((item: any) => item.openWeekFocus);
           expect(focus).toMatchObject({ openWeekFocus: expectedWeek });
+          if (planning.command === "lifeloop.planToday") {
+            expect(this.items.find((item: any) => item.openUpcoming)?.label).toContain("Review upcoming");
+          }
           this.value = "planned";
           this.selectedItems = [focus];
           accepted[0]();
@@ -1290,6 +1359,139 @@ test("Close Today and Plan Tomorrow combines factual review with tomorrow planni
   try {
     await handlers.get("lifeloop.closeTodayPlanTomorrow")!();
     expect(shows).toBe(3);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Review Upcoming shows the inclusive range and restores query and selection after Open Source", async () => {
+  const tomorrow = shift(day(), 1);
+  const due = shift(day(), 2);
+  const scheduled = shift(day(), 5);
+  const endpoint = shift(day(), 14);
+  const { lifeloop, dir } = await workspaceWith({
+    "Work.md": [
+      `* [ ] both [deadline: "${due}"] [scheduled: "${scheduled}"]`,
+      `* [ ] endpoint [deadline: "${endpoint}"]`,
+      `* [ ] waiting [scheduled: "${tomorrow}"] #waiting`,
+      "",
+    ].join("\n"),
+  });
+  const handlers = registered(lifeloop);
+  let invocation = 0;
+  vi.spyOn(vscode.window, "createQuickPick").mockImplementation((() => {
+    const accepted: Function[] = [];
+    const hidden: Function[] = [];
+    const picker: any = {
+      items: [], value: "", activeItems: [], selectedItems: [], busy: false, title: "", placeholder: "",
+      onDidAccept(handler: Function) { accepted.push(handler); return { dispose() {} }; },
+      onDidHide(handler: Function) { hidden.push(handler); return { dispose() {} }; },
+      onDidChangeActive() { return { dispose() {} }; },
+      dispose: vi.fn(),
+      show() {
+        invocation++;
+        expect(this.title).toBe(`Upcoming — ${tomorrow} to ${endpoint}`);
+        expect(this.items.filter((item: any) => item.key).map((item: any) => item.label))
+          .toEqual(["both", "endpoint"]);
+        expect(this.items.find((item: any) => item.label === "both")?.detail)
+          .toContain(`due ${due}`);
+        expect(this.items.find((item: any) => item.label === "both")?.detail)
+          .toContain(`scheduled ${scheduled}`);
+        if (invocation === 1) {
+          this.value = "both";
+          this.selectedItems = [this.items.find((item: any) => item.label === "both")];
+          accepted[0]();
+        } else {
+          expect(this.value).toBe("both");
+          expect(this.activeItems[0]).toMatchObject({ label: "both" });
+          hidden[0]();
+        }
+      },
+    };
+    return picker;
+  }) as any);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "open")) as any);
+  const shown = vi.spyOn(vscode.window, "showTextDocument")
+    .mockResolvedValue({ revealRange: vi.fn() } as any);
+  try {
+    await handlers.get("lifeloop.reviewUpcoming")!();
+    await handlers.get("lifeloop.reviewUpcoming")!();
+    expect(invocation).toBe(2);
+    expect((shown.mock.calls as any)[0][0].uri.fsPath).toBe(join(dir, "Work.md"));
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Review Upcoming refreshes after rescheduling out of range and selects the adjacent row", async () => {
+  const first = shift(day(), 2);
+  const adjacent = shift(day(), 3);
+  const outside = shift(day(), 30);
+  const { lifeloop, dir } = await workspaceWith({
+    "Work.md": `* [ ] first [scheduled: "${first}"]\n* [ ] adjacent [deadline: "${adjacent}"]\n`,
+  });
+  const handlers = registered(lifeloop);
+  const accepted: Function[] = [];
+  const hidden: Function[] = [];
+  let shows = 0;
+  const picker: any = {
+    items: [], value: "", activeItems: [], selectedItems: [], busy: false, title: "", placeholder: "",
+    onDidAccept(handler: Function) { accepted.push(handler); return { dispose() {} }; },
+    onDidHide(handler: Function) { hidden.push(handler); return { dispose() {} }; },
+    onDidChangeActive() { return { dispose() {} }; },
+    dispose: vi.fn(),
+    show() {
+      shows++;
+      if (shows === 1) {
+        this.value = "task";
+        this.selectedItems = [this.items.find((item: any) => item.label === "first")];
+        accepted[0]();
+      } else {
+        expect(this.value).toBe("task");
+        expect(this.items.filter((item: any) => item.key).map((item: any) => item.label)).toEqual(["adjacent"]);
+        expect(this.activeItems[0]).toMatchObject({ label: "adjacent" });
+        hidden[0]();
+      }
+    },
+  };
+  vi.spyOn(vscode.window, "createQuickPick").mockImplementation((() => picker) as any);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[], options: any) => {
+    if (options.placeHolder === "Reschedule task") return items.find((item) => item.value === "pick");
+    return items.find((item) => item.id === "reschedule");
+  }) as any);
+  vi.spyOn(vscode.window, "showInputBox").mockResolvedValue(outside as any);
+  try {
+    await handlers.get("lifeloop.reviewUpcoming")!();
+    expect(lifeloop.vault.read("Work.md")).toContain(`[scheduled: "${outside}"]`);
+    expect(shows).toBe(2);
+  } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Review Upcoming sets the exact row as Now, exits, and opens its fresh source", async () => {
+  const date = shift(day(), 2);
+  const line = `* [ ] begin here [scheduled: "${date}"]`;
+  const { lifeloop, dir } = await workspaceWith({ "Work.md": `${line}\n` });
+  const handlers = registered(lifeloop);
+  const accepted: Function[] = [];
+  const picker: any = {
+    items: [], value: "", activeItems: [], selectedItems: [], busy: false, title: "", placeholder: "",
+    onDidAccept(handler: Function) { accepted.push(handler); return { dispose() {} }; },
+    onDidHide() { return { dispose() {} }; },
+    onDidChangeActive() { return { dispose() {} }; },
+    dispose: vi.fn(),
+    show() {
+      this.selectedItems = [this.items.find((item: any) => item.label === "begin here")];
+      accepted[0]();
+    },
+  };
+  vi.spyOn(vscode.window, "createQuickPick").mockImplementation((() => picker) as any);
+  vi.spyOn(vscode.window, "showQuickPick").mockImplementation((async (items: any[]) =>
+    items.find((item) => item.id === "set-now-open")) as any);
+  const shown = vi.spyOn(vscode.window, "showTextDocument")
+    .mockResolvedValue({ revealRange: vi.fn() } as any);
+  try {
+    await handlers.get("lifeloop.reviewUpcoming")!();
+    expect(lifeloop.nowTarget()?.name).toBe("begin here");
+    expect(picker.dispose).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(shown).toHaveBeenCalledOnce());
+    expect((shown.mock.calls as any)[0][0].uri.fsPath).toBe(join(dir, "Work.md"));
   } finally { lifeloop.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });
 
